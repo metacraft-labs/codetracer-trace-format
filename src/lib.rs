@@ -331,3 +331,271 @@ pub enum EventLogKind {
     // used for trace events
     TraceLogEvent,
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // An example of how the data structures can be put together to represent the execution of a
+    // program.
+    //
+    // This fictional program looks like this:
+    //
+    // ```
+    //  1: use std::env;
+    //  2:
+    //  3: fn main() {
+    //  4:     let args: Vec<String> = env::args().collect();
+    //  5:     let x: usize = args[1].parse().unwrap();
+    //  6:     let factors = factorize(x);
+    //  7:     println!("{factors:?}");
+    //  8: }
+    //  9:
+    // 10: fn factorize(x: usize) -> Vec<usize> {
+    // 11:     assert_eq!(x, 1337);
+    // 12:     let result = vec![7, 191];
+    // 13:     return result;
+    // 14: }
+    // ```
+    #[test]
+    fn sample_trace_of_a_few_steps() {
+        let trace = TraceRecord {
+            workdir: PathBuf::from("/tmp/"),
+            paths: vec![String::from("/tmp/factorize.rs")],
+            steps: vec![
+                DbStep {
+                    step_id: StepId(0),
+                    path_id: PathId(0),
+                    line: Line(3),
+                    call_key: CallKey(0),
+                },
+                DbStep {
+                    step_id: StepId(1),
+                    path_id: PathId(0),
+                    line: Line(4),
+                    call_key: CallKey(1),
+                },
+                DbStep {
+                    step_id: StepId(2),
+                    path_id: PathId(0),
+                    line: Line(5),
+                    call_key: CallKey(1),
+                },
+                DbStep {
+                    step_id: StepId(3),
+                    path_id: PathId(0),
+                    line: Line(6),
+                    call_key: CallKey(1),
+                },
+                DbStep {
+                    step_id: StepId(4),
+                    path_id: PathId(0),
+                    line: Line(11),
+                    call_key: CallKey(2),
+                },
+                DbStep {
+                    step_id: StepId(5),
+                    path_id: PathId(0),
+                    line: Line(12),
+                    call_key: CallKey(2),
+                },
+                DbStep {
+                    step_id: StepId(6),
+                    path_id: PathId(0),
+                    line: Line(13),
+                    call_key: CallKey(2),
+                },
+                DbStep {
+                    step_id: StepId(7),
+                    path_id: PathId(0),
+                    line: Line(7),
+                    call_key: CallKey(1),
+                },
+            ],
+            calls: vec![
+                DbCall {
+                    key: CallKey(0),
+                    function_id: FunctionId(0),
+                    args: vec![],
+                    return_value: ValueRecord::None { ti: TypeIndex(0) },
+                    step_id: StepId(0),
+                    depth: 0,
+                    parent_key: CallKey(-1),
+                    children_keys: vec![CallKey(0)],
+                },
+                DbCall {
+                    key: CallKey(1),
+                    function_id: FunctionId(1),
+                    args: vec![],
+                    return_value: ValueRecord::None { ti: TypeIndex(0) },
+                    step_id: StepId(1),
+                    depth: 1,
+                    parent_key: CallKey(0),
+                    children_keys: vec![CallKey(1)],
+                },
+                DbCall {
+                    key: CallKey(2),
+                    function_id: FunctionId(2),
+                    args: vec![ArgRecord {
+                        name: String::from("x"),
+                        value: ValueRecord::Int {
+                            i: 1337,
+                            ti: TypeIndex(1),
+                        },
+                    }],
+                    return_value: ValueRecord::Sequence {
+                        elements: vec![
+                            ValueRecord::Int {
+                                i: 7,
+                                ti: TypeIndex(1),
+                            },
+                            ValueRecord::Int {
+                                i: 191,
+                                ti: TypeIndex(1),
+                            },
+                        ],
+                        ti: TypeIndex(3),
+                    },
+                    step_id: StepId(4),
+                    depth: 2,
+                    parent_key: CallKey(1),
+                    children_keys: vec![],
+                },
+            ],
+            variables: vec![
+                vec![],
+                vec![],
+                vec![VariableRecord {
+                    name: String::from("args"),
+                    value: ValueRecord::Sequence {
+                        elements: vec![
+                            ValueRecord::String {
+                                text: String::from("/tmp/factorize.rs"),
+                                ti: TypeIndex(2),
+                            },
+                            ValueRecord::String {
+                                text: String::from("1337"),
+                                ti: TypeIndex(2),
+                            },
+                        ],
+                        ti: TypeIndex(3),
+                    },
+                }],
+                vec![
+                    VariableRecord {
+                        name: String::from("args"),
+                        value: ValueRecord::Sequence {
+                            elements: vec![
+                                ValueRecord::String {
+                                    text: String::from("/tmp/factorize.rs"),
+                                    ti: TypeIndex(2),
+                                },
+                                ValueRecord::String {
+                                    text: String::from("1337"),
+                                    ti: TypeIndex(2),
+                                },
+                            ],
+                            ti: TypeIndex(3),
+                        },
+                    },
+                    VariableRecord {
+                        name: String::from("x"),
+                        value: ValueRecord::Int {
+                            i: 1337,
+                            ti: TypeIndex(1),
+                        },
+                    },
+                ],
+                vec![VariableRecord {
+                    name: String::from("x"),
+                    value: ValueRecord::Int {
+                        i: 1337,
+                        ti: TypeIndex(1),
+                    },
+                }],
+                vec![VariableRecord {
+                    name: String::from("x"),
+                    value: ValueRecord::Int {
+                        i: 1337,
+                        ti: TypeIndex(1),
+                    },
+                }],
+                vec![
+                    VariableRecord {
+                        name: String::from("x"),
+                        value: ValueRecord::Int {
+                            i: 1337,
+                            ti: TypeIndex(1),
+                        },
+                    },
+                    VariableRecord {
+                        name: String::from("result"),
+                        value: ValueRecord::Sequence {
+                            elements: vec![
+                                ValueRecord::Int {
+                                    i: 7,
+                                    ti: TypeIndex(1),
+                                },
+                                ValueRecord::Int {
+                                    i: 191,
+                                    ti: TypeIndex(1),
+                                },
+                            ],
+                            ti: TypeIndex(3),
+                        },
+                    },
+                ],
+                vec![
+                    VariableRecord {
+                        name: String::from("args"),
+                        value: ValueRecord::Sequence {
+                            elements: vec![
+                                ValueRecord::String {
+                                    text: String::from("/tmp/factorize.rs"),
+                                    ti: TypeIndex(2),
+                                },
+                                ValueRecord::String {
+                                    text: String::from("1337"),
+                                    ti: TypeIndex(2),
+                                },
+                            ],
+                            ti: TypeIndex(3),
+                        },
+                    },
+                    VariableRecord {
+                        name: String::from("x"),
+                        value: ValueRecord::Int {
+                            i: 1337,
+                            ti: TypeIndex(1),
+                        },
+                    },
+                ],
+            ],
+            events: vec![DbRecordEvent {
+                kind: EventLogKind::Write,
+                content: String::from("[7, 191]\n"),
+                step_id: StepId(7),
+            }],
+            types: vec![
+                TypeRecord {
+                    kind: TypeKind::None,
+                    lang_type: String::from("None"),
+                },
+                TypeRecord {
+                    kind: TypeKind::Int,
+                    lang_type: String::from("usize"),
+                },
+                TypeRecord {
+                    kind: TypeKind::String,
+                    lang_type: String::from("String"),
+                },
+                TypeRecord {
+                    kind: TypeKind::Seq,
+                    lang_type: String::from("Vec"),
+                },
+            ],
+        };
+
+        assert_eq!(serde_json::to_string(&trace).unwrap().len(), 2046);
+    }
+}

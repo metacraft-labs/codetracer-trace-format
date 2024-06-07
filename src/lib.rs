@@ -33,17 +33,6 @@ pub struct TraceLowLevelRecord {
     pub events: Vec<TraceLowLevelEvent>,
 }
 
-#[derive(Debug, Default, Clone, Serialize, Deserialize)]
-pub struct TraceRecord {
-    pub workdir: PathBuf,
-    pub paths: Vec<String>,
-    pub calls: Vec<DbCall>,
-    pub steps: Vec<DbStep>,
-    pub variables: Vec<Vec<VariableRecord>>,
-    pub types: Vec<TypeRecord>,
-    pub events: Vec<DbRecordEvent>,
-}
-
 // call keys:
 
 #[derive(Debug, Default, Copy, Clone, PartialEq, Serialize, Deserialize)]
@@ -126,17 +115,6 @@ pub struct VariableId(pub usize);
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct FunctionId(pub usize);
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DbCall {
-    pub key: CallKey,
-    pub function_id: FunctionId,
-    pub args: Vec<ArgRecord>,
-    pub return_value: ValueRecord,
-    pub step_id: StepId,
-    pub depth: usize,
-    pub parent_key: CallKey,
-    pub children_keys: Vec<CallKey>,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CallRecord {
@@ -158,23 +136,11 @@ pub struct FunctionRecord {
     pub name: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BreakpointRecord {
-    pub is_active: bool,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArgRecord {
     pub name: String,
     pub value: ValueRecord,
-}
-
-#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
-pub struct DbStep {
-    pub step_id: StepId,
-    pub path_id: PathId,
-    pub line: Line,
-    pub call_key: CallKey,
 }
 
 #[derive(Copy, Clone, Debug, Serialize, Deserialize)]
@@ -199,13 +165,6 @@ pub struct TypeRecord {
 pub struct RecordEvent {
     pub kind: EventLogKind,
     pub content: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DbRecordEvent {
-    pub kind: EventLogKind,
-    pub content: String,
-    pub step_id: StepId,
 }
 
 #[derive(Debug, Default, Copy, Clone, Serialize, Deserialize, PartialEq)]

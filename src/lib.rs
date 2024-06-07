@@ -210,7 +210,7 @@ pub struct DbRecordEvent {
 
 #[derive(Debug, Default, Copy, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(transparent)]
-pub struct TypeIndex(pub usize);
+pub struct TypeId(pub usize);
 
 // use ValueRecord for recording custom languages
 // use value::Value for interaction with existing frontend
@@ -221,34 +221,34 @@ pub struct TypeIndex(pub usize);
 pub enum ValueRecord {
     Int {
         i: i64,
-        ti: TypeIndex,
+        type_id: TypeId,
     },
     Float {
         f: f64,
-        ti: TypeIndex,
+        type_id: TypeId,
     },
     Bool {
         b: bool,
-        ti: TypeIndex,
+        type_id: TypeId,
     },
     String {
         text: String,
-        ti: TypeIndex,
+        type_id: TypeId,
     },
     Sequence {
         elements: Vec<ValueRecord>,
-        ti: TypeIndex,
+        type_id: TypeId,
     },
     Raw {
         r: String,
-        ti: TypeIndex,
+        type_id: TypeId,
     },
     Error {
         msg: String,
-        ti: TypeIndex,
+        type_id: TypeId,
     },
     None {
-        ti: TypeIndex,
+        type_id: TypeId,
     },
 }
 

@@ -173,6 +173,7 @@ pub struct FieldTypeRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind")]
 pub enum TypeSpecificInfo {
     None,
     Struct { fields: Vec<FieldTypeRecord> },

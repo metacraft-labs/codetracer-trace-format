@@ -26,10 +26,14 @@ pub struct FullValueRecord {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TraceLowLevelRecord {
+pub struct TraceMetadata {
     pub workdir: PathBuf,
     pub program: String,
     pub args: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TraceLowLevelRecord {
     pub events: Vec<TraceLowLevelEvent>,
 }
 

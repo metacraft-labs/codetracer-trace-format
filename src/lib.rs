@@ -157,8 +157,21 @@ pub struct VariableRecord {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TypeRecord {
-    pub kind: TypeKind,
-    pub lang_type: String,
+    kind: TypeKind,
+    lang_type: String,
+    specific_info: TypeSpecificInfo,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FieldTypeRecord {
+    pub name: String,
+    pub typ: TypeRecord,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum TypeSpecificInfo {
+    None,
+    Struct { fields: Vec<FieldTypeRecord> },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -198,6 +211,10 @@ pub enum ValueRecord {
         elements: Vec<ValueRecord>,
         type_id: TypeId,
     },
+    Struct {
+        field_values: Vec<ValueRecord>,
+        type_id: TypeId, // must point to Type with STRUCT kind and TypeSpecificInfo::Struct
+    },
     Raw {
         r: String,
         type_id: TypeId,
@@ -210,6 +227,8 @@ pub enum ValueRecord {
         type_id: TypeId,
     },
 }
+
+
 
 #[derive(
     Debug, Default, Copy, Clone, FromPrimitive, Serialize_repr, Deserialize_repr, PartialEq,
@@ -224,7 +243,7 @@ pub enum TypeKind {
     Array,
     Varargs,
 
-    Instance,
+    Struct,
 
     Int,
     Float,

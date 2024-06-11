@@ -157,9 +157,9 @@ pub struct VariableRecord {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TypeRecord {
-    kind: TypeKind,
-    lang_type: String,
-    specific_info: TypeSpecificInfo,
+    pub kind: TypeKind,
+    pub lang_type: String,
+    pub specific_info: TypeSpecificInfo,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

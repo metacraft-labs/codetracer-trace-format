@@ -1,4 +1,3 @@
-use std::path::PathBuf;
 mod tracer;
 mod types;
 pub use crate::tracer::{Tracer, NONE_TYPE_ID, NONE_VALUE};
@@ -7,6 +6,7 @@ pub use crate::types::*;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn simple_trace() {
@@ -22,13 +22,16 @@ mod tests {
 
         let int_value = ValueRecord::Int {
             i: 1,
-            type_id: tracer.ensure_type_id(TypeKind::Int, "Int")
+            type_id: tracer.ensure_type_id(TypeKind::Int, "Int"),
         };
         tracer.register_variable_with_full_value("test_variable", int_value);
         tracer.register_return(NONE_VALUE);
         assert_eq!(tracer.events.len(), 14);
         // visible with
         // cargo tets -- --nocapture
-        println!("{:#?}", tracer.events);
+        // println!("{:#?}", tracer.events);
+
+        // tracer.store_trace_metadata(&PathBuf::from("trace_metadata.json")).unwrap();
+        // tracer.store_trace_events(&PathBuf::from("trace.json")).unwrap();
     }
 }

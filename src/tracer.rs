@@ -1,10 +1,13 @@
-use crate::types::{
-    ArgRecord, CallRecord, EventLogKind, FullValueRecord, FunctionId, FunctionRecord, Line, PathId, RecordEvent, ReturnRecord, StepRecord,
-    TraceLowLevelEvent, TypeId, ValueRecord, VariableId, TypeSpecificInfo, TypeRecord, TypeKind,
-};
 use std::collections::HashMap;
 use std::env;
+use std::error::Error;
+use std::fs;
 use std::path::{Path, PathBuf};
+
+use crate::types::{
+    ArgRecord, CallRecord, EventLogKind, FullValueRecord, FunctionId, FunctionRecord, Line, PathId, RecordEvent, ReturnRecord, StepRecord,
+    TraceLowLevelEvent, TraceMetadata, TypeId, TypeKind, TypeRecord, TypeSpecificInfo, ValueRecord, VariableId,
+};
 
 pub struct Tracer {
     // trace metadata:
@@ -33,7 +36,7 @@ pub const NONE_VALUE: ValueRecord = ValueRecord::None { type_id: NONE_TYPE_ID };
 impl Tracer {
     pub fn new(program: &str, args: &[String]) -> Self {
         Tracer {
-            workdir: env::current_dir().unwrap(),
+            workdir: env::current_dir().expect("can access the current dir"),
             program: program.to_string(),
             args: args.to_vec(),
             events: vec![],
@@ -46,7 +49,6 @@ impl Tracer {
     }
 
     pub fn start(&mut self, path: &PathBuf, line: Line) {
-        let path_id = self.ensure_path_id(path);
         let function_id = self.ensure_function_id("<toplevel>", path, line);
         self.register_call(function_id, vec![]);
 
@@ -144,12 +146,24 @@ impl Tracer {
     }
 
     pub fn register_full_value(&mut self, variable_id: VariableId, value: ValueRecord) {
-        self.events.push(
-            TraceLowLevelEvent::Value(FullValueRecord {
-                variable_id,
-                value,
-            })
-        );
+        self.events.push(TraceLowLevelEvent::Value(FullValueRecord { variable_id, value }));
     }
 
+    pub fn store_trace_metadata(&mut self, path: &PathBuf) -> Result<(), Box<dyn Error>> {
+        let trace_metadata = TraceMetadata {
+            program: self.program.clone(),
+            args: self.args.clone(),
+            workdir: self.workdir.clone(),
+        };
+        let json = serde_json::to_string(&trace_metadata)?;
+        fs::write(path, json)?;
+        Ok(())
+    }
+
+    pub fn store_trace_events(&mut self, path: &PathBuf) -> Result<(), Box<dyn Error>> {
+        // TODO: probably change format
+        let json = serde_json::to_string(&self.events)?;
+        fs::write(path, json)?;
+        Ok(())
+    }
 }

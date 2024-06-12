@@ -32,11 +32,6 @@ pub struct TraceMetadata {
     pub args: Vec<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TraceLowLevelRecord {
-    pub events: Vec<TraceLowLevelEvent>,
-}
-
 // call keys:
 
 #[derive(Debug, Default, Copy, Clone, PartialEq, Serialize, Deserialize)]
@@ -304,22 +299,3 @@ pub enum EventLogKind {
     // used for trace events
     TraceLogEvent,
 }
-
-// struct Interpreter {
-//     env: Vec<HashMap<String, ValueId>>,
-//     values: Vec<Value>,
-//     interned_ints: HashMap<i64, ValueId>,
-//     interned_strings: HashMap<String, ValueId>,
-//     current_position: Position,
-//     // for now: TODO? more than one program file?
-//     program_path: PathBuf,
-
-//     tracing: bool,
-//     workdir: PathBuf,
-//     paths: HashMap<PathBuf, PathId>,
-//     functions: HashMap<String, FunctionId>,
-//     variables: HashMap<String, VariableId>,
-//     types: HashMap<String, TypeId>,
-
-//     events: Vec<TraceLowLevelEvent>,
-// }

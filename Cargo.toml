@@ -1,6 +1,6 @@
 [package]
 name = "trace_types"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -15,5 +15,3 @@ serde_repr = "0.1"
 [lib]
 name = "trace_types"
 path = "src/lib.rs"
-
-

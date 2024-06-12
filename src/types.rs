@@ -9,10 +9,10 @@ use serde_repr::*;
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TraceLowLevelEvent {
     Step(StepRecord),
-    Path(PathBuf), // should be always generated before usage, so we can stop stream at random n
-    Variable(String), // interning new name for it
-    Type(TypeRecord), // should be always generated before Value referencing it
-    Value(FullValueRecord), // full values: simpler case working even without modification support
+    Path(PathBuf),            // should be always generated before usage, so we can stop stream at random n
+    Variable(String),         // interning new name for it
+    Type(TypeRecord),         // should be always generated before Value referencing it
+    Value(FullValueRecord),   // full values: simpler case working even without modification support
     Function(FunctionRecord), // should be always generated before CallRecord referencing it
     Call(CallRecord),
     Return(ReturnRecord),
@@ -81,9 +81,7 @@ impl Line {
     }
 }
 
-#[derive(
-    Hash, Debug, Default, Copy, Clone, Serialize, Deserialize, Ord, PartialOrd, Eq, PartialEq,
-)]
+#[derive(Hash, Debug, Default, Copy, Clone, Serialize, Deserialize, Ord, PartialOrd, Eq, PartialEq)]
 #[serde(transparent)]
 pub struct PathId(pub usize);
 
@@ -119,7 +117,6 @@ pub struct VariableId(pub usize);
 #[derive(Debug, Copy, Clone, Serialize, Deserialize)]
 pub struct FunctionId(pub usize);
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CallRecord {
     // pub key: CallKey,
@@ -139,7 +136,6 @@ pub struct FunctionRecord {
     pub line: Line,
     pub name: String,
 }
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ArgRecord {
@@ -233,11 +229,7 @@ pub enum ValueRecord {
     },
 }
 
-
-
-#[derive(
-    Debug, Default, Copy, Clone, FromPrimitive, Serialize_repr, Deserialize_repr, PartialEq,
-)]
+#[derive(Debug, Default, Copy, Clone, FromPrimitive, Serialize_repr, Deserialize_repr, PartialEq)]
 #[repr(u8)]
 pub enum TypeKind {
     #[default]
@@ -295,9 +287,7 @@ pub enum TypeKind {
     Slice,
 }
 
-#[derive(
-    Debug, Default, Copy, Clone, FromPrimitive, Serialize_repr, Deserialize_repr, PartialEq,
-)]
+#[derive(Debug, Default, Copy, Clone, FromPrimitive, Serialize_repr, Deserialize_repr, PartialEq)]
 #[repr(u8)]
 pub enum EventLogKind {
     #[default]
@@ -333,4 +323,3 @@ pub enum EventLogKind {
 
 //     events: Vec<TraceLowLevelEvent>,
 // }
-

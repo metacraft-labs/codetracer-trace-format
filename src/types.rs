@@ -180,7 +180,7 @@ pub struct TypeRecord {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FieldTypeRecord {
     pub name: String,
-    pub typ: TypeRecord,
+    pub type_id: TypeId,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

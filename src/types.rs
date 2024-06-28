@@ -210,7 +210,7 @@ impl Into<usize> for TypeId {
 // use value::Value for interaction with existing frontend
 // TODO: convert between them or
 // serialize ValueRecord in a compatible way?
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind")]
 pub enum ValueRecord {
     Int {

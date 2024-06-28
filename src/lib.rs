@@ -9,7 +9,7 @@ mod tests {
     use std::path::PathBuf;
 
     #[test]
-    fn simple_trace() {
+    fn test_simple_trace() {
         let mut tracer = Tracer::new("path.small", &vec![]);
         let path = PathBuf::from("/test/path.small");
         tracer.start(&path, Line(1));
@@ -33,5 +33,15 @@ mod tests {
 
         // tracer.store_trace_metadata(&PathBuf::from("trace_metadata.json")).unwrap();
         // tracer.store_trace_events(&PathBuf::from("trace.json")).unwrap();
+    }
+
+    #[test]
+    fn test_equality_of_value_records() {
+        let a = ValueRecord::Int { i: 0, type_id: TypeId(0) }; // just an example type_id
+        let b = ValueRecord::Int { i: 0, type_id: TypeId(0) };
+        let different = ValueRecord::Int { i: 1, type_id: TypeId(0) };
+
+        assert_eq!(a, b);
+        assert_ne!(a, different);
     }
 }

@@ -1,6 +1,6 @@
-### trace-types
+### runtime_tracing
 
-trace type definitions
+trace type/helpers definitions
 
 Authored and maintained by Metacraft Labs, Ltd
 

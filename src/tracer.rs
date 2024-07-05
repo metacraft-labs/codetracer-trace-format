@@ -48,7 +48,7 @@ impl Tracer {
         }
     }
 
-    pub fn start(&mut self, path: &PathBuf, line: Line) {
+    pub fn start(&mut self, path: &Path, line: Line) {
         let function_id = self.ensure_function_id("<toplevel>", path, line);
         self.register_call(function_id, vec![]);
 
@@ -107,7 +107,7 @@ impl Tracer {
         }));
     }
 
-    pub fn register_step(&mut self, path: &PathBuf, line: Line) {
+    pub fn register_step(&mut self, path: &Path, line: Line) {
         let path_id = self.ensure_path_id(path);
         self.events.push(TraceLowLevelEvent::Step(StepRecord { path_id, line: line }));
     }
@@ -149,7 +149,7 @@ impl Tracer {
         self.events.push(TraceLowLevelEvent::Value(FullValueRecord { variable_id, value }));
     }
 
-    pub fn store_trace_metadata(&mut self, path: &PathBuf) -> Result<(), Box<dyn Error>> {
+    pub fn store_trace_metadata(&mut self, path: &Path) -> Result<(), Box<dyn Error>> {
         let trace_metadata = TraceMetadata {
             program: self.program.clone(),
             args: self.args.clone(),
@@ -160,7 +160,7 @@ impl Tracer {
         Ok(())
     }
 
-    pub fn store_trace_events(&mut self, path: &PathBuf) -> Result<(), Box<dyn Error>> {
+    pub fn store_trace_events(&mut self, path: &Path) -> Result<(), Box<dyn Error>> {
         // TODO: probably change format
         let json = serde_json::to_string(&self.events)?;
         fs::write(path, json)?;

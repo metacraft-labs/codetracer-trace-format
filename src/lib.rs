@@ -6,15 +6,15 @@ pub use crate::types::*;
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
+    use std::path::Path;
 
     #[test]
     fn test_simple_trace() {
         let mut tracer = Tracer::new("path.small", &vec![]);
-        let path = PathBuf::from("/test/path.small");
-        tracer.start(&path, Line(1));
-        tracer.register_step(&path, Line(1));
-        tracer.register_step(&path, Line(2));
+        let path = Path::new("/test/path.small");
+        tracer.start(path, Line(1));
+        tracer.register_step(path, Line(1));
+        tracer.register_step(path, Line(2));
         tracer.register_special_event(EventLogKind::Write, "test");
         tracer.register_special_event(EventLogKind::Write, "test2");
         let function_id = tracer.ensure_function_id("function", &path, Line(3));

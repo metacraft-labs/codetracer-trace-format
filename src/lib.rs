@@ -18,7 +18,9 @@ mod tests {
         tracer.register_special_event(EventLogKind::Write, "test");
         tracer.register_special_event(EventLogKind::Write, "test2");
         let function_id = tracer.ensure_function_id("function", &path, Line(3));
-        tracer.register_call(function_id, vec![]);
+
+        let args = vec![tracer.arg("a", NONE_VALUE), tracer.arg("b", NONE_VALUE)];
+        tracer.register_call(function_id, args);
 
         let int_value = ValueRecord::Int {
             i: 1,
@@ -26,7 +28,7 @@ mod tests {
         };
         tracer.register_variable_with_full_value("test_variable", int_value);
         tracer.register_return(NONE_VALUE);
-        assert_eq!(tracer.events.len(), 14);
+        assert_eq!(tracer.events.len(), 16);
         // visible with
         // cargo tets -- --nocapture
         // println!("{:#?}", tracer.events);

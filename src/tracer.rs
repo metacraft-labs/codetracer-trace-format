@@ -5,8 +5,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::types::{
-    ArgRecord, CallRecord, EventLogKind, FullValueRecord, FunctionId, FunctionRecord, Line, PathId, RecordEvent, ReturnRecord, StepRecord,
-    TraceLowLevelEvent, TraceMetadata, TypeId, TypeKind, TypeRecord, TypeSpecificInfo, ValueRecord, VariableId,
+    CallRecord, EventLogKind, FullValueRecord, FunctionId, FunctionRecord, Line, PathId, RecordEvent, ReturnRecord, StepRecord, TraceLowLevelEvent,
+    TraceMetadata, TypeId, TypeKind, TypeRecord, TypeSpecificInfo, ValueRecord, VariableId,
 };
 
 pub struct Tracer {
@@ -112,8 +112,13 @@ impl Tracer {
         self.events.push(TraceLowLevelEvent::Step(StepRecord { path_id, line: line }));
     }
 
-    pub fn register_call(&mut self, function_id: FunctionId, args: Vec<ArgRecord>) {
+    pub fn register_call(&mut self, function_id: FunctionId, args: Vec<FullValueRecord>) {
         self.events.push(TraceLowLevelEvent::Call(CallRecord { function_id, args }));
+    }
+
+    pub fn arg(&mut self, name: &str, value: ValueRecord) -> FullValueRecord {
+        let variable_id = self.ensure_variable_id(name);
+        FullValueRecord { variable_id, value }
     }
 
     pub fn register_return(&mut self, return_value: ValueRecord) {

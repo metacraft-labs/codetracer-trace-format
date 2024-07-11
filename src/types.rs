@@ -136,7 +136,7 @@ impl Into<usize> for FunctionId {
 pub struct CallRecord {
     // pub key: CallKey,
     pub function_id: FunctionId,
-    pub args: Vec<ArgRecord>,
+    pub args: Vec<FullValueRecord>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -152,11 +152,11 @@ pub struct FunctionRecord {
     pub name: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ArgRecord {
-    pub name: String,
-    pub value: ValueRecord,
-}
+// #[derive(Debug, Clone, Serialize, Deserialize)]
+// pub struct ArgRecord {
+//     pub name: String,
+//     pub value: ValueRecord,
+// }
 
 #[derive(Copy, Clone, Debug, Serialize, Deserialize)]
 pub struct StepRecord {

@@ -18,6 +18,7 @@ pub struct Tracer {
     pub events: Vec<TraceLowLevelEvent>,
 
     // internal tracer state:
+    path_list: Vec<PathBuf>,
     paths: HashMap<PathBuf, PathId>,
     functions: HashMap<String, FunctionId>,
     variables: HashMap<String, VariableId>,
@@ -41,6 +42,7 @@ impl Tracer {
             args: args.to_vec(),
             events: vec![],
 
+            path_list: vec![],
             paths: HashMap::new(),
             functions: HashMap::new(),
             variables: HashMap::new(),
@@ -95,6 +97,7 @@ impl Tracer {
     }
 
     pub fn register_path(&mut self, path: &Path) {
+        self.path_list.push(path.to_path_buf());
         self.events.push(TraceLowLevelEvent::Path(path.to_path_buf()));
     }
 
@@ -154,7 +157,7 @@ impl Tracer {
         self.events.push(TraceLowLevelEvent::Value(FullValueRecord { variable_id, value }));
     }
 
-    pub fn store_trace_metadata(&mut self, path: &Path) -> Result<(), Box<dyn Error>> {
+    pub fn store_trace_metadata(&self, path: &Path) -> Result<(), Box<dyn Error>> {
         let trace_metadata = TraceMetadata {
             program: self.program.clone(),
             args: self.args.clone(),
@@ -165,9 +168,15 @@ impl Tracer {
         Ok(())
     }
 
-    pub fn store_trace_events(&mut self, path: &Path) -> Result<(), Box<dyn Error>> {
+    pub fn store_trace_events(&self, path: &Path) -> Result<(), Box<dyn Error>> {
         // TODO: probably change format
         let json = serde_json::to_string(&self.events)?;
+        fs::write(path, json)?;
+        Ok(())
+    }
+
+    pub fn store_trace_paths(&self, path: &Path) -> Result<(), Box<dyn Error>> {
+        let json = serde_json::to_string(&self.path_list)?;
         fs::write(path, json)?;
         Ok(())
     }

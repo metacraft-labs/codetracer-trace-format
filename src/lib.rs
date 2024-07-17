@@ -7,6 +7,7 @@ pub use crate::types::*;
 mod tests {
     use super::*;
     use std::path::Path;
+    // use std::path::PathBuf;
 
     #[test]
     fn test_simple_trace() {
@@ -34,6 +35,7 @@ mod tests {
         // println!("{:#?}", tracer.events);
 
         // tracer.store_trace_metadata(&PathBuf::from("trace_metadata.json")).unwrap();
+        // tracer.store_trace_paths(&PathBuf::from("trace_paths.json")).unwrap();
         // tracer.store_trace_events(&PathBuf::from("trace.json")).unwrap();
     }
 

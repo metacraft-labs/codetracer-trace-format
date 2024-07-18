@@ -28,8 +28,16 @@ mod tests {
             type_id: tracer.ensure_type_id(TypeKind::Int, "Int"),
         };
         tracer.register_variable_with_full_value("test_variable", int_value);
+
+        let not_supported_value = ValueRecord::Error {
+            msg: "not supported".to_string(),
+            type_id: NONE_TYPE_ID,
+        };
+        tracer.register_variable_with_full_value("test_variable2", not_supported_value);
+
         tracer.register_return(NONE_VALUE);
-        assert_eq!(tracer.events.len(), 16);
+
+        assert_eq!(tracer.events.len(), 18);
         // visible with
         // cargo tets -- --nocapture
         // println!("{:#?}", tracer.events);

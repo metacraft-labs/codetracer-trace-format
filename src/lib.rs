@@ -27,9 +27,11 @@ mod tests {
         
         let args = vec![tracer.arg("a", NONE_VALUE), tracer.arg("b", NONE_VALUE)];
         tracer.register_call(function_id, args);
-        // => arg-related variable/value events; auto call-step event; call event
+        // => arg-related variable/value events; auto call-step event; potentially variables; call event
 
-        assert!(tracer.events.len() > 1);
+        assert!(tracer.events.len() > 3);
+        // println!("{:#?}", tracer.events);
+        // -4, -3 should be variables
         let should_be_step = &tracer.events[tracer.events.len() - 2];
         let should_be_call = &tracer.events[tracer.events.len() - 1];
         if let TraceLowLevelEvent::Step(StepRecord { path_id, line }) = should_be_step {
@@ -61,7 +63,7 @@ mod tests {
 
         tracer.register_return(NONE_VALUE);
 
-        assert_eq!(tracer.events.len(), 19);
+        assert_eq!(tracer.events.len(), 21);
         // visible with
         // cargo tets -- --nocapture
         // println!("{:#?}", tracer.events);

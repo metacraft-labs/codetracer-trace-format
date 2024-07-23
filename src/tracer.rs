@@ -126,11 +126,16 @@ impl Tracer {
         // non-toplevel calls, so
         // we ensure it directly from register_call
         if function_id != TOP_LEVEL_FUNCTION_ID {
+            for arg in &args {
+                self.register_full_value(arg.variable_id, arg.value.clone());
+            }
             let function = &self.function_list[function_id.0];
             self.events.push(TraceLowLevelEvent::Step(StepRecord { 
                 path_id: function.1,
                 line: function.2
             }));
+
+            
         }
         // the actual call event:
         self.events.push(TraceLowLevelEvent::Call(CallRecord { function_id, args }));

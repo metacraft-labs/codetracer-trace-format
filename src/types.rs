@@ -17,6 +17,7 @@ pub enum TraceLowLevelEvent {
     Call(CallRecord),
     Return(ReturnRecord),
     Event(RecordEvent),
+    DropLastStep,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

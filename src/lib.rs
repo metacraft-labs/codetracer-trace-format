@@ -24,7 +24,14 @@ mod tests {
         // -> function_id 1 after top level;
         let function_id = tracer.ensure_function_id("function", &path, function_line);
         assert!(function_id == FunctionId(1));
-        
+
+        let before_temp_step = tracer.events.len();
+        tracer.register_step(path, function_line);
+        tracer.drop_last_step();
+        // drop last step: drops steps[-1]/variables[-]
+        assert_eq!(before_temp_step + 2, tracer.events.len());
+        assert!(matches!(tracer.events.last().unwrap(), TraceLowLevelEvent::DropLastStep));
+
         let args = vec![tracer.arg("a", NONE_VALUE), tracer.arg("b", NONE_VALUE)];
         tracer.register_call(function_id, args);
         // => arg-related variable/value events; auto call-step event; potentially variables; call event
@@ -63,7 +70,7 @@ mod tests {
 
         tracer.register_return(NONE_VALUE);
 
-        assert_eq!(tracer.events.len(), 21);
+        assert_eq!(tracer.events.len(), 23);
         // visible with
         // cargo tets -- --nocapture
         // println!("{:#?}", tracer.events);

@@ -18,10 +18,34 @@ mod tests {
         tracer.register_step(path, Line(2));
         tracer.register_special_event(EventLogKind::Write, "test");
         tracer.register_special_event(EventLogKind::Write, "test2");
-        let function_id = tracer.ensure_function_id("function", &path, Line(3));
 
+        let function_path_id = tracer.ensure_path_id(&path);
+        let function_line = Line(3);
+        // -> function_id 1 after top level;
+        let function_id = tracer.ensure_function_id("function", &path, function_line);
+        assert!(function_id == FunctionId(1));
+        
         let args = vec![tracer.arg("a", NONE_VALUE), tracer.arg("b", NONE_VALUE)];
         tracer.register_call(function_id, args);
+        // => arg-related variable/value events; auto call-step event; call event
+
+        assert!(tracer.events.len() > 1);
+        let should_be_step = &tracer.events[tracer.events.len() - 2];
+        let should_be_call = &tracer.events[tracer.events.len() - 1];
+        if let TraceLowLevelEvent::Step(StepRecord { path_id, line }) = should_be_step {
+            assert_eq!(*path_id, function_path_id);
+            assert_eq!(*line, function_line);
+        } else {
+            assert!(false, "expected a auto-registered step event before the last call one");
+        }
+        assert!(
+            matches!(
+                should_be_call,
+                TraceLowLevelEvent::Call(CallRecord {
+                    ..
+                })
+            )
+        );
 
         let int_value = ValueRecord::Int {
             i: 1,
@@ -37,7 +61,7 @@ mod tests {
 
         tracer.register_return(NONE_VALUE);
 
-        assert_eq!(tracer.events.len(), 18);
+        assert_eq!(tracer.events.len(), 19);
         // visible with
         // cargo tets -- --nocapture
         // println!("{:#?}", tracer.events);

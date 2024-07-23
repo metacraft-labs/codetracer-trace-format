@@ -16,9 +16,10 @@ pub struct Tracer {
     args: Vec<String>,
     // trace events
     pub events: Vec<TraceLowLevelEvent>,
-
     // internal tracer state:
     path_list: Vec<PathBuf>,
+    function_list: Vec<(String, PathId, Line)>,
+
     paths: HashMap<PathBuf, PathId>,
     functions: HashMap<String, FunctionId>,
     variables: HashMap<String, VariableId>,
@@ -34,6 +35,8 @@ pub struct Tracer {
 pub const NONE_TYPE_ID: TypeId = TypeId(0);
 pub const NONE_VALUE: ValueRecord = ValueRecord::None { type_id: NONE_TYPE_ID };
 
+pub const TOP_LEVEL_FUNCTION_ID: FunctionId = FunctionId(0);
+
 impl Tracer {
     pub fn new(program: &str, args: &[String]) -> Self {
         Tracer {
@@ -43,6 +46,7 @@ impl Tracer {
             events: vec![],
 
             path_list: vec![],
+            function_list: vec![],
             paths: HashMap::new(),
             functions: HashMap::new(),
             variables: HashMap::new(),
@@ -53,6 +57,7 @@ impl Tracer {
     pub fn start(&mut self, path: &Path, line: Line) {
         let function_id = self.ensure_function_id("<toplevel>", path, line);
         self.register_call(function_id, vec![]);
+        assert!(function_id == TOP_LEVEL_FUNCTION_ID);
 
         // probably we let the user choose, as different languages have
         // different base types/names
@@ -103,6 +108,7 @@ impl Tracer {
 
     pub fn register_function(&mut self, name: &str, path: &Path, line: Line) {
         let path_id = self.ensure_path_id(path);
+        self.function_list.push((name.to_string(), path_id, line));
         self.events.push(TraceLowLevelEvent::Function(FunctionRecord {
             name: name.to_string(),
             path_id,
@@ -116,6 +122,17 @@ impl Tracer {
     }
 
     pub fn register_call(&mut self, function_id: FunctionId, args: Vec<FullValueRecord>) {
+        // register a step for each call, the backend expects this for
+        // non-toplevel calls, so
+        // we ensure it directly from register_call
+        if function_id != TOP_LEVEL_FUNCTION_ID {
+            let function = &self.function_list[function_id.0];
+            self.events.push(TraceLowLevelEvent::Step(StepRecord { 
+                path_id: function.1,
+                line: function.2
+            }));
+        }
+        // the actual call event:
         self.events.push(TraceLowLevelEvent::Call(CallRecord { function_id, args }));
     }
 

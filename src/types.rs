@@ -62,7 +62,7 @@ pub const NO_KEY: CallKey = CallKey(-1);
 
 // end of call keys code
 
-#[derive(Debug, Default, Copy, Clone, Serialize, Deserialize)]
+#[derive(Debug, Default, Copy, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(transparent)]
 pub struct Line(pub i64);
 
@@ -123,7 +123,7 @@ impl Into<usize> for VariableId {
     }
 }
 
-#[derive(Debug, Copy, Clone, Serialize, Deserialize)]
+#[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FunctionId(pub usize);
 
 impl Into<usize> for FunctionId {

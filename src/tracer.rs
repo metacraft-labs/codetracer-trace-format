@@ -179,6 +179,10 @@ impl Tracer {
         self.events.push(TraceLowLevelEvent::Value(FullValueRecord { variable_id, value }));
     }
 
+    pub fn drop_last_step(&mut self) {
+        self.events.push(TraceLowLevelEvent::DropLastStep);
+    }
+
     pub fn store_trace_metadata(&self, path: &Path) -> Result<(), Box<dyn Error>> {
         let trace_metadata = TraceMetadata {
             program: self.program.clone(),

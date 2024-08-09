@@ -47,20 +47,17 @@ mod tests {
         } else {
             assert!(false, "expected a auto-registered step event before the last call one");
         }
-        assert!(
-            matches!(
-                should_be_call,
-                TraceLowLevelEvent::Call(CallRecord {
-                    ..
-                })
-            )
-        );
+        assert!(matches!(should_be_call, TraceLowLevelEvent::Call(CallRecord { .. })));
 
         let int_value = ValueRecord::Int {
             i: 1,
             type_id: tracer.ensure_type_id(TypeKind::Int, "Int"),
         };
-        tracer.register_variable_with_full_value("test_variable", int_value);
+        let int_value_2 = ValueRecord::Int {
+            i: 2,
+            type_id: tracer.ensure_type_id(TypeKind::Int, "Int"),
+        };
+        tracer.register_variable_with_full_value("test_variable", int_value.clone());
 
         let not_supported_value = ValueRecord::Error {
             msg: "not supported".to_string(),
@@ -68,9 +65,21 @@ mod tests {
         };
         tracer.register_variable_with_full_value("test_variable2", not_supported_value);
 
+        tracer.register_cell_value(ValueId(0), int_value);
+        let type_id = tracer.ensure_type_id(TypeKind::Seq, "Vector<Int>");
+        tracer.register_compound_value(
+            ValueId(1),
+            ValueRecord::Sequence {
+                elements: vec![ValueRecord::Cell { value_id: ValueId(0) }], // #0
+                type_id,
+            },
+        );
+        tracer.register_variable_cell("test_variable3", ValueId(1));
+        tracer.assign_cell(ValueId(0), int_value_2);
+
         tracer.register_return(NONE_VALUE);
 
-        assert_eq!(tracer.events.len(), 23);
+        assert_eq!(tracer.events.len(), 29);
         // visible with
         // cargo tets -- --nocapture
         // println!("{:#?}", tracer.events);

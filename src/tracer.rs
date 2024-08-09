@@ -5,8 +5,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::types::{
-    CallRecord, EventLogKind, FullValueRecord, FunctionId, FunctionRecord, Line, PathId, RecordEvent, ReturnRecord, StepRecord, TraceLowLevelEvent,
-    TraceMetadata, TypeId, TypeKind, TypeRecord, TypeSpecificInfo, ValueRecord, VariableId,
+    AssignCellRecord, CallRecord, CellValueRecord, CompoundValueRecord, EventLogKind, FullValueRecord, FunctionId, FunctionRecord, Line, PathId,
+    RecordEvent, ReturnRecord, StepRecord, TraceLowLevelEvent, TraceMetadata, TypeId, TypeKind, TypeRecord, TypeSpecificInfo, ValueId, ValueRecord,
+    VariableCellRecord, VariableId,
 };
 
 pub struct Tracer {
@@ -130,12 +131,10 @@ impl Tracer {
                 self.register_full_value(arg.variable_id, arg.value.clone());
             }
             let function = &self.function_list[function_id.0];
-            self.events.push(TraceLowLevelEvent::Step(StepRecord { 
+            self.events.push(TraceLowLevelEvent::Step(StepRecord {
                 path_id: function.1,
-                line: function.2
+                line: function.2,
             }));
-
-            
         }
         // the actual call event:
         self.events.push(TraceLowLevelEvent::Call(CallRecord { function_id, args }));
@@ -177,6 +176,25 @@ impl Tracer {
 
     pub fn register_full_value(&mut self, variable_id: VariableId, value: ValueRecord) {
         self.events.push(TraceLowLevelEvent::Value(FullValueRecord { variable_id, value }));
+    }
+
+    pub fn register_compound_value(&mut self, value_id: ValueId, value: ValueRecord) {
+        self.events
+            .push(TraceLowLevelEvent::CompoundValue(CompoundValueRecord { value_id, value }));
+    }
+
+    pub fn register_cell_value(&mut self, value_id: ValueId, value: ValueRecord) {
+        self.events.push(TraceLowLevelEvent::CellValue(CellValueRecord { value_id, value }));
+    }
+
+    pub fn assign_cell(&mut self, value_id: ValueId, new_value: ValueRecord) {
+        self.events.push(TraceLowLevelEvent::AssignCell(AssignCellRecord { value_id, new_value }));
+    }
+
+    pub fn register_variable_cell(&mut self, variable_name: &str, value_id: ValueId) {
+        let variable_id = self.ensure_variable_id(variable_name);
+        self.events
+            .push(TraceLowLevelEvent::VariableCell(VariableCellRecord { variable_id, value_id }));
     }
 
     pub fn drop_last_step(&mut self) {

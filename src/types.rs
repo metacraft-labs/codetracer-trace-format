@@ -17,8 +17,50 @@ pub enum TraceLowLevelEvent {
     Call(CallRecord),
     Return(ReturnRecord),
     Event(RecordEvent),
+    CompoundValue(CompoundValueRecord),
+    CellValue(CellValueRecord),
+    AssignCompoundItem(AssignCompoundItemRecord),
+    AssignCell(AssignCellRecord),
+    VariableCell(VariableCellRecord),
     DropLastStep,
 }
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CompoundValueRecord {
+    pub value_id: ValueId,
+    pub value: ValueRecord,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CellValueRecord {
+    pub value_id: ValueId,
+    pub value: ValueRecord,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub struct AssignCompoundItemRecord {
+    pub value_id: ValueId,
+    pub index: usize,
+    pub item_value_id: ValueId,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssignCellRecord {
+    pub value_id: ValueId,
+    pub new_value: ValueRecord,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VariableCellRecord {
+    pub variable_id: VariableId,
+    pub value_id: ValueId,
+}
+
+// for now can be both just an index and
+// a 64-bit pointer; think if we need
+// something more general?
+#[derive(Hash, Debug, Default, Copy, Clone, Serialize, Deserialize, Ord, PartialOrd, Eq, PartialEq)]
+pub struct ValueId(pub usize);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FullValueRecord {
@@ -248,6 +290,9 @@ pub enum ValueRecord {
     },
     None {
         type_id: TypeId,
+    },
+    Cell {
+        value_id: ValueId,
     },
 }
 

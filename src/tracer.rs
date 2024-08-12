@@ -97,7 +97,7 @@ impl Tracer {
     pub fn ensure_variable_id(&mut self, variable_name: &str) -> VariableId {
         if !self.variables.contains_key(variable_name) {
             self.variables.insert(variable_name.to_string(), VariableId(self.variables.len()));
-            self.register_variable_event(variable_name);
+            self.register_variable_name(variable_name);
         }
         *self.variables.get(variable_name).unwrap()
     }
@@ -170,8 +170,8 @@ impl Tracer {
         self.register_full_value(variable_id, value);
     }
 
-    pub fn register_variable_event(&mut self, variable_name: &str) {
-        self.events.push(TraceLowLevelEvent::Variable(variable_name.to_string()));
+    pub fn register_variable_name(&mut self, variable_name: &str) {
+        self.events.push(TraceLowLevelEvent::VariableName(variable_name.to_string()));
     }
 
     pub fn register_full_value(&mut self, variable_id: VariableId, value: ValueRecord) {
@@ -198,10 +198,15 @@ impl Tracer {
         self.events.push(TraceLowLevelEvent::AssignCell(AssignCellRecord { value_id, new_value }));
     }
 
-    pub fn register_variable_cell(&mut self, variable_name: &str, value_id: ValueId) {
+    pub fn register_variable(&mut self, variable_name: &str, value_id: ValueId) {
         let variable_id = self.ensure_variable_id(variable_name);
         self.events
             .push(TraceLowLevelEvent::VariableCell(VariableCellRecord { variable_id, value_id }));
+    }
+
+    pub fn drop_variable(&mut self, variable_name: &str) {
+        let variable_id = self.ensure_variable_id(variable_name);
+        self.events.push(TraceLowLevelEvent::DropVariable(variable_id));
     }
 
     pub fn drop_last_step(&mut self) {

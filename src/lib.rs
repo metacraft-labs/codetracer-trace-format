@@ -74,14 +74,15 @@ mod tests {
                 type_id,
             },
         );
-        tracer.register_variable_cell("test_variable3", ValueId(1));
+        tracer.register_variable("test_variable3", ValueId(1));
         tracer.assign_cell(ValueId(1), int_value_2.clone());
         tracer.register_cell_value(ValueId(2), int_value_2.clone());
         tracer.assign_compound_item(ValueId(0), 0, ValueId(2));
 
         tracer.register_return(NONE_VALUE);
+        tracer.drop_variable("test_variable3");
 
-        assert_eq!(tracer.events.len(), 31);
+        assert_eq!(tracer.events.len(), 32);
         // visible with
         // cargo tets -- --nocapture
         // println!("{:#?}", tracer.events);

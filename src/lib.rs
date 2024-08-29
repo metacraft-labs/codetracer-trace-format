@@ -1,3 +1,8 @@
+// allow it, because I am not sure we need it?
+// better to explicitly turn into the newtype types
+// but i might be wrong
+// also for now, allowing it to pass `cargo clippy`
+#![allow(clippy::from_over_into)]
 mod tracer;
 mod types;
 pub use crate::tracer::{Tracer, NONE_TYPE_ID, NONE_VALUE};

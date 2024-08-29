@@ -10,7 +10,8 @@ use serde_repr::*;
 pub enum TraceLowLevelEvent {
     Step(StepRecord),
     Path(PathBuf),            // should be always generated before usage, so we can stop stream at random n
-    VariableName(String),     // interning new name for it
+    VariableName(String),     // interning new name for variables
+    Variable(String),         // interning new name for variables: backward compat
     Type(TypeRecord),         // should be always generated before Value referencing it
     Value(FullValueRecord),   // full values: simpler case working even without modification support
     Function(FunctionRecord), // should be always generated before CallRecord referencing it

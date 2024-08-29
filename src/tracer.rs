@@ -119,7 +119,7 @@ impl Tracer {
 
     pub fn register_step(&mut self, path: &Path, line: Line) {
         let path_id = self.ensure_path_id(path);
-        self.events.push(TraceLowLevelEvent::Step(StepRecord { path_id, line: line }));
+        self.events.push(TraceLowLevelEvent::Step(StepRecord { path_id, line}));
     }
 
     pub fn register_call(&mut self, function_id: FunctionId, args: Vec<FullValueRecord>) {

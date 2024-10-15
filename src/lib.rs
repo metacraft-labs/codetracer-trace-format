@@ -21,6 +21,7 @@ mod tests {
         tracer.start(path, Line(1));
         tracer.register_step(path, Line(1));
         tracer.register_step(path, Line(2));
+        tracer.register_asm(&["asm0".to_string(), "asm1".to_string()]);
         tracer.register_special_event(EventLogKind::Write, "test");
         tracer.register_special_event(EventLogKind::Write, "test2");
 
@@ -87,7 +88,7 @@ mod tests {
         tracer.register_return(NONE_VALUE);
         tracer.drop_variable("test_variable3");
 
-        assert_eq!(tracer.events.len(), 32);
+        assert_eq!(tracer.events.len(), 33);
         // visible with
         // cargo tets -- --nocapture
         // println!("{:#?}", tracer.events);

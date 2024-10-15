@@ -165,6 +165,10 @@ impl Tracer {
         self.events.push(TraceLowLevelEvent::Type(typ));
     }
 
+    pub fn register_asm(&mut self, instructions: &[String]) {
+        self.events.push(TraceLowLevelEvent::Asm(instructions.to_vec()));
+    }
+
     pub fn register_variable_with_full_value(&mut self, name: &str, value: ValueRecord) {
         let variable_id = self.ensure_variable_id(name);
         self.register_full_value(variable_id, value);

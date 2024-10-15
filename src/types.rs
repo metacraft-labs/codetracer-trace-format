@@ -18,6 +18,7 @@ pub enum TraceLowLevelEvent {
     Call(CallRecord),
     Return(ReturnRecord),
     Event(RecordEvent),
+    Asm(Vec<String>),
     CompoundValue(CompoundValueRecord),
     CellValue(CellValueRecord),
     AssignCompoundItem(AssignCompoundItemRecord),

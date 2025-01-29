@@ -24,6 +24,7 @@ mod tests {
         tracer.register_asm(&["asm0".to_string(), "asm1".to_string()]);
         tracer.register_special_event(EventLogKind::Write, "test");
         tracer.register_special_event(EventLogKind::Write, "test2");
+        tracer.register_special_event(EventLogKind::Error, "testError");
 
         let function_path_id = tracer.ensure_path_id(&path);
         let function_line = Line(3);
@@ -88,7 +89,7 @@ mod tests {
         tracer.register_return(NONE_VALUE);
         tracer.drop_variable("test_variable3");
 
-        assert_eq!(tracer.events.len(), 33);
+        assert_eq!(tracer.events.len(), 34);
         // visible with
         // cargo tets -- --nocapture
         // println!("{:#?}", tracer.events);

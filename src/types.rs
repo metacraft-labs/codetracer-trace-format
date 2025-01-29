@@ -6,6 +6,12 @@ use num_derive::FromPrimitive;
 use serde::{Deserialize, Serialize};
 use serde_repr::*;
 
+// currently, we do assume that we record the whole program
+// so, we try to include minimal amount of data,
+// as we can reconstruct some things like depth, id-s etc
+// afterwards in postprocessing
+// this assumption can change in the future
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TraceLowLevelEvent {
     Step(StepRecord),
@@ -19,12 +25,17 @@ pub enum TraceLowLevelEvent {
     Return(ReturnRecord),
     Event(RecordEvent),
     Asm(Vec<String>),
+
+    // experimental modification value tracking events
     CompoundValue(CompoundValueRecord),
     CellValue(CellValueRecord),
     AssignCompoundItem(AssignCompoundItemRecord),
     AssignCell(AssignCellRecord),
     VariableCell(VariableCellRecord),
     DropVariable(VariableId),
+
+    // normal event, workaround for cases when we need to drop
+    // a step event, but the trace needs to be append-only
     DropLastStep,
 }
 
@@ -371,6 +382,7 @@ pub enum EventLogKind {
     CloseDir,
     Socket,
     Open,
+    Error,
     // used for trace events
     TraceLogEvent,
 }

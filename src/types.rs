@@ -77,7 +77,7 @@ pub enum RValue {
     Simple(VariableId),
     // eventually in future:
     // discuss more: Const(String, ValueRecord),
-    Compound(Vec<RValue>),
+    Compound(Vec<VariableId>),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -114,7 +114,7 @@ mod tests {
 
         tracer.drop_variables(&["variable1".to_string(), "variable2".to_string(), "variable3".to_string()]);
 
-        assert_eq!(tracer.events.len(), 34);
+        assert_eq!(tracer.events.len(), 46);
         // visible with
         // cargo tets -- --nocapture
         // println!("{:#?}", tracer.events);

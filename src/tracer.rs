@@ -224,19 +224,36 @@ impl Tracer {
     }
 
     pub fn bind_variable(&mut self, variable_name: &str, place: Place) {
-        unimplemented!()
+        let variable_id = self.ensure_variable_id(variable_name);
+        self.events.push(TraceLowLevelEvent::BindVariable(crate::BindVariableRecord {
+            variable_id,
+            place,
+        }));
     }
 
     pub fn drop_variables(&mut self, variable_names: &[String]) {
-        unimplemented!()
+        let variable_ids : Vec<VariableId> = variable_names
+            .to_vec()
+            .iter()
+            .map(| variable_name | self.ensure_variable_id(variable_name))
+            .collect();
+        self.events.push(TraceLowLevelEvent::DropVariables(
+            variable_ids
+        ))
     }
 
     pub fn simple_rvalue(&mut self, variable_name: &str) -> RValue {
-        todo!()
+        let variable_id = self.ensure_variable_id(variable_name);
+        RValue::Simple(variable_id)
     }
-
+    
     pub fn compound_rvalue(&mut self, variable_dependencies: &[String]) -> RValue {
-        todo!()
+        let variable_ids : Vec<VariableId> = variable_dependencies
+            .to_vec()
+            .iter()
+            .map(| variable_dependency | self.ensure_variable_id(variable_dependency))
+            .collect();
+        RValue::Compound(variable_ids)
     }
 
     pub fn drop_last_step(&mut self) {

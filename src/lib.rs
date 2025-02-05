@@ -56,7 +56,7 @@ mod tests {
         }
         assert!(matches!(should_be_call, TraceLowLevelEvent::Call(CallRecord { .. })));
 
-        let int_value = ValueRecord::Int {
+        let int_value_1 = ValueRecord::Int {
             i: 1,
             type_id: tracer.ensure_type_id(TypeKind::Int, "Int"),
         };
@@ -64,7 +64,12 @@ mod tests {
             i: 2,
             type_id: tracer.ensure_type_id(TypeKind::Int, "Int"),
         };
-        tracer.register_variable_with_full_value("test_variable", int_value.clone());
+        let int_value_3 = ValueRecord::Int {
+            i: 3,
+            type_id: tracer.ensure_type_id(TypeKind::Int, "Int"),
+        };
+
+        tracer.register_variable_with_full_value("test_variable", int_value_1.clone());
 
         let not_supported_value = ValueRecord::Error {
             msg: "not supported".to_string(),
@@ -72,22 +77,42 @@ mod tests {
         };
         tracer.register_variable_with_full_value("test_variable2", not_supported_value);
 
-        tracer.register_cell_value(ValueId(0), int_value);
+        tracer.register_cell_value(Place(0), int_value_1.clone());
         let type_id = tracer.ensure_type_id(TypeKind::Seq, "Vector<Int>");
         tracer.register_compound_value(
-            ValueId(1),
+            Place(1),
             ValueRecord::Sequence {
-                elements: vec![ValueRecord::Cell { value_id: ValueId(0) }], // #0
+                elements: vec![ValueRecord::Cell { place: Place(0) }], // #0
                 type_id,
             },
         );
-        tracer.register_variable("test_variable3", ValueId(1));
-        tracer.assign_cell(ValueId(1), int_value_2.clone());
-        tracer.register_cell_value(ValueId(2), int_value_2.clone());
-        tracer.assign_compound_item(ValueId(0), 0, ValueId(2));
+        tracer.register_variable("test_variable3", Place(1));
+        tracer.assign_cell(Place(1), int_value_2.clone());
+        tracer.register_cell_value(Place(2), int_value_2.clone());
+        tracer.assign_compound_item(Place(0), 0, Place(2));
 
         tracer.register_return(NONE_VALUE);
         tracer.drop_variable("test_variable3");
+
+        // example of the history events
+        tracer.bind_variable("variable1", Place(1));
+        tracer.bind_variable("variable2", Place(2));
+        tracer.bind_variable("variable3", Place(3));
+
+        tracer.register_variable_with_full_value("variable1", int_value_1.clone());
+        tracer.register_variable_with_full_value("variable2", int_value_2.clone());
+        tracer.register_variable_with_full_value("variable3", int_value_3.clone());
+
+        // tracer.assign_simple("variable1", "variable2", PassBy::Value);
+        // tracer.assign_compound("variable1", &["variable2", "variable3"], PassBy::Value);
+
+        // more future-proof hopefully, if we add other kinds of RValue
+        let rvalue_1 = tracer.simple_rvalue("variable2");
+        tracer.assign("variable1", rvalue_1, PassBy::Value);
+        let rvalue_2 = tracer.compound_rvalue(&["variable2".to_string(), "variable3".to_string()]);
+        tracer.assign("variable1", rvalue_2, PassBy::Value);
+
+        tracer.drop_variables(&["variable1".to_string(), "variable2".to_string(), "variable3".to_string()]);
 
         assert_eq!(tracer.events.len(), 34);
         // visible with

@@ -26,7 +26,15 @@ pub enum TraceLowLevelEvent {
     Event(RecordEvent),
     Asm(Vec<String>),
 
+    // events useful for history
+    BindVariable(BindVariableRecord), // bind a variable to a certain place
+    Assignment(AssignmentRecord), // assigning or passing by params
+    DropVariables(Vec<VariableId>), // dropping variables e.g. in the end of scope/heap lifetime
+
     // experimental modification value tracking events
+    // probably will be reworked or replaced by the newer
+    // history events with some additions
+    // for now here for backward compatibility/experiments
     CompoundValue(CompoundValueRecord),
     CellValue(CellValueRecord),
     AssignCompoundItem(AssignCompoundItemRecord),
@@ -40,41 +48,82 @@ pub enum TraceLowLevelEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BindVariableRecord {
+    pub variable_id: VariableId,
+    pub place: Place,
+}
+
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+pub enum PassBy {
+    #[default]
+    Value,
+    Reference,
+    // TODO: languages with more special ways of passing
+}
+
+// used for all kinds of by value/by ref assignment/passing
+//   * assignments
+//   * arg(parameter) passing
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AssignmentRecord {
+    pub to: VariableId,
+    pub pass_by: PassBy,
+    pub from: RValue,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind")]
+pub enum RValue {
+    Simple(VariableId),
+    // eventually in future:
+    // discuss more: Const(String, ValueRecord),
+    Compound(Vec<RValue>),
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompoundValueRecord {
-    pub value_id: ValueId,
+    pub place: Place,
     pub value: ValueRecord,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CellValueRecord {
-    pub value_id: ValueId,
+    pub place: Place,
     pub value: ValueRecord,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]
 pub struct AssignCompoundItemRecord {
-    pub value_id: ValueId,
+    pub place: Place,
     pub index: usize,
-    pub item_value_id: ValueId,
+    pub item_place: Place,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AssignCellRecord {
-    pub value_id: ValueId,
+    pub place: Place,
     pub new_value: ValueRecord,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VariableCellRecord {
     pub variable_id: VariableId,
-    pub value_id: ValueId,
+    pub place: Place,
 }
 
-// for now can be both just an index and
-// a 64-bit pointer; think if we need
-// something more general?
+// opaque(?) id:
+//   can be anything, depending on the lang
+//   and its implementation
+//   usually we expects it's
+//     * some kind of pointer/address
+//     * some kind of internal index(interpreter or stack)
+//     * some other kind of id which somehow
+//       uniquely represents the "place" of this variable
+//  it's useful to let us track things on the more direct value
+//    level/things like aliasing/mutable variables in different frames
+//    history of mutations to a value etc
 #[derive(Hash, Debug, Default, Copy, Clone, Serialize, Deserialize, Ord, PartialOrd, Eq, PartialEq)]
-pub struct ValueId(pub usize);
+pub struct Place(pub i64);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FullValueRecord {
@@ -306,7 +355,7 @@ pub enum ValueRecord {
         type_id: TypeId,
     },
     Cell {
-        value_id: ValueId,
+        place: Place,
     },
 }
 

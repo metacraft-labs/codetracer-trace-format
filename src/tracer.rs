@@ -5,10 +5,11 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::types::{
-    AssignCellRecord, AssignCompoundItemRecord, CallRecord, CellValueRecord, CompoundValueRecord, EventLogKind, FullValueRecord, FunctionId,
-    FunctionRecord, Line, PathId, RecordEvent, ReturnRecord, StepRecord, TraceLowLevelEvent, TraceMetadata, TypeId, TypeKind, TypeRecord,
-    TypeSpecificInfo, ValueId, ValueRecord, VariableCellRecord, VariableId,
+    AssignCellRecord, AssignCompoundItemRecord, AssignmentRecord, CallRecord, CellValueRecord, CompoundValueRecord, EventLogKind, FullValueRecord,
+    FunctionId, FunctionRecord, Line, PassBy, PathId, Place, RecordEvent, ReturnRecord, StepRecord, TraceLowLevelEvent, TraceMetadata, TypeId,
+    TypeKind, TypeRecord, TypeSpecificInfo, ValueRecord, VariableCellRecord, VariableId,
 };
+use crate::RValue;
 
 pub struct Tracer {
     // trace metadata:
@@ -119,7 +120,7 @@ impl Tracer {
 
     pub fn register_step(&mut self, path: &Path, line: Line) {
         let path_id = self.ensure_path_id(path);
-        self.events.push(TraceLowLevelEvent::Step(StepRecord { path_id, line}));
+        self.events.push(TraceLowLevelEvent::Step(StepRecord { path_id, line }));
     }
 
     pub fn register_call(&mut self, function_id: FunctionId, args: Vec<FullValueRecord>) {
@@ -182,35 +183,60 @@ impl Tracer {
         self.events.push(TraceLowLevelEvent::Value(FullValueRecord { variable_id, value }));
     }
 
-    pub fn register_compound_value(&mut self, value_id: ValueId, value: ValueRecord) {
-        self.events
-            .push(TraceLowLevelEvent::CompoundValue(CompoundValueRecord { value_id, value }));
+    pub fn register_compound_value(&mut self, place: Place, value: ValueRecord) {
+        self.events.push(TraceLowLevelEvent::CompoundValue(CompoundValueRecord { place, value }));
     }
 
-    pub fn register_cell_value(&mut self, value_id: ValueId, value: ValueRecord) {
-        self.events.push(TraceLowLevelEvent::CellValue(CellValueRecord { value_id, value }));
+    pub fn register_cell_value(&mut self, place: Place, value: ValueRecord) {
+        self.events.push(TraceLowLevelEvent::CellValue(CellValueRecord { place, value }));
     }
 
-    pub fn assign_compound_item(&mut self, value_id: ValueId, index: usize, item_value_id: ValueId) {
+    pub fn assign_compound_item(&mut self, place: Place, index: usize, item_place: Place) {
         self.events.push(TraceLowLevelEvent::AssignCompoundItem(AssignCompoundItemRecord {
-            value_id,
+            place,
             index,
-            item_value_id,
+            item_place,
         }));
     }
-    pub fn assign_cell(&mut self, value_id: ValueId, new_value: ValueRecord) {
-        self.events.push(TraceLowLevelEvent::AssignCell(AssignCellRecord { value_id, new_value }));
+    pub fn assign_cell(&mut self, place: Place, new_value: ValueRecord) {
+        self.events.push(TraceLowLevelEvent::AssignCell(AssignCellRecord { place, new_value }));
     }
 
-    pub fn register_variable(&mut self, variable_name: &str, value_id: ValueId) {
+    pub fn register_variable(&mut self, variable_name: &str, place: Place) {
         let variable_id = self.ensure_variable_id(variable_name);
         self.events
-            .push(TraceLowLevelEvent::VariableCell(VariableCellRecord { variable_id, value_id }));
+            .push(TraceLowLevelEvent::VariableCell(VariableCellRecord { variable_id, place }));
     }
 
     pub fn drop_variable(&mut self, variable_name: &str) {
         let variable_id = self.ensure_variable_id(variable_name);
         self.events.push(TraceLowLevelEvent::DropVariable(variable_id));
+    }
+
+    // history event helpers
+    pub fn assign(&mut self, variable_name: &str, rvalue: RValue, pass_by: PassBy) {
+        let variable_id = self.ensure_variable_id(variable_name);
+        self.events.push(TraceLowLevelEvent::Assignment(AssignmentRecord {
+            to: variable_id,
+            from: rvalue,
+            pass_by,
+        }));
+    }
+
+    pub fn bind_variable(&mut self, variable_name: &str, place: Place) {
+        unimplemented!()
+    }
+
+    pub fn drop_variables(&mut self, variable_names: &[String]) {
+        unimplemented!()
+    }
+
+    pub fn simple_rvalue(&mut self, variable_name: &str) -> RValue {
+        todo!()
+    }
+
+    pub fn compound_rvalue(&mut self, variable_dependencies: &[String]) -> RValue {
+        todo!()
     }
 
     pub fn drop_last_step(&mut self) {

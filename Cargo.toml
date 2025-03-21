@@ -7,7 +7,7 @@ description = "A library for the schema and tracing helpers for the CodeTracer d
 readme = "README.md"
 repository = "https://github.com/metacraft-labs/runtime_tracing"
 license = "MIT"
-keywords = ["development-tools::debugging", "development-tools"]
+keywords = ["debugging", "development-tools"]
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 

@@ -83,6 +83,7 @@ mod tests {
             Place(1),
             ValueRecord::Sequence {
                 elements: vec![ValueRecord::Cell { place: Place(0) }], // #0
+                is_slice: false,
                 type_id,
             },
         );

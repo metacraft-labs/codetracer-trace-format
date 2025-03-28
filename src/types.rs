@@ -28,8 +28,8 @@ pub enum TraceLowLevelEvent {
 
     // events useful for history
     BindVariable(BindVariableRecord), // bind a variable to a certain place
-    Assignment(AssignmentRecord), // assigning or passing by params
-    DropVariables(Vec<VariableId>), // dropping variables e.g. in the end of scope/heap lifetime
+    Assignment(AssignmentRecord),     // assigning or passing by params
+    DropVariables(Vec<VariableId>),   // dropping variables e.g. in the end of scope/heap lifetime
 
     // experimental modification value tracking events
     // probably will be reworked or replaced by the newer
@@ -280,6 +280,9 @@ pub struct VariableRecord {
 pub struct TypeRecord {
     pub kind: TypeKind,
     pub lang_type: String,
+    // for now only for Struct: TODO eventually
+    // replace with an enum for TypeRecord, or with more cases
+    // in TypeSpecificInfo for collections, etc
     pub specific_info: TypeSpecificInfo,
 }
 
@@ -338,10 +341,20 @@ pub enum ValueRecord {
     Sequence {
         elements: Vec<ValueRecord>,
         type_id: TypeId,
+        is_slice: bool,
+    },
+    Tuple {
+        elements: Vec<ValueRecord>,
+        type_id: TypeId,
     },
     Struct {
         field_values: Vec<ValueRecord>,
         type_id: TypeId, // must point to Type with STRUCT kind and TypeSpecificInfo::Struct
+    },
+    Variant {
+        discriminator: String,      // TODO: eventually a more specific kind of value/type
+        contents: Box<ValueRecord>, // usually a Struct or a Tuple
+        type_id: TypeId,
     },
     Raw {
         r: String,

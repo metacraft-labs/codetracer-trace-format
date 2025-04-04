@@ -280,7 +280,7 @@ pub struct VariableRecord {
 pub struct TypeRecord {
     pub kind: TypeKind,
     pub lang_type: String,
-    // for now only for Struct: TODO eventually
+    // for now only for Struct and Pointer: TODO eventually
     // replace with an enum for TypeRecord, or with more cases
     // in TypeSpecificInfo for collections, etc
     pub specific_info: TypeSpecificInfo,
@@ -297,6 +297,7 @@ pub struct FieldTypeRecord {
 pub enum TypeSpecificInfo {
     None,
     Struct { fields: Vec<FieldTypeRecord> },
+    Pointer { dereference_type_id: TypeId },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -340,8 +341,8 @@ pub enum ValueRecord {
     },
     Sequence {
         elements: Vec<ValueRecord>,
-        type_id: TypeId,
         is_slice: bool,
+        type_id: TypeId,
     },
     Tuple {
         elements: Vec<ValueRecord>,
@@ -354,6 +355,13 @@ pub enum ValueRecord {
     Variant {
         discriminator: String,      // TODO: eventually a more specific kind of value/type
         contents: Box<ValueRecord>, // usually a Struct or a Tuple
+        type_id: TypeId,
+    },
+    // TODO: eventually add more pointer-like variants
+    // or more fields (address?)
+    Reference {
+        dereferenced: Box<ValueRecord>,
+        mutable: bool,
         type_id: TypeId,
     },
     Raw {

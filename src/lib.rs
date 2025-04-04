@@ -113,9 +113,24 @@ mod tests {
         let rvalue_2 = tracer.compound_rvalue(&["variable2".to_string(), "variable3".to_string()]);
         tracer.assign("variable1", rvalue_2, PassBy::Value);
 
+        // example for reference types
+        let reference_type = TypeRecord {
+            kind: TypeKind::Pointer,
+            lang_type: "MyReference<Int>".to_string(),
+            specific_info: TypeSpecificInfo::Pointer { 
+                dereference_type_id: tracer.ensure_type_id(TypeKind::Int, "Int")
+            }
+        };
+        let reference_type_id = tracer.ensure_raw_type_id(reference_type);
+        let _reference_value = ValueRecord::Reference {
+            dereferenced: Box::new(int_value_1.clone()),
+            mutable: false,
+            type_id: reference_type_id,
+        };
+
         tracer.drop_variables(&["variable1".to_string(), "variable2".to_string(), "variable3".to_string()]);
 
-        assert_eq!(tracer.events.len(), 46);
+        assert_eq!(tracer.events.len(), 47);
         // visible with
         // cargo tets -- --nocapture
         // println!("{:#?}", tracer.events);

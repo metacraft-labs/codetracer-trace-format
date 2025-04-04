@@ -88,11 +88,16 @@ impl Tracer {
     }
 
     pub fn ensure_type_id(&mut self, kind: TypeKind, lang_type: &str) -> TypeId {
-        if !self.types.contains_key(lang_type) {
-            self.types.insert(lang_type.to_string(), TypeId(self.types.len()));
-            self.register_type(kind, lang_type);
+        let typ = self.to_raw_type(kind, lang_type);
+        self.ensure_raw_type_id(typ)
+    }
+
+    pub fn ensure_raw_type_id(&mut self, typ: TypeRecord) -> TypeId {
+        if !self.types.contains_key(&typ.lang_type) {
+            self.types.insert(typ.lang_type.clone(), TypeId(self.types.len()));
+            self.register_raw_type(typ.clone());
         }
-        *self.types.get(lang_type).unwrap()
+        *self.types.get(&typ.lang_type).unwrap()
     }
 
     pub fn ensure_variable_id(&mut self, variable_name: &str) -> VariableId {
@@ -157,12 +162,20 @@ impl Tracer {
         }));
     }
 
-    pub fn register_type(&mut self, kind: TypeKind, lang_type: &str) {
-        let typ = TypeRecord {
+    pub fn to_raw_type(&self, kind: TypeKind, lang_type: &str) -> TypeRecord {
+        TypeRecord {
             kind,
             lang_type: lang_type.to_string(),
             specific_info: TypeSpecificInfo::None,
-        };
+        }
+    }
+
+    pub fn register_type(&mut self, kind: TypeKind, lang_type: &str) {
+        let typ = self.to_raw_type(kind, lang_type);
+        self.events.push(TraceLowLevelEvent::Type(typ));
+    }
+
+    pub fn register_raw_type(&mut self, typ: TypeRecord) {
         self.events.push(TraceLowLevelEvent::Type(typ));
     }
 

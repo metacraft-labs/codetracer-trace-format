@@ -155,9 +155,11 @@ impl Tracer {
         self.events.push(TraceLowLevelEvent::Return(ReturnRecord { return_value }));
     }
 
+    // TODO: add metadata arg
     pub fn register_special_event(&mut self, kind: EventLogKind, content: &str) {
         self.events.push(TraceLowLevelEvent::Event(RecordEvent {
             kind,
+            metadata: "".to_string(),
             content: content.to_string(),
         }));
     }

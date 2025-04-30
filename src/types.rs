@@ -303,6 +303,7 @@ pub enum TypeSpecificInfo {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RecordEvent {
     pub kind: EventLogKind,
+    pub metadata: String,
     pub content: String,
 }
 
@@ -444,8 +445,10 @@ pub enum EventLogKind {
     #[default]
     Write,
     WriteFile,
+    WriteOther,
     Read,
     ReadFile,
+    ReadOther,
     // not used for now
     ReadDir,
     OpenDir,

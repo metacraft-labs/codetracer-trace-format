@@ -119,7 +119,7 @@ impl Tracer {
 
     pub fn register_step(&mut self, path: &Path, line: Line) {
         let path_id = self.ensure_path_id(path);
-        self.events.push(TraceLowLevelEvent::Step(StepRecord { path_id, line}));
+        self.events.push(TraceLowLevelEvent::Step(StepRecord { path_id, line }));
     }
 
     pub fn register_call(&mut self, function_id: FunctionId, args: Vec<FullValueRecord>) {
@@ -149,9 +149,11 @@ impl Tracer {
         self.events.push(TraceLowLevelEvent::Return(ReturnRecord { return_value }));
     }
 
+    // TODO: add metadata arg
     pub fn register_special_event(&mut self, kind: EventLogKind, content: &str) {
         self.events.push(TraceLowLevelEvent::Event(RecordEvent {
             kind,
+            metadata: "".to_string(),
             content: content.to_string(),
         }));
     }

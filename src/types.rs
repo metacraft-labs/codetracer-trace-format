@@ -362,6 +362,7 @@ pub enum ValueRecord {
     // or more fields (address?)
     Reference {
         dereferenced: Box<ValueRecord>,
+        address: u64,
         mutable: bool,
         type_id: TypeId,
     },

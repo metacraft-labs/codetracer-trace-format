@@ -117,13 +117,14 @@ mod tests {
         let reference_type = TypeRecord {
             kind: TypeKind::Pointer,
             lang_type: "MyReference<Int>".to_string(),
-            specific_info: TypeSpecificInfo::Pointer { 
-                dereference_type_id: tracer.ensure_type_id(TypeKind::Int, "Int")
-            }
+            specific_info: TypeSpecificInfo::Pointer {
+                dereference_type_id: tracer.ensure_type_id(TypeKind::Int, "Int"),
+            },
         };
         let reference_type_id = tracer.ensure_raw_type_id(reference_type);
         let _reference_value = ValueRecord::Reference {
             dereferenced: Box::new(int_value_1.clone()),
+            address: 0,
             mutable: false,
             type_id: reference_type_id,
         };

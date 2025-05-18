@@ -33,7 +33,29 @@ There are some actual usages of it as well which can be also used as an example:
 * in [blocksense-network/noir: their tracing support for CodeTracer](https://github.com/blocksense-network/noir/tree/blocksense/tooling/tracer)
 * in a small toy interpreter to be released as a part of the CodeTracer repo
 
-One can always directly produce the same traces from various languages. We're open for cooperation or discussion on usecases! 
+One can always directly produce the same traces from various languages. We're open for cooperation or discussion on usecases!
+
+### Building the Documentation
+
+The library API docs can be built locally with:
+
+```bash
+cargo doc --all-features --no-deps
+```
+
+The generated HTML documentation will be placed under `target/doc`. Open
+`target/doc/runtime_tracing/index.html` in a browser to inspect it.
+
+### Publishing to crates.io
+
+After updating the version number in `Cargo.toml`, publish a new release with:
+
+```bash
+cargo publish
+```
+
+Documentation for released versions will be automatically hosted on
+[docs.rs](https://docs.rs/runtime_tracing).
 
 ### Legal
 

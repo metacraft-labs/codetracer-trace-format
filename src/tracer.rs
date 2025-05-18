@@ -1,3 +1,5 @@
+//! Helper for generating trace events from a running program or interpreter.
+
 use std::collections::HashMap;
 use std::env;
 use std::error::Error;
@@ -11,6 +13,10 @@ use crate::types::{
 };
 use crate::RValue;
 
+/// State machine used to record [`TraceLowLevelEvent`]s.
+///
+/// A `Tracer` instance accumulates events and can store them on disk via the
+/// `store_trace_*` methods.
 pub struct Tracer {
     // trace metadata:
     workdir: PathBuf,
@@ -40,6 +46,7 @@ pub const NONE_VALUE: ValueRecord = ValueRecord::None { type_id: NONE_TYPE_ID };
 pub const TOP_LEVEL_FUNCTION_ID: FunctionId = FunctionId(0);
 
 impl Tracer {
+    /// Create a new tracer instance for the given program and arguments.
     pub fn new(program: &str, args: &[String]) -> Self {
         Tracer {
             workdir: env::current_dir().expect("can access the current dir"),
@@ -56,6 +63,7 @@ impl Tracer {
         }
     }
 
+    /// Begin tracing of a program starting at the given source location.
     pub fn start(&mut self, path: &Path, line: Line) {
         let function_id = self.ensure_function_id("<toplevel>", path, line);
         self.register_call(function_id, vec![]);

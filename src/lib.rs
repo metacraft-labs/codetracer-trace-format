@@ -3,6 +3,11 @@
 // but i might be wrong
 // also for now, allowing it to pass `cargo clippy`
 #![allow(clippy::from_over_into)]
+//! Runtime tracing structures and helpers for the CodeTracer debugger.
+//!
+//! This crate provides the [`Tracer`] type for emitting trace events and a
+//! collection of serializable structures describing the trace format.
+//! The format is documented in `docs/` and the README.
 mod tracer;
 mod types;
 pub use crate::tracer::{Tracer, NONE_TYPE_ID, NONE_VALUE};

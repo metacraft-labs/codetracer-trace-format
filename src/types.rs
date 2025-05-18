@@ -1,3 +1,7 @@
+//! Serializable record types for the trace format used by CodeTracer.
+//!
+//! All structures derive [`serde::Serialize`] and [`serde::Deserialize`].
+
 use std::cmp::Ord;
 use std::ops;
 use std::path::PathBuf;
@@ -12,6 +16,7 @@ use serde_repr::*;
 // afterwards in postprocessing
 // this assumption can change in the future
 
+/// Low level building blocks that make up a recorded trace.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TraceLowLevelEvent {
     Step(StepRecord),
@@ -321,6 +326,7 @@ impl Into<usize> for TypeId {
 // use value::Value for interaction with existing frontend
 // TODO: convert between them or
 // serialize ValueRecord in a compatible way?
+/// Representation of a runtime value captured in a trace.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind")]
 pub enum ValueRecord {
@@ -382,6 +388,7 @@ pub enum ValueRecord {
     },
 }
 
+/// Categories of types recorded in the trace.
 #[derive(Debug, Default, Copy, Clone, FromPrimitive, Serialize_repr, Deserialize_repr, PartialEq)]
 #[repr(u8)]
 pub enum TypeKind {
@@ -440,6 +447,7 @@ pub enum TypeKind {
     Slice,
 }
 
+/// Kinds of I/O or log events that can appear in a trace.
 #[derive(Debug, Default, Copy, Clone, FromPrimitive, Serialize_repr, Deserialize_repr, PartialEq)]
 #[repr(u8)]
 pub enum EventLogKind {

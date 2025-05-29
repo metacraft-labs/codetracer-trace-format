@@ -189,6 +189,7 @@ A special marker used when a previously emitted `Step` should be ignored. It kee
 Many events embed `ValueRecord` objects. They all use an internally tagged representation with a `kind` field. The possible variants are:
 
 * `Int` – `{ "kind": "Int", "i": number, "type_id": TypeId }`
+* `Int128` – `{ "kind": "Int128", "i": number, "type_id": TypeId }`
 * `Float` – `{ "kind": "Float", "f": number, "type_id": TypeId }`
 * `Bool` – `{ "kind": "Bool", "b": true|false, "type_id": TypeId }`
 * `String` – `{ "kind": "String", "text": "...", "type_id": TypeId }`

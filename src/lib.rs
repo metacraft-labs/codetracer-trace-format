@@ -155,4 +155,14 @@ mod tests {
         assert_eq!(a, b);
         assert_ne!(a, different);
     }
+
+    #[test]
+    fn test_i128_value_record() {
+        let a = ValueRecord::Int128 { i: 0, type_id: TypeId(0) };
+        let b = ValueRecord::Int128 { i: 0, type_id: TypeId(0) };
+        let different = ValueRecord::Int128 { i: 1, type_id: TypeId(0) };
+
+        assert_eq!(a, b);
+        assert_ne!(a, different);
+    }
 }

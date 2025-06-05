@@ -386,6 +386,10 @@ pub enum ValueRecord {
     Cell {
         place: Place,
     },
+    BigInt {
+        b: Vec<u8>, // Big endian
+        type_id: TypeId,
+    },
 }
 
 /// Categories of types recorded in the trace.

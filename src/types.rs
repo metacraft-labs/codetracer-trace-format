@@ -9,6 +9,7 @@ use std::path::PathBuf;
 use num_derive::FromPrimitive;
 use serde::{Deserialize, Serialize};
 use serde_repr::*;
+use crate::base64;
 
 // currently, we do assume that we record the whole program
 // so, we try to include minimal amount of data,
@@ -387,7 +388,7 @@ pub enum ValueRecord {
         place: Place,
     },
     BigInt {
-        #[serde(with = "serde_bytes")]
+        #[serde(with = "base64")]
         b: Vec<u8>, // Base64 encoded bytes of a big-endian unsigned integer
         negative: bool,
         type_id: TypeId,

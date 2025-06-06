@@ -387,7 +387,9 @@ pub enum ValueRecord {
         place: Place,
     },
     BigInt {
-        b: Vec<u8>, // Big endian
+        #[serde(with = "serde_bytes")]
+        b: Vec<u8>, // Base64 encoded bytes of a big-endian unsigned integer
+        negative: bool,
         type_id: TypeId,
     },
 }

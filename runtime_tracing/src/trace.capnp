@@ -207,6 +207,7 @@ struct Trace {
             }
             reference :group {
                 dereferenced @18 :ValueRecord;  # Box?
+                address @27 :UInt64;
                 mutable @19 :Bool;
                 typeId @20 :TypeId;
             }

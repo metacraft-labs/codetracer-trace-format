@@ -10,6 +10,7 @@
 //! The format is documented in `docs/` and the README.
 mod tracer;
 mod types;
+mod capnptrace;
 pub use crate::tracer::{Tracer, NONE_TYPE_ID, NONE_VALUE};
 pub use crate::types::*;
 

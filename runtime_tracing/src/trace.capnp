@@ -162,6 +162,7 @@ struct Trace {
 
     struct RecordEvent {
         kind @0 :EventLogKind;
+        metadata @2 :Text;
         content @1 :Text;
     }
 

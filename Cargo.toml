@@ -1,3 +1,3 @@
 [workspace]
 resolver = "2"
-members = ["runtime_tracing"]
+members = ["runtime_tracing", "runtime_tracing_cli"]

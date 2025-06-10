@@ -208,7 +208,7 @@ fn conv_valuerecord(
     }
 }
 
-pub fn write_trace(q: &Vec<crate::TraceLowLevelEvent>) -> ::capnp::Result<()> {
+pub fn write_trace(q: &Vec<crate::TraceLowLevelEvent>, output: impl std::io::Write) -> ::capnp::Result<()> {
     let mut message = ::capnp::message::Builder::new_default();
 
     let trace = message.init_root::<trace::Builder>();
@@ -303,7 +303,7 @@ pub fn write_trace(q: &Vec<crate::TraceLowLevelEvent>) -> ::capnp::Result<()> {
         }
     }
 
-    serialize_packed::write_message(&mut ::std::io::stdout(), &message)
+    serialize_packed::write_message(output, &message)
 }
 
 fn get_value_records(

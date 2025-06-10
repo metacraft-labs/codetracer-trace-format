@@ -34,6 +34,11 @@ pub struct Tracer {
     types: HashMap<String, TypeId>,
 }
 
+pub enum TraceEventsFileFormat {
+    Json,
+    Binary
+}
+
 // we ensure in start they are registered with those id-s
 
 // pub const EXAMPLE_INT_TYPE_ID: TypeId = TypeId(0);
@@ -294,10 +299,14 @@ impl Tracer {
         Ok(())
     }
 
-    pub fn store_trace_events(&self, path: &Path) -> Result<(), Box<dyn Error>> {
-        // TODO: probably change format
-        let json = serde_json::to_string(&self.events)?;
-        fs::write(path, json)?;
+    pub fn store_trace_events(&self, path: &Path, format: TraceEventsFileFormat) -> Result<(), Box<dyn Error>> {
+        match format {
+            TraceEventsFileFormat::Json => {
+                let json = serde_json::to_string(&self.events)?;
+                fs::write(path, json)?;
+            }
+            TraceEventsFileFormat::Binary => todo!(),
+        }
         Ok(())
     }
 

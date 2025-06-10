@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::env;
 use std::error::Error;
 use std::fs;
+use std::io::stdout;
 use std::path::{Path, PathBuf};
 
 use crate::types::{
@@ -305,7 +306,10 @@ impl Tracer {
                 let json = serde_json::to_string(&self.events)?;
                 fs::write(path, json)?;
             }
-            TraceEventsFileFormat::Binary => todo!(),
+            TraceEventsFileFormat::Binary => {
+                let file = fs::File::create(path)?;
+                crate::capnptrace::write_trace(&self.events, file)?;
+            }
         }
         Ok(())
     }

@@ -396,10 +396,9 @@ fn get_full_value_record(
     })
 }
 
-pub fn read_trace() -> ::capnp::Result<Vec<crate::TraceLowLevelEvent>> {
-    let stdin = ::std::io::stdin();
+pub fn read_trace(input: impl std::io::BufRead) -> ::capnp::Result<Vec<crate::TraceLowLevelEvent>> {
     let message_reader = serialize_packed::read_message(
-        &mut stdin.lock(),
+        input,
         ::capnp::message::ReaderOptions::new(),
     )?;
 

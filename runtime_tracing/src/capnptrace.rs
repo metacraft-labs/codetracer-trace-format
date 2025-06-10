@@ -396,7 +396,7 @@ fn get_full_value_record(
     })
 }
 
-pub fn read_trace() -> ::capnp::Result<()> {
+pub fn read_trace() -> ::capnp::Result<Vec<crate::TraceLowLevelEvent>> {
     let stdin = ::std::io::stdin();
     let message_reader = serialize_packed::read_message(
         &mut stdin.lock(),
@@ -658,13 +658,5 @@ pub fn read_trace() -> ::capnp::Result<()> {
         res.push(q);
     }
 
-    let res_json = serde_json::to_string(&res);
-    match res_json {
-        Ok(s) => {
-            println!("{}", s);
-        }
-        Err(_) => panic!(),
-    }
-
-    Ok(())
+    Ok(res)
 }

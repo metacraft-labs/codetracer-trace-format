@@ -11,7 +11,7 @@
 mod tracer;
 mod types;
 mod capnptrace;
-pub use crate::tracer::{Tracer, NONE_TYPE_ID, NONE_VALUE};
+pub use crate::tracer::{Tracer, TraceEventsFileFormat, NONE_TYPE_ID, NONE_VALUE};
 pub use crate::types::*;
 
 pub mod trace_capnp {

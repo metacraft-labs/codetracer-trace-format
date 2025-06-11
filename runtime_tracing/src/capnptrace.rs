@@ -404,7 +404,12 @@ fn get_full_value_record(
     })
 }
 
-pub fn read_trace(input: impl std::io::BufRead) -> ::capnp::Result<Vec<crate::TraceLowLevelEvent>> {
+pub fn read_trace(input: &mut impl std::io::BufRead) -> ::capnp::Result<Vec<crate::TraceLowLevelEvent>> {
+    let mut header_buf = [0; 8];
+    input.read_exact(&mut header_buf)?;
+    if header_buf != HEADER {
+        panic!("Invalid file header (wrong file format or incompatible version)");
+    }
     let message_reader = serialize_packed::read_message(
         input,
         ::capnp::message::ReaderOptions::new(),

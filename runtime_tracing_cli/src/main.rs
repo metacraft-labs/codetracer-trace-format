@@ -26,12 +26,10 @@ struct RuntimeTracingCli {
 fn determine_file_format_from_name(s: &str) -> Option<TraceEventsFileFormat> {
     if s.ends_with(".json") {
         Some(TraceEventsFileFormat::Json)
+    } else if s.ends_with(".bin") {
+        Some(TraceEventsFileFormat::Binary)
     } else {
-        if s.ends_with(".bin") {
-            Some(TraceEventsFileFormat::Binary)
-        } else {
-            None
-        }
+        None
     }
 }
 

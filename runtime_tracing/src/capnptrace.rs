@@ -309,7 +309,7 @@ pub fn write_trace(q: &Vec<crate::TraceLowLevelEvent>, output: &mut impl std::io
         }
     }
 
-    output.write(HEADER)?;
+    output.write_all(HEADER)?;
 
     serialize_packed::write_message(output, &message)
 }

@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::env;
 use std::error::Error;
 use std::fs;
-use std::io::stdout;
+use std::io::{stdout, BufReader};
 use std::path::{Path, PathBuf};
 
 use crate::types::{
@@ -297,6 +297,21 @@ impl Tracer {
         };
         let json = serde_json::to_string(&trace_metadata)?;
         fs::write(path, json)?;
+        Ok(())
+    }
+
+    pub fn load_trace_events(&mut self, path: &Path, format: TraceEventsFileFormat) -> Result<(), Box<dyn Error>> {
+        match format {
+            TraceEventsFileFormat::Json => {
+                let json = std::fs::read_to_string(path)?;
+                self.events = serde_json::from_str(&json)?;
+            }
+            TraceEventsFileFormat::Binary => {
+                let file = fs::File::open(path)?;
+                let mut buf_reader = BufReader::new(file);
+                self.events = crate::capnptrace::read_trace(&mut buf_reader)?;
+            }
+        }
         Ok(())
     }
 

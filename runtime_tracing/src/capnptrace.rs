@@ -7,7 +7,7 @@ use crate::{TraceLowLevelEvent, VariableId};
 /// The next 3 bytes are reserved/version info. In the initial version, they are zero. Non-zero values might
 /// indicate incompatible future versions.
 /// The header is 8 bytes in size, ensuring 64-bit alignment for the rest of the file.
-const HEADER: &'static [u8] = &[0xC0, 0xDE, 0x72, 0xAC, 0xE2, 0x00, 0x00, 0x00];
+const HEADER: &[u8] = &[0xC0, 0xDE, 0x72, 0xAC, 0xE2, 0x00, 0x00, 0x00];
 
 fn conv_typekind(kind: crate::TypeKind) -> trace::TypeKind {
     match kind {

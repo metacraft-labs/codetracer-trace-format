@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::env;
 use std::error::Error;
 use std::fs;
-use std::io::{stdout, BufReader};
+use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
 use crate::types::{

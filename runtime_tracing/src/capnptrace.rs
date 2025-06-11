@@ -3,6 +3,12 @@ use crate::trace_capnp::trace;
 use capnp::serialize_packed;
 use crate::{TraceLowLevelEvent, VariableId};
 
+/// The first 5 bytes identify the file as a CodeTracer file (hex l33tsp33k - C0DE72ACE2 for "CodeTracer").
+/// The next 3 bytes are reserved/version info. In the initial version, they are zero. Non-zero values might
+/// indicate incompatible future versions.
+/// The header is 8 bytes in size, ensuring 64-bit alignment for the rest of the file.
+const HEADER: &'static [u8] = &[0xC0, 0xDE, 0x72, 0xAC, 0xE2, 0x00, 0x00, 0x00];
+
 fn conv_typekind(kind: crate::TypeKind) -> trace::TypeKind {
     match kind {
         crate::TypeKind::Seq => trace::TypeKind::Seq,
@@ -208,7 +214,7 @@ fn conv_valuerecord(
     }
 }
 
-pub fn write_trace(q: &Vec<crate::TraceLowLevelEvent>, output: impl std::io::Write) -> ::capnp::Result<()> {
+pub fn write_trace(q: &Vec<crate::TraceLowLevelEvent>, output: &mut impl std::io::Write) -> ::capnp::Result<()> {
     let mut message = ::capnp::message::Builder::new_default();
 
     let trace = message.init_root::<trace::Builder>();
@@ -302,6 +308,8 @@ pub fn write_trace(q: &Vec<crate::TraceLowLevelEvent>, output: impl std::io::Wri
             }
         }
     }
+
+    output.write(HEADER)?;
 
     serialize_packed::write_message(output, &message)
 }

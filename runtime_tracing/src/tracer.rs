@@ -307,8 +307,8 @@ impl Tracer {
                 fs::write(path, json)?;
             }
             TraceEventsFileFormat::Binary => {
-                let file = fs::File::create(path)?;
-                crate::capnptrace::write_trace(&self.events, file)?;
+                let mut file = fs::File::create(path)?;
+                crate::capnptrace::write_trace(&self.events, &mut file)?;
             }
         }
         Ok(())

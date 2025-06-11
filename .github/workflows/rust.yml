@@ -15,6 +15,8 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+    - name: Install capnproto
+      run: sudo apt-get install -y capnproto
     - name: Lint
       run: cargo clippy
 
@@ -24,6 +26,8 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
+    - name: Install capnproto
+      run: sudo apt-get install -y capnproto
     - name: Build
       run: cargo build --verbose
     - name: Run tests

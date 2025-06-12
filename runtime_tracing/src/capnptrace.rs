@@ -211,6 +211,16 @@ fn conv_valuerecord(
             let mut q_place = qcell.init_place();
             q_place.set_p(place.0);
         }
+        crate::ValueRecord::BigInt { b, negative, type_id } => {
+            let mut qbigint = bldr.init_bigint();
+            let mut bigint_b = qbigint.reborrow().init_b(b.len().try_into().unwrap());
+            for i in 0..=b.len() {
+                bigint_b.set(i.try_into().unwrap(), b[i]);
+            }
+            qbigint.set_negative(*negative);
+            let mut q_typ_id = qbigint.init_type_id();
+            q_typ_id.set_i(type_id.0.try_into().unwrap());
+        }
     }
 }
 
@@ -388,6 +398,11 @@ fn get_value_record(
         }),
         Ok(trace::value_record::Which::Cell(q)) => Ok(crate::ValueRecord::Cell {
             place: crate::Place(q.get_place()?.get_p()),
+        }),
+        Ok(trace::value_record::Which::Bigint(q)) => Ok(crate::ValueRecord::BigInt {
+            b: q.get_b()?.as_slice().unwrap().to_vec(),
+            negative: q.get_negative(),
+            type_id: crate::TypeId(q.get_type_id()?.get_i().try_into().unwrap()),
         }),
         Err(_) => panic!(),
     }

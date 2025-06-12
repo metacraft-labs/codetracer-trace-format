@@ -226,6 +226,11 @@ struct Trace {
             cell :group {
                 place @26 :Place;
             }
+            bigint :group {
+                b @28 :List(UInt8);
+                negative @29 :Bool;
+                typeId @30 :TypeId;
+            }
         }
     }
 

@@ -4,6 +4,7 @@ use std::collections::HashMap;
 use std::env;
 use std::error::Error;
 use std::fs;
+use std::io::BufReader;
 use std::path::{Path, PathBuf};
 
 use crate::types::{
@@ -32,6 +33,11 @@ pub struct Tracer {
     functions: HashMap<String, FunctionId>,
     variables: HashMap<String, VariableId>,
     types: HashMap<String, TypeId>,
+}
+
+pub enum TraceEventsFileFormat {
+    Json,
+    Binary
 }
 
 // we ensure in start they are registered with those id-s
@@ -290,10 +296,32 @@ impl Tracer {
         Ok(())
     }
 
-    pub fn store_trace_events(&self, path: &Path) -> Result<(), Box<dyn Error>> {
-        // TODO: probably change format
-        let json = serde_json::to_string(&self.events)?;
-        fs::write(path, json)?;
+    pub fn load_trace_events(&mut self, path: &Path, format: TraceEventsFileFormat) -> Result<(), Box<dyn Error>> {
+        match format {
+            TraceEventsFileFormat::Json => {
+                let json = std::fs::read_to_string(path)?;
+                self.events = serde_json::from_str(&json)?;
+            }
+            TraceEventsFileFormat::Binary => {
+                let file = fs::File::open(path)?;
+                let mut buf_reader = BufReader::new(file);
+                self.events = crate::capnptrace::read_trace(&mut buf_reader)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn store_trace_events(&self, path: &Path, format: TraceEventsFileFormat) -> Result<(), Box<dyn Error>> {
+        match format {
+            TraceEventsFileFormat::Json => {
+                let json = serde_json::to_string(&self.events)?;
+                fs::write(path, json)?;
+            }
+            TraceEventsFileFormat::Binary => {
+                let mut file = fs::File::create(path)?;
+                crate::capnptrace::write_trace(&self.events, &mut file)?;
+            }
+        }
         Ok(())
     }
 

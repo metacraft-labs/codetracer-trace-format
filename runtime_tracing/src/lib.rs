@@ -11,8 +11,13 @@
 mod tracer;
 mod types;
 mod base64;
-pub use crate::tracer::{Tracer, NONE_TYPE_ID, NONE_VALUE};
+mod capnptrace;
+pub use crate::tracer::{Tracer, TraceEventsFileFormat, NONE_TYPE_ID, NONE_VALUE};
 pub use crate::types::*;
+
+pub mod trace_capnp {
+    include!(concat!(env!("OUT_DIR"), "/src/trace_capnp.rs"));
+}
 
 #[cfg(test)]
 mod tests {

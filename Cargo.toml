@@ -1,24 +1,6 @@
-[package]
-name = "runtime_tracing"
-version = "0.11.0"
-edition = "2021"
-authors = ["Metacraft Labs Ltd"]
-description = "A library for the schema and tracing helpers for the CodeTracer db trace format"
-readme = "README.md"
-repository = "https://github.com/metacraft-labs/runtime_tracing"
-license = "MIT"
-keywords = ["debugging", "development-tools"]
+[workspace]
+resolver = "2"
+members = ["runtime_tracing", "runtime_tracing_cli"]
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[dependencies]
-base64 = "0.22.1"
-num-traits = "0.2"
-num-derive = "0.4"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-serde_repr = "0.1"
-
-[lib]
-name = "runtime_tracing"
-path = "src/lib.rs"
+[workspace.dependencies]
+runtime_tracing = { path = "runtime_tracing/" }

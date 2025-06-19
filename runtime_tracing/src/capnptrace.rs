@@ -50,42 +50,44 @@ impl From<crate::TypeKind> for trace::TypeKind {
     }
 }
 
-fn conv_typekind2(kind: trace::TypeKind) -> crate::TypeKind {
-    match kind {
-        trace::TypeKind::Seq => crate::TypeKind::Seq,
-        trace::TypeKind::Set => crate::TypeKind::Set,
-        trace::TypeKind::HashSet => crate::TypeKind::HashSet,
-        trace::TypeKind::OrderedSet => crate::TypeKind::OrderedSet,
-        trace::TypeKind::Array => crate::TypeKind::Array,
-        trace::TypeKind::Varargs => crate::TypeKind::Varargs,
-        trace::TypeKind::Struct => crate::TypeKind::Struct,
-        trace::TypeKind::Int => crate::TypeKind::Int,
-        trace::TypeKind::Float => crate::TypeKind::Float,
-        trace::TypeKind::String => crate::TypeKind::String,
-        trace::TypeKind::Cstring => crate::TypeKind::CString,
-        trace::TypeKind::Char => crate::TypeKind::Char,
-        trace::TypeKind::Bool => crate::TypeKind::Bool,
-        trace::TypeKind::Literal => crate::TypeKind::Literal,
-        trace::TypeKind::Ref => crate::TypeKind::Ref,
-        trace::TypeKind::Recursion => crate::TypeKind::Recursion,
-        trace::TypeKind::Raw => crate::TypeKind::Raw,
-        trace::TypeKind::Enum => crate::TypeKind::Enum,
-        trace::TypeKind::Enum16 => crate::TypeKind::Enum16,
-        trace::TypeKind::Enum32 => crate::TypeKind::Enum32,
-        trace::TypeKind::C => crate::TypeKind::C,
-        trace::TypeKind::TableKind => crate::TypeKind::TableKind,
-        trace::TypeKind::Union => crate::TypeKind::Union,
-        trace::TypeKind::Pointer => crate::TypeKind::Pointer,
-        trace::TypeKind::Error => crate::TypeKind::Error,
-        trace::TypeKind::FunctionKind => crate::TypeKind::FunctionKind,
-        trace::TypeKind::TypeValue => crate::TypeKind::TypeValue,
-        trace::TypeKind::Tuple => crate::TypeKind::Tuple,
-        trace::TypeKind::Variant => crate::TypeKind::Variant,
-        trace::TypeKind::Html => crate::TypeKind::Html,
-        trace::TypeKind::None => crate::TypeKind::None,
-        trace::TypeKind::NonExpanded => crate::TypeKind::NonExpanded,
-        trace::TypeKind::Any => crate::TypeKind::Any,
-        trace::TypeKind::Slice => crate::TypeKind::Slice,
+impl From<trace::TypeKind> for crate::TypeKind {
+    fn from(item: trace::TypeKind) -> Self {
+        match item {
+            trace::TypeKind::Seq => crate::TypeKind::Seq,
+            trace::TypeKind::Set => crate::TypeKind::Set,
+            trace::TypeKind::HashSet => crate::TypeKind::HashSet,
+            trace::TypeKind::OrderedSet => crate::TypeKind::OrderedSet,
+            trace::TypeKind::Array => crate::TypeKind::Array,
+            trace::TypeKind::Varargs => crate::TypeKind::Varargs,
+            trace::TypeKind::Struct => crate::TypeKind::Struct,
+            trace::TypeKind::Int => crate::TypeKind::Int,
+            trace::TypeKind::Float => crate::TypeKind::Float,
+            trace::TypeKind::String => crate::TypeKind::String,
+            trace::TypeKind::Cstring => crate::TypeKind::CString,
+            trace::TypeKind::Char => crate::TypeKind::Char,
+            trace::TypeKind::Bool => crate::TypeKind::Bool,
+            trace::TypeKind::Literal => crate::TypeKind::Literal,
+            trace::TypeKind::Ref => crate::TypeKind::Ref,
+            trace::TypeKind::Recursion => crate::TypeKind::Recursion,
+            trace::TypeKind::Raw => crate::TypeKind::Raw,
+            trace::TypeKind::Enum => crate::TypeKind::Enum,
+            trace::TypeKind::Enum16 => crate::TypeKind::Enum16,
+            trace::TypeKind::Enum32 => crate::TypeKind::Enum32,
+            trace::TypeKind::C => crate::TypeKind::C,
+            trace::TypeKind::TableKind => crate::TypeKind::TableKind,
+            trace::TypeKind::Union => crate::TypeKind::Union,
+            trace::TypeKind::Pointer => crate::TypeKind::Pointer,
+            trace::TypeKind::Error => crate::TypeKind::Error,
+            trace::TypeKind::FunctionKind => crate::TypeKind::FunctionKind,
+            trace::TypeKind::TypeValue => crate::TypeKind::TypeValue,
+            trace::TypeKind::Tuple => crate::TypeKind::Tuple,
+            trace::TypeKind::Variant => crate::TypeKind::Variant,
+            trace::TypeKind::Html => crate::TypeKind::Html,
+            trace::TypeKind::None => crate::TypeKind::None,
+            trace::TypeKind::NonExpanded => crate::TypeKind::NonExpanded,
+            trace::TypeKind::Any => crate::TypeKind::Any,
+            trace::TypeKind::Slice => crate::TypeKind::Slice,
+        }
     }
 }
 
@@ -462,7 +464,7 @@ pub fn read_trace(input: &mut impl std::io::BufRead) -> ::capnp::Result<Vec<crat
             Ok(trace::trace_low_level_event::Which::Type(type_record)) => {
                 let type_record = type_record?;
                 TraceLowLevelEvent::Type(crate::TypeRecord {
-                    kind: conv_typekind2(type_record.get_kind()?),
+                    kind: type_record.get_kind()?.into(),
                     lang_type: type_record.get_lang_type()?.to_string()?,
                     specific_info: match type_record.get_specific_info()?.which() {
                         Ok(trace::type_specific_info::Which::None(())) => {

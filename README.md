@@ -9,16 +9,21 @@ It's self contained, so one can debug a record of a version of a program from a 
 The record data consists of a stream of objects, each of which describes a certain program event: call, step, return etc.
 
 A trace contains several files:
-* trace.json : the record data
-* trace_metadata.json : metadata for the recorded program
-* trace_paths.json : a list of the recorded files
-* `files/`: a folder including all the source/repository files copied into the trace.
+* `trace.json` – the event data in JSON format
+* `trace.bin` – the same event stream encoded in a binary format (see
+  [docs/trace_binary_spec.md](docs/trace_binary_spec.md))
+* `trace_metadata.json` – metadata for the recorded program
+* `trace_paths.json` – a list of the recorded files
+* `files/` – a folder including all the source/repository files copied into the trace.
 
-The record data format is currently json which matches the record event rust types from `src/types.rs`. 
+The event stream can be stored either as JSON (`trace.json`) or in the
+binary format (`trace.bin`). Both representations correspond to the Rust
+types in `src/types.rs`.
 
 We plan on 
 * defining a more precise document or a list of examples or a specification.
-* producing a more optimized next version of this format, probably based on a binary format.
+* producing a more optimized version of the format. A binary variant is now
+  available as `trace.bin`.
 
 A future goal of this format is to make it possible to stream traces: to be able to replay them while they're still being recorded. 
 This is one of the reasons for the decision to maintain a single "stream" of events currently. 

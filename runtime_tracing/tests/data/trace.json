@@ -1,0 +1,7 @@
+[
+  {"Path":"foo.rs"},
+  {"Function":{"path_id":0,"line":1,"name":"main"}},
+  {"Step":{"path_id":0,"line":1}},
+  {"Call":{"function_id":0,"args":[]}},
+  {"Return":{"return_value":{"kind":"None","type_id":0}}}
+]

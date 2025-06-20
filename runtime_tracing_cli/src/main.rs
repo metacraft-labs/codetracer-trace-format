@@ -3,6 +3,9 @@ use std::path::Path;
 use clap::{Args, Parser, Subcommand};
 use runtime_tracing::{TraceEventsFileFormat, Tracer};
 
+use crate::fmt_trace_cmd::FmtTraceCommand;
+mod fmt_trace_cmd;
+
 #[derive(Debug, Clone, Args)]
 struct ConvertCommand {
     input_file: String,
@@ -14,6 +17,8 @@ struct ConvertCommand {
 enum RuntimeTracingCliCommand {
     /// Convert from one trace file format to another
     Convert(ConvertCommand),
+    /// Format a trace which is in JSON file format
+    FormatTrace(FmtTraceCommand),
 }
 
 #[derive(Parser, Debug)]
@@ -43,6 +48,9 @@ fn main() {
             let mut trace = Tracer::new("", &[]);
             trace.load_trace_events(Path::new(&convert_command.input_file), input_file_format).unwrap();
             trace.store_trace_events(Path::new(&convert_command.output_file), output_file_format).unwrap();
+        },
+        RuntimeTracingCliCommand::FormatTrace(fmt_trace_cmd) => {
+            fmt_trace_cmd::run(fmt_trace_cmd);
         }
     }
 }

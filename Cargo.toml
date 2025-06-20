@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
-members = ["runtime_tracing", "runtime_tracing_cli"]
+members = ["runtime_tracing", "runtime_tracing_cli", "trace_formatter"]
 
 [workspace.dependencies]
 runtime_tracing = { path = "runtime_tracing/" }
+trace_formatter = { path = "trace_formatter/"}

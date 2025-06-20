@@ -1,0 +1,13 @@
+[package]
+name = "trace_formatter"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+serde = "1.0" 
+serde_json = { version = "1.0", features = ["preserve_order"] }
+regex = "1.10.5"
+
+[lib]
+name = "trace_formatter"
+path = "src/lib.rs"

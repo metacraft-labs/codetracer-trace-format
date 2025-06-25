@@ -364,6 +364,9 @@ pub fn write_trace(q: &[crate::TraceLowLevelEvent], output: &mut impl std::io::W
                 ret.set_content(&recordevent.content);
                 ret.set_kind(recordevent.kind.into());
             }
+            TraceLowLevelEvent::Variable(str) => {
+                event.set_variable(str);
+            }
             _ => {
                 eprintln!("Not yet implemented: {:?}", qq);
             }

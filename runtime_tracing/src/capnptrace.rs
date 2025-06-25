@@ -373,6 +373,13 @@ pub fn write_trace(q: &[crate::TraceLowLevelEvent], output: &mut impl std::io::W
                     ret.set(i.try_into().unwrap(), &strs[i]);
                 }
             }
+            TraceLowLevelEvent::BindVariable(bindvarrec) => {
+                let mut ret = event.init_bind_variable();
+                let mut ret_var_id = ret.reborrow().init_variable_id();
+                ret_var_id.set_i(bindvarrec.variable_id.0.try_into().unwrap());
+                let mut ret_place = ret.init_place();
+                ret_place.set_p(bindvarrec.place.0.try_into().unwrap());
+            }
             _ => {
                 eprintln!("Not yet implemented: {:?}", qq);
             }

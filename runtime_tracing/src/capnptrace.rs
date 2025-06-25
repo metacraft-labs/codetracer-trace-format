@@ -409,6 +409,9 @@ pub fn write_trace(q: &[crate::TraceLowLevelEvent], output: &mut impl std::io::W
                     },
                 }
             }
+            TraceLowLevelEvent::DropLastStep => {
+                event.set_drop_last_step(());
+            }
             TraceLowLevelEvent::DropVariables(vars) => todo!(),
             TraceLowLevelEvent::CompoundValue(cvr) => todo!(),
             TraceLowLevelEvent::CellValue(cvr) => todo!(),
@@ -416,7 +419,6 @@ pub fn write_trace(q: &[crate::TraceLowLevelEvent], output: &mut impl std::io::W
             TraceLowLevelEvent::AssignCell(acr) => todo!(),
             TraceLowLevelEvent::VariableCell(vcr) => todo!(),
             TraceLowLevelEvent::DropVariable(varid) => todo!(),
-            TraceLowLevelEvent::DropLastStep => todo!(),
         }
     }
 

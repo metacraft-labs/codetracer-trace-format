@@ -131,6 +131,15 @@ impl From<crate::EventLogKind> for trace::EventLogKind {
     }
 }
 
+impl From<crate::PassBy> for trace::PassBy {
+    fn from(value: crate::PassBy) -> Self {
+        match value {
+            crate::PassBy::Value => trace::PassBy::Value,
+            crate::PassBy::Reference => trace::PassBy::Reference,
+        }
+    }
+}
+
 
 fn conv_valuerecord(
     bldr: crate::trace_capnp::trace::value_record::Builder,
@@ -379,6 +388,26 @@ pub fn write_trace(q: &[crate::TraceLowLevelEvent], output: &mut impl std::io::W
                 ret_var_id.set_i(bindvarrec.variable_id.0.try_into().unwrap());
                 let mut ret_place = ret.init_place();
                 ret_place.set_p(bindvarrec.place.0.try_into().unwrap());
+            }
+            TraceLowLevelEvent::Assignment(assrec) => {
+                let mut ret = event.init_assignment();
+                let mut ret_to = ret.reborrow().init_to();
+                ret_to.set_i(assrec.to.0.try_into().unwrap());
+                ret.set_pass_by(assrec.pass_by.clone().into());
+                let ret_from = ret.init_from();
+                match &assrec.from {
+                    crate::RValue::Simple(variable_id) => {
+                        let mut ret_from_simple = ret_from.init_simple();
+                        ret_from_simple.set_i(variable_id.0.try_into().unwrap());
+                    },
+                    crate::RValue::Compound(variable_ids) => {
+                        let mut ret_from_compound = ret_from.init_compound(variable_ids.len().try_into().unwrap());
+                        for i in 0..variable_ids.len() {
+                            let mut r = ret_from_compound.reborrow().get(i.try_into().unwrap());
+                            r.set_i(variable_ids[i].0.try_into().unwrap());
+                        }
+                    },
+                }
             }
             _ => {
                 eprintln!("Not yet implemented: {:?}", qq);

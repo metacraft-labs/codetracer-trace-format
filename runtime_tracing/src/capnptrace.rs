@@ -444,7 +444,14 @@ pub fn write_trace(q: &[crate::TraceLowLevelEvent], output: &mut impl std::io::W
                 let ret_new_value = ret.init_new_value();
                 conv_valuerecord(ret_new_value, &acr.new_value);
             }
-            TraceLowLevelEvent::AssignCompoundItem(aci) => todo!(),
+            TraceLowLevelEvent::AssignCompoundItem(aci) => {
+                let mut ret = event.init_assign_compound_item();
+                let mut ret_place = ret.reborrow().init_place();
+                ret_place.set_p(aci.place.0.try_into().unwrap());
+                ret.set_index(aci.index.try_into().unwrap());
+                let mut ret_item_place = ret.init_item_place();
+                ret_item_place.set_p(aci.item_place.0.try_into().unwrap());
+            }
             TraceLowLevelEvent::VariableCell(vcr) => todo!(),
         }
     }

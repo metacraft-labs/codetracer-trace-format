@@ -412,7 +412,13 @@ pub fn write_trace(q: &[crate::TraceLowLevelEvent], output: &mut impl std::io::W
             TraceLowLevelEvent::DropLastStep => {
                 event.set_drop_last_step(());
             }
-            TraceLowLevelEvent::DropVariables(vars) => todo!(),
+            TraceLowLevelEvent::DropVariables(vars) => {
+                let mut ret_vars = event.init_drop_variables(vars.len().try_into().unwrap());
+                for i in 0..vars.len() {
+                    let mut q = ret_vars.reborrow().get(i.try_into().unwrap());
+                    q.set_i(vars[i].0.try_into().unwrap());
+                }
+            }
             TraceLowLevelEvent::CompoundValue(cvr) => todo!(),
             TraceLowLevelEvent::CellValue(cvr) => todo!(),
             TraceLowLevelEvent::AssignCompoundItem(aci) => todo!(),

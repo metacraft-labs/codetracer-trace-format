@@ -367,6 +367,12 @@ pub fn write_trace(q: &[crate::TraceLowLevelEvent], output: &mut impl std::io::W
             TraceLowLevelEvent::Variable(str) => {
                 event.set_variable(str);
             }
+            TraceLowLevelEvent::Asm(strs) => {
+                let mut ret = event.init_asm(strs.len().try_into().unwrap());
+                for i in 0..strs.len() {
+                    ret.set(i.try_into().unwrap(), &strs[i]);
+                }
+            }
             _ => {
                 eprintln!("Not yet implemented: {:?}", qq);
             }

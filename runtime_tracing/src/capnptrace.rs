@@ -91,6 +91,24 @@ impl From<trace::TypeKind> for crate::TypeKind {
     }
 }
 
+impl From<trace::EventLogKind> for crate::EventLogKind {
+    fn from(value: trace::EventLogKind) -> Self {
+        match value {
+            trace::EventLogKind::Write => crate::EventLogKind::Write,
+            trace::EventLogKind::WriteFile => crate::EventLogKind::WriteFile,
+            trace::EventLogKind::Read => crate::EventLogKind::Read,
+            trace::EventLogKind::ReadFile => crate::EventLogKind::ReadFile,
+            trace::EventLogKind::ReadDir => crate::EventLogKind::ReadDir,
+            trace::EventLogKind::OpenDir => crate::EventLogKind::OpenDir,
+            trace::EventLogKind::CloseDir => crate::EventLogKind::CloseDir,
+            trace::EventLogKind::Socket => crate::EventLogKind::Socket,
+            trace::EventLogKind::Open => crate::EventLogKind::Open,
+            trace::EventLogKind::Error => crate::EventLogKind::Error,
+            trace::EventLogKind::TraceLogEvent => crate::EventLogKind::TraceLogEvent,
+        }
+    }
+}
+
 impl From<crate::EventLogKind> for trace::EventLogKind {
     fn from(value: crate::EventLogKind) -> Self {
         match value {
@@ -565,27 +583,7 @@ pub fn read_trace(input: &mut impl std::io::BufRead) -> ::capnp::Result<Vec<crat
             Ok(trace::trace_low_level_event::Which::Event(record_event)) => {
                 let record_event = record_event?;
                 TraceLowLevelEvent::Event(crate::RecordEvent {
-                    kind: match record_event.get_kind()? {
-                        trace::EventLogKind::Write => crate::EventLogKind::Write,
-                        trace::EventLogKind::WriteFile => {
-                            crate::EventLogKind::WriteFile
-                        }
-                        trace::EventLogKind::Read => crate::EventLogKind::Read,
-                        trace::EventLogKind::ReadFile => {
-                            crate::EventLogKind::ReadFile
-                        }
-                        trace::EventLogKind::ReadDir => crate::EventLogKind::ReadDir,
-                        trace::EventLogKind::OpenDir => crate::EventLogKind::OpenDir,
-                        trace::EventLogKind::CloseDir => {
-                            crate::EventLogKind::CloseDir
-                        }
-                        trace::EventLogKind::Socket => crate::EventLogKind::Socket,
-                        trace::EventLogKind::Open => crate::EventLogKind::Open,
-                        trace::EventLogKind::Error => crate::EventLogKind::Error,
-                        trace::EventLogKind::TraceLogEvent => {
-                            crate::EventLogKind::TraceLogEvent
-                        }
-                    },
+                    kind: record_event.get_kind()?.into(),
                     metadata: record_event.get_metadata()?.to_string()?,
                     content: record_event.get_content()?.to_string()?,
                 })

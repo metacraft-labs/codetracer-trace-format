@@ -91,6 +91,27 @@ impl From<trace::TypeKind> for crate::TypeKind {
     }
 }
 
+impl From<crate::EventLogKind> for trace::EventLogKind {
+    fn from(value: crate::EventLogKind) -> Self {
+        match value {
+            crate::EventLogKind::Write => trace::EventLogKind::Write,
+            crate::EventLogKind::WriteFile => trace::EventLogKind::WriteFile,
+            crate::EventLogKind::WriteOther => todo!(),//trace::EventLogKind::WriteOther,
+            crate::EventLogKind::Read => trace::EventLogKind::Read,
+            crate::EventLogKind::ReadFile => trace::EventLogKind::ReadFile,
+            crate::EventLogKind::ReadOther => todo!(),//trace::EventLogKind::ReadOther,
+            crate::EventLogKind::ReadDir => trace::EventLogKind::ReadDir,
+            crate::EventLogKind::OpenDir => trace::EventLogKind::OpenDir,
+            crate::EventLogKind::CloseDir => trace::EventLogKind::CloseDir,
+            crate::EventLogKind::Socket => trace::EventLogKind::Socket,
+            crate::EventLogKind::Open => trace::EventLogKind::Open,
+            crate::EventLogKind::Error => trace::EventLogKind::Error,
+            crate::EventLogKind::TraceLogEvent => trace::EventLogKind::TraceLogEvent,
+        }
+    }
+}
+
+
 fn conv_valuerecord(
     bldr: crate::trace_capnp::trace::value_record::Builder,
     vr: &crate::ValueRecord,
@@ -316,6 +337,12 @@ pub fn write_trace(q: &[crate::TraceLowLevelEvent], output: &mut impl std::io::W
                 let ret = event.init_return();
                 let ret_value = ret.init_return_value();
                 conv_valuerecord(ret_value, &returnrecord.return_value);
+            }
+            TraceLowLevelEvent::Event(recordevent) => {
+                let mut ret = event.init_event();
+                ret.set_metadata(&recordevent.metadata);
+                ret.set_content(&recordevent.content);
+                ret.set_kind(recordevent.kind.into());
             }
             _ => {
                 eprintln!("Not yet implemented: {:?}", qq);

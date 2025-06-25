@@ -409,9 +409,14 @@ pub fn write_trace(q: &[crate::TraceLowLevelEvent], output: &mut impl std::io::W
                     },
                 }
             }
-            _ => {
-                eprintln!("Not yet implemented: {:?}", qq);
-            }
+            TraceLowLevelEvent::DropVariables(vars) => todo!(),
+            TraceLowLevelEvent::CompoundValue(cvr) => todo!(),
+            TraceLowLevelEvent::CellValue(cvr) => todo!(),
+            TraceLowLevelEvent::AssignCompoundItem(aci) => todo!(),
+            TraceLowLevelEvent::AssignCell(acr) => todo!(),
+            TraceLowLevelEvent::VariableCell(vcr) => todo!(),
+            TraceLowLevelEvent::DropVariable(varid) => todo!(),
+            TraceLowLevelEvent::DropLastStep => todo!(),
         }
     }
 

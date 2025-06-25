@@ -430,7 +430,13 @@ pub fn write_trace(q: &[crate::TraceLowLevelEvent], output: &mut impl std::io::W
                 let ret_value = ret.init_value();
                 conv_valuerecord(ret_value, &cvr.value);
             }
-            TraceLowLevelEvent::CellValue(cvr) => todo!(),
+            TraceLowLevelEvent::CellValue(cvr) => {
+                let mut ret = event.init_cell_value();
+                let mut ret_place = ret.reborrow().init_place();
+                ret_place.set_p(cvr.place.0.try_into().unwrap());
+                let ret_value = ret.init_value();
+                conv_valuerecord(ret_value, &cvr.value);
+            }
             TraceLowLevelEvent::AssignCompoundItem(aci) => todo!(),
             TraceLowLevelEvent::AssignCell(acr) => todo!(),
             TraceLowLevelEvent::VariableCell(vcr) => todo!(),

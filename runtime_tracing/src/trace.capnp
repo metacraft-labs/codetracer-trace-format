@@ -292,8 +292,10 @@ struct Trace {
     enum EventLogKind {
         write @0;
         writeFile @1;
+        writeOther @11;
         read @2;
         readFile @3;
+        readOther @12;
         readDir @4;
         openDir @5;
         closeDir @6;

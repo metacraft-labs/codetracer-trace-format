@@ -96,8 +96,10 @@ impl From<trace::EventLogKind> for crate::EventLogKind {
         match value {
             trace::EventLogKind::Write => crate::EventLogKind::Write,
             trace::EventLogKind::WriteFile => crate::EventLogKind::WriteFile,
+            trace::EventLogKind::WriteOther => crate::EventLogKind::WriteOther,
             trace::EventLogKind::Read => crate::EventLogKind::Read,
             trace::EventLogKind::ReadFile => crate::EventLogKind::ReadFile,
+            trace::EventLogKind::ReadOther => crate::EventLogKind::ReadOther,
             trace::EventLogKind::ReadDir => crate::EventLogKind::ReadDir,
             trace::EventLogKind::OpenDir => crate::EventLogKind::OpenDir,
             trace::EventLogKind::CloseDir => crate::EventLogKind::CloseDir,
@@ -114,10 +116,10 @@ impl From<crate::EventLogKind> for trace::EventLogKind {
         match value {
             crate::EventLogKind::Write => trace::EventLogKind::Write,
             crate::EventLogKind::WriteFile => trace::EventLogKind::WriteFile,
-            crate::EventLogKind::WriteOther => todo!(),//trace::EventLogKind::WriteOther,
+            crate::EventLogKind::WriteOther => trace::EventLogKind::WriteOther,
             crate::EventLogKind::Read => trace::EventLogKind::Read,
             crate::EventLogKind::ReadFile => trace::EventLogKind::ReadFile,
-            crate::EventLogKind::ReadOther => todo!(),//trace::EventLogKind::ReadOther,
+            crate::EventLogKind::ReadOther => trace::EventLogKind::ReadOther,
             crate::EventLogKind::ReadDir => trace::EventLogKind::ReadDir,
             crate::EventLogKind::OpenDir => trace::EventLogKind::OpenDir,
             crate::EventLogKind::CloseDir => trace::EventLogKind::CloseDir,

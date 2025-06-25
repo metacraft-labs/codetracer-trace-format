@@ -452,7 +452,13 @@ pub fn write_trace(q: &[crate::TraceLowLevelEvent], output: &mut impl std::io::W
                 let mut ret_item_place = ret.init_item_place();
                 ret_item_place.set_p(aci.item_place.0.try_into().unwrap());
             }
-            TraceLowLevelEvent::VariableCell(vcr) => todo!(),
+            TraceLowLevelEvent::VariableCell(vcr) => {
+                let mut ret = event.init_variable_cell();
+                let mut ret_variable_id = ret.reborrow().init_variable_id();
+                ret_variable_id.set_i(vcr.variable_id.0.try_into().unwrap());
+                let mut ret_place = ret.init_place();
+                ret_place.set_p(vcr.place.0.try_into().unwrap());
+            }
         }
     }
 

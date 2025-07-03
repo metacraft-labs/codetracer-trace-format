@@ -303,6 +303,6 @@ struct Trace {
         open @8;
         error @9;
         traceLogEvent @10;
-        evmEvemt @13;
+        evmEvent @13;
     }
 }

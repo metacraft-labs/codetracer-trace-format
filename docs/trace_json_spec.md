@@ -271,6 +271,7 @@ Example: the default `TypeKind::Seq` has value `0`, `TypeKind::Set` has value `1
 | 10 | Open |
 | 11 | Error |
 | 12 | TraceLogEvent |
+| 13 | EvmEvent |
 
 ## Summary
 

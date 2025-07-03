@@ -107,6 +107,7 @@ impl From<trace::EventLogKind> for crate::EventLogKind {
             trace::EventLogKind::Open => crate::EventLogKind::Open,
             trace::EventLogKind::Error => crate::EventLogKind::Error,
             trace::EventLogKind::TraceLogEvent => crate::EventLogKind::TraceLogEvent,
+            trace::EventLogKind::EvmEvent => crate::EventLogKind::EvmEvent,
         }
     }
 }
@@ -127,6 +128,7 @@ impl From<crate::EventLogKind> for trace::EventLogKind {
             crate::EventLogKind::Open => trace::EventLogKind::Open,
             crate::EventLogKind::Error => trace::EventLogKind::Error,
             crate::EventLogKind::TraceLogEvent => trace::EventLogKind::TraceLogEvent,
+            crate::EventLogKind::EvmEvent => trace::EventLogKind::EvmEvent,
         }
     }
 }

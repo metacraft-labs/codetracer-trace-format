@@ -474,4 +474,5 @@ pub enum EventLogKind {
     Error,
     // used for trace events
     TraceLogEvent,
+    EvmEvent
 }

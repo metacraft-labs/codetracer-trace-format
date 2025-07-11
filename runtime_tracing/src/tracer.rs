@@ -14,6 +14,48 @@ use crate::types::{
 };
 use crate::RValue;
 
+pub trait TraceWriter {
+    fn start(&mut self, path: &Path, line: Line);
+    fn ensure_path_id(&mut self, path: &Path) -> PathId;
+    fn ensure_function_id(&mut self, function_name: &str, path: &Path, line: Line) -> FunctionId;
+    fn ensure_type_id(&mut self, kind: TypeKind, lang_type: &str) -> TypeId;
+    fn ensure_raw_type_id(&mut self, typ: TypeRecord) -> TypeId;
+    fn ensure_variable_id(&mut self, variable_name: &str) -> VariableId;
+    fn register_path(&mut self, path: &Path);
+    fn register_function(&mut self, name: &str, path: &Path, line: Line);
+    fn register_step(&mut self, path: &Path, line: Line);
+    fn register_call(&mut self, function_id: FunctionId, args: Vec<FullValueRecord>);
+    fn arg(&mut self, name: &str, value: ValueRecord) -> FullValueRecord;
+    fn register_return(&mut self, return_value: ValueRecord);
+    // TODO: add metadata arg
+    fn register_special_event(&mut self, kind: EventLogKind, content: &str);
+    fn to_raw_type(&self, kind: TypeKind, lang_type: &str) -> TypeRecord;
+    fn register_type(&mut self, kind: TypeKind, lang_type: &str);
+    fn register_raw_type(&mut self, typ: TypeRecord);
+    fn register_asm(&mut self, instructions: &[String]);
+    fn register_variable_with_full_value(&mut self, name: &str, value: ValueRecord);
+    fn register_variable_name(&mut self, variable_name: &str);
+    fn register_full_value(&mut self, variable_id: VariableId, value: ValueRecord);
+    fn register_compound_value(&mut self, place: Place, value: ValueRecord);
+    fn register_cell_value(&mut self, place: Place, value: ValueRecord);
+    fn assign_compound_item(&mut self, place: Place, index: usize, item_place: Place);
+    fn assign_cell(&mut self, place: Place, new_value: ValueRecord);
+    fn register_variable(&mut self, variable_name: &str, place: Place);
+    fn drop_variable(&mut self, variable_name: &str);
+    // history event helpers
+    fn assign(&mut self, variable_name: &str, rvalue: RValue, pass_by: PassBy);
+    fn bind_variable(&mut self, variable_name: &str, place: Place);
+    fn drop_variables(&mut self, variable_names: &[String]);
+    fn simple_rvalue(&mut self, variable_name: &str) -> RValue;
+    fn compound_rvalue(&mut self, variable_dependencies: &[String]) -> RValue;
+    fn drop_last_step(&mut self);
+
+    fn store_trace_metadata(&self, path: &Path) -> Result<(), Box<dyn Error>>;
+    fn store_trace_events(&self, path: &Path, format: TraceEventsFileFormat) -> Result<(), Box<dyn Error>>;
+    fn store_trace_paths(&self, path: &Path) -> Result<(), Box<dyn Error>>;
+}
+
+
 /// State machine used to record [`TraceLowLevelEvent`]s.
 ///
 /// A `Tracer` instance accumulates events and can store them on disk via the
@@ -69,8 +111,25 @@ impl Tracer {
         }
     }
 
+    pub fn load_trace_events(&mut self, path: &Path, format: TraceEventsFileFormat) -> Result<(), Box<dyn Error>> {
+        match format {
+            TraceEventsFileFormat::Json => {
+                let json = std::fs::read_to_string(path)?;
+                self.events = serde_json::from_str(&json)?;
+            }
+            TraceEventsFileFormat::Binary => {
+                let file = fs::File::open(path)?;
+                let mut buf_reader = BufReader::new(file);
+                self.events = crate::capnptrace::read_trace(&mut buf_reader)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+impl TraceWriter for Tracer {
     /// Begin tracing of a program starting at the given source location.
-    pub fn start(&mut self, path: &Path, line: Line) {
+    fn start(&mut self, path: &Path, line: Line) {
         let function_id = self.ensure_function_id("<toplevel>", path, line);
         self.register_call(function_id, vec![]);
         assert!(function_id == TOP_LEVEL_FUNCTION_ID);
@@ -84,7 +143,7 @@ impl Tracer {
         assert!(NONE_TYPE_ID == self.ensure_type_id(TypeKind::None, "None"));
     }
 
-    pub fn ensure_path_id(&mut self, path: &Path) -> PathId {
+    fn ensure_path_id(&mut self, path: &Path) -> PathId {
         if !self.paths.contains_key(path) {
             self.paths.insert(path.to_path_buf(), PathId(self.paths.len()));
             self.register_path(path);
@@ -92,7 +151,7 @@ impl Tracer {
         *self.paths.get(path).unwrap()
     }
 
-    pub fn ensure_function_id(&mut self, function_name: &str, path: &Path, line: Line) -> FunctionId {
+    fn ensure_function_id(&mut self, function_name: &str, path: &Path, line: Line) -> FunctionId {
         if !self.functions.contains_key(function_name) {
             // same function names for different path line? TODO
             self.functions.insert(function_name.to_string(), FunctionId(self.functions.len()));
@@ -101,12 +160,12 @@ impl Tracer {
         *self.functions.get(function_name).unwrap()
     }
 
-    pub fn ensure_type_id(&mut self, kind: TypeKind, lang_type: &str) -> TypeId {
+    fn ensure_type_id(&mut self, kind: TypeKind, lang_type: &str) -> TypeId {
         let typ = self.to_raw_type(kind, lang_type);
         self.ensure_raw_type_id(typ)
     }
 
-    pub fn ensure_raw_type_id(&mut self, typ: TypeRecord) -> TypeId {
+    fn ensure_raw_type_id(&mut self, typ: TypeRecord) -> TypeId {
         if !self.types.contains_key(&typ.lang_type) {
             self.types.insert(typ.lang_type.clone(), TypeId(self.types.len()));
             self.register_raw_type(typ.clone());
@@ -114,7 +173,7 @@ impl Tracer {
         *self.types.get(&typ.lang_type).unwrap()
     }
 
-    pub fn ensure_variable_id(&mut self, variable_name: &str) -> VariableId {
+    fn ensure_variable_id(&mut self, variable_name: &str) -> VariableId {
         if !self.variables.contains_key(variable_name) {
             self.variables.insert(variable_name.to_string(), VariableId(self.variables.len()));
             self.register_variable_name(variable_name);
@@ -122,12 +181,12 @@ impl Tracer {
         *self.variables.get(variable_name).unwrap()
     }
 
-    pub fn register_path(&mut self, path: &Path) {
+    fn register_path(&mut self, path: &Path) {
         self.path_list.push(path.to_path_buf());
         self.events.push(TraceLowLevelEvent::Path(path.to_path_buf()));
     }
 
-    pub fn register_function(&mut self, name: &str, path: &Path, line: Line) {
+    fn register_function(&mut self, name: &str, path: &Path, line: Line) {
         let path_id = self.ensure_path_id(path);
         self.function_list.push((name.to_string(), path_id, line));
         self.events.push(TraceLowLevelEvent::Function(FunctionRecord {
@@ -137,12 +196,12 @@ impl Tracer {
         }));
     }
 
-    pub fn register_step(&mut self, path: &Path, line: Line) {
+    fn register_step(&mut self, path: &Path, line: Line) {
         let path_id = self.ensure_path_id(path);
         self.events.push(TraceLowLevelEvent::Step(StepRecord { path_id, line }));
     }
 
-    pub fn register_call(&mut self, function_id: FunctionId, args: Vec<FullValueRecord>) {
+    fn register_call(&mut self, function_id: FunctionId, args: Vec<FullValueRecord>) {
         // register a step for each call, the backend expects this for
         // non-toplevel calls, so
         // we ensure it directly from register_call
@@ -160,17 +219,16 @@ impl Tracer {
         self.events.push(TraceLowLevelEvent::Call(CallRecord { function_id, args }));
     }
 
-    pub fn arg(&mut self, name: &str, value: ValueRecord) -> FullValueRecord {
+    fn arg(&mut self, name: &str, value: ValueRecord) -> FullValueRecord {
         let variable_id = self.ensure_variable_id(name);
         FullValueRecord { variable_id, value }
     }
 
-    pub fn register_return(&mut self, return_value: ValueRecord) {
+    fn register_return(&mut self, return_value: ValueRecord) {
         self.events.push(TraceLowLevelEvent::Return(ReturnRecord { return_value }));
     }
 
-    // TODO: add metadata arg
-    pub fn register_special_event(&mut self, kind: EventLogKind, content: &str) {
+    fn register_special_event(&mut self, kind: EventLogKind, content: &str) {
         self.events.push(TraceLowLevelEvent::Event(RecordEvent {
             kind,
             metadata: "".to_string(),
@@ -178,7 +236,7 @@ impl Tracer {
         }));
     }
 
-    pub fn to_raw_type(&self, kind: TypeKind, lang_type: &str) -> TypeRecord {
+    fn to_raw_type(&self, kind: TypeKind, lang_type: &str) -> TypeRecord {
         TypeRecord {
             kind,
             lang_type: lang_type.to_string(),
@@ -186,64 +244,64 @@ impl Tracer {
         }
     }
 
-    pub fn register_type(&mut self, kind: TypeKind, lang_type: &str) {
+    fn register_type(&mut self, kind: TypeKind, lang_type: &str) {
         let typ = self.to_raw_type(kind, lang_type);
         self.events.push(TraceLowLevelEvent::Type(typ));
     }
 
-    pub fn register_raw_type(&mut self, typ: TypeRecord) {
+    fn register_raw_type(&mut self, typ: TypeRecord) {
         self.events.push(TraceLowLevelEvent::Type(typ));
     }
 
-    pub fn register_asm(&mut self, instructions: &[String]) {
+    fn register_asm(&mut self, instructions: &[String]) {
         self.events.push(TraceLowLevelEvent::Asm(instructions.to_vec()));
     }
 
-    pub fn register_variable_with_full_value(&mut self, name: &str, value: ValueRecord) {
+    fn register_variable_with_full_value(&mut self, name: &str, value: ValueRecord) {
         let variable_id = self.ensure_variable_id(name);
         self.register_full_value(variable_id, value);
     }
 
-    pub fn register_variable_name(&mut self, variable_name: &str) {
+    fn register_variable_name(&mut self, variable_name: &str) {
         self.events.push(TraceLowLevelEvent::VariableName(variable_name.to_string()));
     }
 
-    pub fn register_full_value(&mut self, variable_id: VariableId, value: ValueRecord) {
+    fn register_full_value(&mut self, variable_id: VariableId, value: ValueRecord) {
         self.events.push(TraceLowLevelEvent::Value(FullValueRecord { variable_id, value }));
     }
 
-    pub fn register_compound_value(&mut self, place: Place, value: ValueRecord) {
+    fn register_compound_value(&mut self, place: Place, value: ValueRecord) {
         self.events.push(TraceLowLevelEvent::CompoundValue(CompoundValueRecord { place, value }));
     }
 
-    pub fn register_cell_value(&mut self, place: Place, value: ValueRecord) {
+    fn register_cell_value(&mut self, place: Place, value: ValueRecord) {
         self.events.push(TraceLowLevelEvent::CellValue(CellValueRecord { place, value }));
     }
 
-    pub fn assign_compound_item(&mut self, place: Place, index: usize, item_place: Place) {
+    fn assign_compound_item(&mut self, place: Place, index: usize, item_place: Place) {
         self.events.push(TraceLowLevelEvent::AssignCompoundItem(AssignCompoundItemRecord {
             place,
             index,
             item_place,
         }));
     }
-    pub fn assign_cell(&mut self, place: Place, new_value: ValueRecord) {
+    fn assign_cell(&mut self, place: Place, new_value: ValueRecord) {
         self.events.push(TraceLowLevelEvent::AssignCell(AssignCellRecord { place, new_value }));
     }
 
-    pub fn register_variable(&mut self, variable_name: &str, place: Place) {
+    fn register_variable(&mut self, variable_name: &str, place: Place) {
         let variable_id = self.ensure_variable_id(variable_name);
         self.events
             .push(TraceLowLevelEvent::VariableCell(VariableCellRecord { variable_id, place }));
     }
 
-    pub fn drop_variable(&mut self, variable_name: &str) {
+    fn drop_variable(&mut self, variable_name: &str) {
         let variable_id = self.ensure_variable_id(variable_name);
         self.events.push(TraceLowLevelEvent::DropVariable(variable_id));
     }
 
     // history event helpers
-    pub fn assign(&mut self, variable_name: &str, rvalue: RValue, pass_by: PassBy) {
+    fn assign(&mut self, variable_name: &str, rvalue: RValue, pass_by: PassBy) {
         let variable_id = self.ensure_variable_id(variable_name);
         self.events.push(TraceLowLevelEvent::Assignment(AssignmentRecord {
             to: variable_id,
@@ -252,13 +310,13 @@ impl Tracer {
         }));
     }
 
-    pub fn bind_variable(&mut self, variable_name: &str, place: Place) {
+    fn bind_variable(&mut self, variable_name: &str, place: Place) {
         let variable_id = self.ensure_variable_id(variable_name);
         self.events
             .push(TraceLowLevelEvent::BindVariable(crate::BindVariableRecord { variable_id, place }));
     }
 
-    pub fn drop_variables(&mut self, variable_names: &[String]) {
+    fn drop_variables(&mut self, variable_names: &[String]) {
         let variable_ids: Vec<VariableId> = variable_names
             .to_vec()
             .iter()
@@ -267,12 +325,12 @@ impl Tracer {
         self.events.push(TraceLowLevelEvent::DropVariables(variable_ids))
     }
 
-    pub fn simple_rvalue(&mut self, variable_name: &str) -> RValue {
+    fn simple_rvalue(&mut self, variable_name: &str) -> RValue {
         let variable_id = self.ensure_variable_id(variable_name);
         RValue::Simple(variable_id)
     }
 
-    pub fn compound_rvalue(&mut self, variable_dependencies: &[String]) -> RValue {
+    fn compound_rvalue(&mut self, variable_dependencies: &[String]) -> RValue {
         let variable_ids: Vec<VariableId> = variable_dependencies
             .to_vec()
             .iter()
@@ -281,11 +339,11 @@ impl Tracer {
         RValue::Compound(variable_ids)
     }
 
-    pub fn drop_last_step(&mut self) {
+    fn drop_last_step(&mut self) {
         self.events.push(TraceLowLevelEvent::DropLastStep);
     }
 
-    pub fn store_trace_metadata(&self, path: &Path) -> Result<(), Box<dyn Error>> {
+    fn store_trace_metadata(&self, path: &Path) -> Result<(), Box<dyn Error>> {
         let trace_metadata = TraceMetadata {
             program: self.program.clone(),
             args: self.args.clone(),
@@ -296,22 +354,7 @@ impl Tracer {
         Ok(())
     }
 
-    pub fn load_trace_events(&mut self, path: &Path, format: TraceEventsFileFormat) -> Result<(), Box<dyn Error>> {
-        match format {
-            TraceEventsFileFormat::Json => {
-                let json = std::fs::read_to_string(path)?;
-                self.events = serde_json::from_str(&json)?;
-            }
-            TraceEventsFileFormat::Binary => {
-                let file = fs::File::open(path)?;
-                let mut buf_reader = BufReader::new(file);
-                self.events = crate::capnptrace::read_trace(&mut buf_reader)?;
-            }
-        }
-        Ok(())
-    }
-
-    pub fn store_trace_events(&self, path: &Path, format: TraceEventsFileFormat) -> Result<(), Box<dyn Error>> {
+    fn store_trace_events(&self, path: &Path, format: TraceEventsFileFormat) -> Result<(), Box<dyn Error>> {
         match format {
             TraceEventsFileFormat::Json => {
                 let json = serde_json::to_string(&self.events)?;
@@ -325,7 +368,7 @@ impl Tracer {
         Ok(())
     }
 
-    pub fn store_trace_paths(&self, path: &Path) -> Result<(), Box<dyn Error>> {
+    fn store_trace_paths(&self, path: &Path) -> Result<(), Box<dyn Error>> {
         let json = serde_json::to_string(&self.path_list)?;
         fs::write(path, json)?;
         Ok(())

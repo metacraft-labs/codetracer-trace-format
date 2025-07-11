@@ -374,3 +374,7 @@ impl TraceWriter for Tracer {
         Ok(())
     }
 }
+
+pub fn create_trace_writer(program: &str, args: &[String], format: TraceEventsFileFormat) -> Box<dyn TraceWriter> {
+    Box::new(Tracer::new(program, args))
+}

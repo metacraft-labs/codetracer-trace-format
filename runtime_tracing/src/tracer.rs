@@ -15,6 +15,8 @@ use crate::types::{
 use crate::RValue;
 
 pub trait TraceWriter {
+    fn begin_writing_trace_events(&mut self, path: &Path);
+
     fn start(&mut self, path: &Path, line: Line);
     fn ensure_path_id(&mut self, path: &Path) -> PathId;
     fn ensure_function_id(&mut self, function_name: &str, path: &Path, line: Line) -> FunctionId;
@@ -128,6 +130,9 @@ impl Tracer {
 }
 
 impl TraceWriter for Tracer {
+    fn begin_writing_trace_events(&mut self, path: &Path) {
+    }
+
     /// Begin tracing of a program starting at the given source location.
     fn start(&mut self, path: &Path, line: Line) {
         let function_id = self.ensure_function_id("<toplevel>", path, line);

@@ -117,6 +117,10 @@ impl Tracer {
         }
     }
 
+    pub fn set_format(&mut self, format: TraceEventsFileFormat) {
+        self.format = format;
+    }
+
     pub fn load_trace_events(&mut self, path: &Path, format: TraceEventsFileFormat) -> Result<(), Box<dyn Error>> {
         match format {
             TraceEventsFileFormat::Json => {
@@ -385,5 +389,7 @@ impl TraceWriter for Tracer {
 }
 
 pub fn create_trace_writer(program: &str, args: &[String], format: TraceEventsFileFormat) -> Box<dyn TraceWriter> {
-    Box::new(Tracer::new(program, args))
+    let mut result = Box::new(Tracer::new(program, args));
+    result.set_format(format);
+    result
 }

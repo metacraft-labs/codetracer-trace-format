@@ -15,7 +15,28 @@ use crate::types::{
 use crate::RValue;
 
 pub trait TraceReader {
-    fn load_trace_events(&mut self, path: &Path, format: TraceEventsFileFormat) -> Result<Vec<TraceLowLevelEvent>, Box<dyn Error>>;
+    fn load_trace_events(&mut self, path: &Path) -> Result<Vec<TraceLowLevelEvent>, Box<dyn Error>>;
+}
+
+pub struct JsonTraceReader {
+}
+
+impl TraceReader for JsonTraceReader {
+    fn load_trace_events(&mut self, path: &Path) -> Result<Vec<TraceLowLevelEvent>, Box<dyn Error>> {
+        let json = std::fs::read_to_string(path)?;
+        Ok(serde_json::from_str(&json)?)
+    }
+}
+
+pub struct BinaryTraceReader {
+}
+
+impl TraceReader for BinaryTraceReader {
+    fn load_trace_events(&mut self, path: &Path) -> Result<Vec<TraceLowLevelEvent>, Box<dyn Error>> {
+        let file = fs::File::open(path)?;
+        let mut buf_reader = BufReader::new(file);
+        Ok(crate::capnptrace::read_trace(&mut buf_reader)?)
+    }
 }
 
 pub trait TraceWriter {
@@ -390,6 +411,18 @@ impl TraceWriter for Tracer {
         fs::write(path, json)?;
         Ok(())
     }
+}
+
+pub fn create_trace_reader(format: TraceEventsFileFormat) -> Box<dyn TraceReader> {
+    match format {
+        TraceEventsFileFormat::Json => {
+            Box::new(JsonTraceReader { } )
+        }
+        TraceEventsFileFormat::Binary => {
+            Box::new(BinaryTraceReader { } )
+        }
+    }
+
 }
 
 pub fn create_trace_writer(program: &str, args: &[String], format: TraceEventsFileFormat) -> Box<dyn TraceWriter> {

@@ -77,6 +77,8 @@ pub struct Tracer {
     functions: HashMap<String, FunctionId>,
     variables: HashMap<String, VariableId>,
     types: HashMap<String, TypeId>,
+
+    format: TraceEventsFileFormat,
 }
 
 pub enum TraceEventsFileFormat {
@@ -110,6 +112,8 @@ impl Tracer {
             functions: HashMap::new(),
             variables: HashMap::new(),
             types: HashMap::new(),
+
+            format: TraceEventsFileFormat::Binary,
         }
     }
 

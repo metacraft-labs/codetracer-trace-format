@@ -12,7 +12,7 @@ mod tracer;
 mod types;
 mod base64;
 mod capnptrace;
-pub use crate::tracer::{Tracer, TraceWriter, TraceEventsFileFormat, NONE_TYPE_ID, NONE_VALUE};
+pub use crate::tracer::{Tracer, TraceWriter, TraceEventsFileFormat, NONE_TYPE_ID, NONE_VALUE, create_trace_reader, create_trace_writer};
 pub use crate::types::*;
 
 pub mod trace_capnp {

@@ -78,6 +78,7 @@ pub trait TraceWriter {
     fn drop_last_step(&mut self);
 
     fn add_event(&mut self, event: TraceLowLevelEvent);
+    fn append_events(&mut self, events: &mut Vec<TraceLowLevelEvent>);
 
     fn store_trace_metadata(&self, path: &Path) -> Result<(), Box<dyn Error>>;
     fn store_trace_events(&self, path: &Path, format: TraceEventsFileFormat) -> Result<(), Box<dyn Error>>;
@@ -385,6 +386,10 @@ impl TraceWriter for Tracer {
 
     fn add_event(&mut self, event: TraceLowLevelEvent) {
         self.events.push(event)
+    }
+
+    fn append_events(&mut self, events: &mut Vec<TraceLowLevelEvent>) {
+        self.events.append(events);
     }
 
     fn store_trace_metadata(&self, path: &Path) -> Result<(), Box<dyn Error>> {

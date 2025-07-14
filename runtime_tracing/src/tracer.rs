@@ -14,6 +14,10 @@ use crate::types::{
 };
 use crate::RValue;
 
+pub trait TraceReader {
+    fn load_trace_events(&mut self, path: &Path, format: TraceEventsFileFormat) -> Result<Vec<TraceLowLevelEvent>, Box<dyn Error>>;
+}
+
 pub trait TraceWriter {
     fn begin_writing_trace_events(&mut self, path: &Path);
 

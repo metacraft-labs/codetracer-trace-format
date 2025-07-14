@@ -77,6 +77,8 @@ pub trait TraceWriter {
     fn compound_rvalue(&mut self, variable_dependencies: &[String]) -> RValue;
     fn drop_last_step(&mut self);
 
+    fn add_event(&mut self, event: TraceLowLevelEvent);
+
     fn store_trace_metadata(&self, path: &Path) -> Result<(), Box<dyn Error>>;
     fn store_trace_events(&self, path: &Path, format: TraceEventsFileFormat) -> Result<(), Box<dyn Error>>;
     fn store_trace_paths(&self, path: &Path) -> Result<(), Box<dyn Error>>;
@@ -379,6 +381,10 @@ impl TraceWriter for Tracer {
 
     fn drop_last_step(&mut self) {
         self.events.push(TraceLowLevelEvent::DropLastStep);
+    }
+
+    fn add_event(&mut self, event: TraceLowLevelEvent) {
+        self.events.push(event)
     }
 
     fn store_trace_metadata(&self, path: &Path) -> Result<(), Box<dyn Error>> {

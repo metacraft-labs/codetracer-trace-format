@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use clap::{Args, Parser, Subcommand};
-use runtime_tracing::{create_trace_reader, create_trace_writer, TraceEventsFileFormat, TraceWriter, Tracer};
+use runtime_tracing::{create_trace_reader, create_trace_writer, TraceEventsFileFormat};
 use crate::fmt_trace_cmd::FmtTraceCommand;
 mod fmt_trace_cmd;
 

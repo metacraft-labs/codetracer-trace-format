@@ -40,7 +40,9 @@ impl TraceReader for BinaryTraceReader {
 }
 
 pub trait TraceWriter {
+    fn begin_writing_trace_metadata(&mut self, path: &Path) -> Result<(), Box<dyn Error>>;
     fn begin_writing_trace_events(&mut self, path: &Path) -> Result<(), Box<dyn Error>>;
+    fn begin_writing_trace_paths(&mut self, path: &Path) -> Result<(), Box<dyn Error>>;
 
     fn start(&mut self, path: &Path, line: Line);
     fn ensure_path_id(&mut self, path: &Path) -> PathId;
@@ -108,7 +110,9 @@ pub struct NonStreamingTraceWriter {
     types: HashMap<String, TypeId>,
 
     format: TraceEventsFileFormat,
+    trace_metadata_path: Option<PathBuf>,
     trace_events_path: Option<PathBuf>,
+    trace_paths_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -145,7 +149,9 @@ impl NonStreamingTraceWriter {
             types: HashMap::new(),
 
             format: TraceEventsFileFormat::Binary,
+            trace_metadata_path: None,
             trace_events_path: None,
+            trace_paths_path: None,
         }
     }
 
@@ -170,8 +176,18 @@ impl NonStreamingTraceWriter {
 }
 
 impl TraceWriter for NonStreamingTraceWriter {
+    fn begin_writing_trace_metadata(&mut self, path: &Path) -> Result<(), Box<dyn Error>> {
+        self.trace_metadata_path = Some(path.to_path_buf());
+        Ok(())
+    }
+
     fn begin_writing_trace_events(&mut self, path: &Path) -> Result<(), Box<dyn Error>> {
         self.trace_events_path = Some(path.to_path_buf());
+        Ok(())
+    }
+
+    fn begin_writing_trace_paths(&mut self, path: &Path) -> Result<(), Box<dyn Error>> {
+        self.trace_paths_path = Some(path.to_path_buf());
         Ok(())
     }
 

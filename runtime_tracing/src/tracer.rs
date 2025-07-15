@@ -40,7 +40,7 @@ impl TraceReader for BinaryTraceReader {
 }
 
 pub trait TraceWriter {
-    fn begin_writing_trace_events(&mut self, path: &Path);
+    fn begin_writing_trace_events(&mut self, path: &Path) -> Result<(), Box<dyn Error>>;
 
     fn start(&mut self, path: &Path, line: Line);
     fn ensure_path_id(&mut self, path: &Path) -> PathId;
@@ -167,7 +167,8 @@ impl Tracer {
 }
 
 impl TraceWriter for Tracer {
-    fn begin_writing_trace_events(&mut self, path: &Path) {
+    fn begin_writing_trace_events(&mut self, path: &Path) -> Result<(), Box<dyn Error>> {
+        Ok(())
     }
 
     /// Begin tracing of a program starting at the given source location.

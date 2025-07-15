@@ -12,7 +12,7 @@ mod tracer;
 mod types;
 mod base64;
 mod capnptrace;
-pub use crate::tracer::{Tracer, TraceWriter, TraceEventsFileFormat, NONE_TYPE_ID, NONE_VALUE, create_trace_reader, create_trace_writer};
+pub use crate::tracer::{NonStreamingTraceWriter, TraceWriter, TraceEventsFileFormat, NONE_TYPE_ID, NONE_VALUE, create_trace_reader, create_trace_writer};
 pub use crate::types::*;
 
 pub mod trace_capnp {
@@ -27,7 +27,7 @@ mod tests {
 
     #[test]
     fn test_simple_trace() {
-        let mut tracer = Tracer::new("path.small", &vec![]);
+        let mut tracer = NonStreamingTraceWriter::new("path.small", &vec![]);
         let path = Path::new("/test/path.small");
         tracer.start(path, Line(1));
         tracer.register_step(path, Line(1));

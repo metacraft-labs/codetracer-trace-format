@@ -1,7 +1,7 @@
 use std::path::Path;
 
 use clap::{Args, Parser, Subcommand};
-use runtime_tracing::{TraceEventsFileFormat, Tracer, TraceWriter};
+use runtime_tracing::{create_trace_reader, create_trace_writer, TraceEventsFileFormat, TraceWriter, Tracer};
 use crate::fmt_trace_cmd::FmtTraceCommand;
 mod fmt_trace_cmd;
 
@@ -44,9 +44,12 @@ fn main() {
         RuntimeTracingCliCommand::Convert(convert_command) => {
             let input_file_format = determine_file_format_from_name(&convert_command.input_file).unwrap();
             let output_file_format = determine_file_format_from_name(&convert_command.output_file).unwrap();
-            let mut trace = Tracer::new("", &[]);
-            trace.load_trace_events(Path::new(&convert_command.input_file), input_file_format).unwrap();
-            trace.store_trace_events(Path::new(&convert_command.output_file), output_file_format).unwrap();
+            let mut trace_reader = create_trace_reader(input_file_format);
+            let mut trace_writer = create_trace_writer("", &[], output_file_format);
+            let mut trace_events = trace_reader.load_trace_events(Path::new(&convert_command.input_file)).unwrap();
+            trace_writer.begin_writing_trace_events(Path::new(&convert_command.output_file));
+            trace_writer.append_events(&mut trace_events);
+            trace_writer.store_trace_events(Path::new(&convert_command.output_file), output_file_format).unwrap();
         },
         RuntimeTracingCliCommand::FormatTrace(fmt_trace_cmd) => {
             fmt_trace_cmd::run(fmt_trace_cmd);

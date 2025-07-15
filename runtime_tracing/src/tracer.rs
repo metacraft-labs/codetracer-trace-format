@@ -108,7 +108,7 @@ pub struct NonStreamingTraceWriter {
     types: HashMap<String, TypeId>,
 
     format: TraceEventsFileFormat,
-    trace_events_path: PathBuf,
+    trace_events_path: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -145,7 +145,7 @@ impl NonStreamingTraceWriter {
             types: HashMap::new(),
 
             format: TraceEventsFileFormat::Binary,
-            trace_events_path: PathBuf::new(),
+            trace_events_path: None,
         }
     }
 
@@ -171,7 +171,7 @@ impl NonStreamingTraceWriter {
 
 impl TraceWriter for NonStreamingTraceWriter {
     fn begin_writing_trace_events(&mut self, path: &Path) -> Result<(), Box<dyn Error>> {
-        self.trace_events_path = path.to_path_buf();
+        self.trace_events_path = Some(path.to_path_buf());
         Ok(())
     }
 
@@ -410,17 +410,21 @@ impl TraceWriter for NonStreamingTraceWriter {
     }
 
     fn finish_writing_trace_events(&self) -> Result<(), Box<dyn Error>> {
-        match self.format {
-            TraceEventsFileFormat::Json => {
-                let json = serde_json::to_string(&self.events)?;
-                fs::write(self.trace_events_path.clone(), json)?;
+        if let Some(path) = &self.trace_events_path {
+            match self.format {
+                TraceEventsFileFormat::Json => {
+                    let json = serde_json::to_string(&self.events)?;
+                    fs::write(path, json)?;
+                }
+                TraceEventsFileFormat::Binary => {
+                    let mut file = fs::File::create(path)?;
+                    crate::capnptrace::write_trace(&self.events, &mut file)?;
+                }
             }
-            TraceEventsFileFormat::Binary => {
-                let mut file = fs::File::create(self.trace_events_path.clone())?;
-                crate::capnptrace::write_trace(&self.events, &mut file)?;
-            }
+            Ok(())
+        } else {
+            panic!("finish_writing_trace_events() called without previous call to begin_writing_trace_events()");
         }
-        Ok(())
     }
 
     fn store_trace_paths(&self, path: &Path) -> Result<(), Box<dyn Error>> {

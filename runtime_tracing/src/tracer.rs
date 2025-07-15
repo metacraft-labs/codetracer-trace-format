@@ -109,6 +109,7 @@ pub struct Tracer {
     format: TraceEventsFileFormat,
 }
 
+#[derive(Debug, Clone, Copy)]
 pub enum TraceEventsFileFormat {
     Json,
     Binary

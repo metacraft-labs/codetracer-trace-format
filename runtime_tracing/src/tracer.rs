@@ -107,6 +107,7 @@ pub struct Tracer {
     types: HashMap<String, TypeId>,
 
     format: TraceEventsFileFormat,
+    trace_events_path: PathBuf,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -143,6 +144,7 @@ impl Tracer {
             types: HashMap::new(),
 
             format: TraceEventsFileFormat::Binary,
+            trace_events_path: PathBuf::new(),
         }
     }
 
@@ -168,6 +170,7 @@ impl Tracer {
 
 impl TraceWriter for Tracer {
     fn begin_writing_trace_events(&mut self, path: &Path) -> Result<(), Box<dyn Error>> {
+        self.trace_events_path = path.to_path_buf();
         Ok(())
     }
 

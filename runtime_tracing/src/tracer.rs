@@ -84,7 +84,7 @@ pub trait TraceWriter {
 
     fn finish_writing_trace_metadata(&self, path: &Path) -> Result<(), Box<dyn Error>>;
     fn finish_writing_trace_events(&self) -> Result<(), Box<dyn Error>>;
-    fn store_trace_paths(&self, path: &Path) -> Result<(), Box<dyn Error>>;
+    fn finish_writing_trace_paths(&self, path: &Path) -> Result<(), Box<dyn Error>>;
 }
 
 
@@ -443,7 +443,7 @@ impl TraceWriter for NonStreamingTraceWriter {
         }
     }
 
-    fn store_trace_paths(&self, path: &Path) -> Result<(), Box<dyn Error>> {
+    fn finish_writing_trace_paths(&self, path: &Path) -> Result<(), Box<dyn Error>> {
         let json = serde_json::to_string(&self.path_list)?;
         fs::write(path, json)?;
         Ok(())

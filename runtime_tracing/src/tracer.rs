@@ -82,7 +82,7 @@ pub trait TraceWriter {
     fn add_event(&mut self, event: TraceLowLevelEvent);
     fn append_events(&mut self, events: &mut Vec<TraceLowLevelEvent>);
 
-    fn finish_writing_trace_metadata(&self, path: &Path) -> Result<(), Box<dyn Error>>;
+    fn finish_writing_trace_metadata(&self) -> Result<(), Box<dyn Error>>;
     fn finish_writing_trace_events(&self) -> Result<(), Box<dyn Error>>;
     fn finish_writing_trace_paths(&self, path: &Path) -> Result<(), Box<dyn Error>>;
 }
@@ -414,15 +414,19 @@ impl TraceWriter for NonStreamingTraceWriter {
         self.events.append(events);
     }
 
-    fn finish_writing_trace_metadata(&self, path: &Path) -> Result<(), Box<dyn Error>> {
-        let trace_metadata = TraceMetadata {
-            program: self.program.clone(),
-            args: self.args.clone(),
-            workdir: self.workdir.clone(),
-        };
-        let json = serde_json::to_string(&trace_metadata)?;
-        fs::write(path, json)?;
-        Ok(())
+    fn finish_writing_trace_metadata(&self) -> Result<(), Box<dyn Error>> {
+        if let Some(path) = &self.trace_metadata_path {
+            let trace_metadata = TraceMetadata {
+                program: self.program.clone(),
+                args: self.args.clone(),
+                workdir: self.workdir.clone(),
+            };
+            let json = serde_json::to_string(&trace_metadata)?;
+            fs::write(path, json)?;
+            Ok(())
+        } else {
+            panic!("finish_writing_trace_metadata() called without previous call to begin_writing_trace_metadata()");
+        }
     }
 
     fn finish_writing_trace_events(&self) -> Result<(), Box<dyn Error>> {

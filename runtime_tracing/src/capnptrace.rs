@@ -1,7 +1,7 @@
-use std::str::FromStr;
 use crate::trace_capnp::trace;
-use capnp::serialize_packed;
 use crate::{TraceLowLevelEvent, VariableId};
+use capnp::serialize_packed;
+use std::str::FromStr;
 
 /// The first 5 bytes identify the file as a CodeTracer file (hex l33tsp33k - C0DE72ACE2 for "CodeTracer").
 /// The next 3 bytes are reserved/version info. In the initial version, they are zero. Non-zero values might
@@ -142,11 +142,7 @@ impl From<crate::PassBy> for trace::PassBy {
     }
 }
 
-
-fn conv_valuerecord(
-    bldr: crate::trace_capnp::trace::value_record::Builder,
-    vr: &crate::ValueRecord,
-) {
+fn conv_valuerecord(bldr: crate::trace_capnp::trace::value_record::Builder, vr: &crate::ValueRecord) {
     match vr {
         crate::ValueRecord::Int { i, type_id } => {
             let mut qi = bldr.init_int();
@@ -172,15 +168,9 @@ fn conv_valuerecord(
             let mut q_typ_id = qs.init_type_id();
             q_typ_id.set_i(type_id.0.try_into().unwrap());
         }
-        crate::ValueRecord::Sequence {
-            elements,
-            is_slice,
-            type_id,
-        } => {
+        crate::ValueRecord::Sequence { elements, is_slice, type_id } => {
             let mut qseq = bldr.init_sequence();
-            let mut elems = qseq
-                .reborrow()
-                .init_elements(elements.len().try_into().unwrap());
+            let mut elems = qseq.reborrow().init_elements(elements.len().try_into().unwrap());
             for i in 0..elements.len() {
                 let ele = &elements[i];
                 let bele = elems.reborrow().get(i.try_into().unwrap());
@@ -192,9 +182,7 @@ fn conv_valuerecord(
         }
         crate::ValueRecord::Tuple { elements, type_id } => {
             let mut qtup = bldr.init_tuple();
-            let mut elems = qtup
-                .reborrow()
-                .init_elements(elements.len().try_into().unwrap());
+            let mut elems = qtup.reborrow().init_elements(elements.len().try_into().unwrap());
             for i in 0..elements.len() {
                 let ele = &elements[i];
                 let bele = elems.reborrow().get(i.try_into().unwrap());
@@ -203,14 +191,9 @@ fn conv_valuerecord(
             let mut q_typ_id = qtup.init_type_id();
             q_typ_id.set_i(type_id.0.try_into().unwrap());
         }
-        crate::ValueRecord::Struct {
-            field_values,
-            type_id,
-        } => {
+        crate::ValueRecord::Struct { field_values, type_id } => {
             let mut qstruc = bldr.init_struct();
-            let mut elems = qstruc
-                .reborrow()
-                .init_field_values(field_values.len().try_into().unwrap());
+            let mut elems = qstruc.reborrow().init_field_values(field_values.len().try_into().unwrap());
             for i in 0..field_values.len() {
                 let ele = &field_values[i];
                 let bele = elems.reborrow().get(i.try_into().unwrap());
@@ -311,9 +294,7 @@ pub fn write_trace(q: &[crate::TraceLowLevelEvent], output: &mut impl std::io::W
                             typ_id.set_i(ftr.type_id.0.try_into().unwrap());
                         }
                     }
-                    crate::TypeSpecificInfo::Pointer {
-                        dereference_type_id,
-                    } => {
+                    crate::TypeSpecificInfo::Pointer { dereference_type_id } => {
                         let ptr = specific_info.init_pointer();
                         let mut deref_typ_id = ptr.init_dereference_type_id();
                         deref_typ_id.set_i(dereference_type_id.0.try_into().unwrap());
@@ -336,8 +317,7 @@ pub fn write_trace(q: &[crate::TraceLowLevelEvent], output: &mut impl std::io::W
                 let mut call_record = event.init_call();
                 let mut function_id = call_record.reborrow().init_function_id();
                 function_id.set_i(callrecord.function_id.0.try_into().unwrap());
-                let mut function_args =
-                    call_record.init_args(callrecord.args.len().try_into().unwrap());
+                let mut function_args = call_record.init_args(callrecord.args.len().try_into().unwrap());
                 for i in 0..callrecord.args.len() {
                     let farg = &callrecord.args[i];
                     let mut arg = function_args.reborrow().get(i.try_into().unwrap());
@@ -401,14 +381,14 @@ pub fn write_trace(q: &[crate::TraceLowLevelEvent], output: &mut impl std::io::W
                     crate::RValue::Simple(variable_id) => {
                         let mut ret_from_simple = ret_from.init_simple();
                         ret_from_simple.set_i(variable_id.0.try_into().unwrap());
-                    },
+                    }
                     crate::RValue::Compound(variable_ids) => {
                         let mut ret_from_compound = ret_from.init_compound(variable_ids.len().try_into().unwrap());
                         for i in 0..variable_ids.len() {
                             let mut r = ret_from_compound.reborrow().get(i.try_into().unwrap());
                             r.set_i(variable_ids[i].0.try_into().unwrap());
                         }
-                    },
+                    }
                 }
             }
             TraceLowLevelEvent::DropLastStep => {
@@ -469,20 +449,15 @@ pub fn write_trace(q: &[crate::TraceLowLevelEvent], output: &mut impl std::io::W
     serialize_packed::write_message(output, &message)
 }
 
-fn get_value_records(
-    r: capnp::struct_list::Reader<trace::value_record::Owned>,
-) -> Result<Vec<crate::ValueRecord>, capnp::Error> {
-    let mut res: Vec<crate::ValueRecord> =
-        Vec::with_capacity(r.len().try_into().unwrap());
+fn get_value_records(r: capnp::struct_list::Reader<trace::value_record::Owned>) -> Result<Vec<crate::ValueRecord>, capnp::Error> {
+    let mut res: Vec<crate::ValueRecord> = Vec::with_capacity(r.len().try_into().unwrap());
     for i in 0..r.len() {
         res.push(get_value_record(r.get(i))?);
     }
     Ok(res)
 }
 
-fn get_value_record(
-    r: trace::value_record::Reader,
-) -> Result<crate::ValueRecord, capnp::Error> {
+fn get_value_record(r: trace::value_record::Reader) -> Result<crate::ValueRecord, capnp::Error> {
     match r.which() {
         Ok(trace::value_record::Which::Int(q)) => Ok(crate::ValueRecord::Int {
             i: q.get_i(),
@@ -500,13 +475,11 @@ fn get_value_record(
             text: q.get_text()?.to_string()?,
             type_id: crate::TypeId(q.get_type_id()?.get_i().try_into().unwrap()),
         }),
-        Ok(trace::value_record::Which::Sequence(q)) => {
-            Ok(crate::ValueRecord::Sequence {
-                elements: get_value_records(q.get_elements()?)?,
-                is_slice: q.get_is_slice(),
-                type_id: crate::TypeId(q.get_type_id()?.get_i().try_into().unwrap()),
-            })
-        }
+        Ok(trace::value_record::Which::Sequence(q)) => Ok(crate::ValueRecord::Sequence {
+            elements: get_value_records(q.get_elements()?)?,
+            is_slice: q.get_is_slice(),
+            type_id: crate::TypeId(q.get_type_id()?.get_i().try_into().unwrap()),
+        }),
         Ok(trace::value_record::Which::Tuple(q)) => Ok(crate::ValueRecord::Tuple {
             elements: get_value_records(q.get_elements()?)?,
             type_id: crate::TypeId(q.get_type_id()?.get_i().try_into().unwrap()),
@@ -515,21 +488,17 @@ fn get_value_record(
             field_values: get_value_records(q.get_field_values()?)?,
             type_id: crate::TypeId(q.get_type_id()?.get_i().try_into().unwrap()),
         }),
-        Ok(trace::value_record::Which::Variant(q)) => {
-            Ok(crate::ValueRecord::Variant {
-                discriminator: q.get_discriminator()?.to_string()?,
-                contents: Box::new(get_value_record(q.get_contents()?)?),
-                type_id: crate::TypeId(q.get_type_id()?.get_i().try_into().unwrap()),
-            })
-        }
-        Ok(trace::value_record::Which::Reference(q)) => {
-            Ok(crate::ValueRecord::Reference {
-                dereferenced: Box::new(get_value_record(q.get_dereferenced()?)?),
-                address: q.get_address(),
-                mutable: q.get_mutable(),
-                type_id: crate::TypeId(q.get_type_id()?.get_i().try_into().unwrap()),
-            })
-        }
+        Ok(trace::value_record::Which::Variant(q)) => Ok(crate::ValueRecord::Variant {
+            discriminator: q.get_discriminator()?.to_string()?,
+            contents: Box::new(get_value_record(q.get_contents()?)?),
+            type_id: crate::TypeId(q.get_type_id()?.get_i().try_into().unwrap()),
+        }),
+        Ok(trace::value_record::Which::Reference(q)) => Ok(crate::ValueRecord::Reference {
+            dereferenced: Box::new(get_value_record(q.get_dereferenced()?)?),
+            address: q.get_address(),
+            mutable: q.get_mutable(),
+            type_id: crate::TypeId(q.get_type_id()?.get_i().try_into().unwrap()),
+        }),
         Ok(trace::value_record::Which::Raw(q)) => Ok(crate::ValueRecord::Raw {
             r: q.get_r()?.to_string()?,
             type_id: crate::TypeId(q.get_type_id()?.get_i().try_into().unwrap()),
@@ -553,13 +522,9 @@ fn get_value_record(
     }
 }
 
-fn get_full_value_record(
-    r: trace::full_value_record::Reader,
-) -> Result<crate::FullValueRecord, capnp::Error> {
+fn get_full_value_record(r: trace::full_value_record::Reader) -> Result<crate::FullValueRecord, capnp::Error> {
     Ok(crate::FullValueRecord {
-        variable_id: crate::VariableId(
-            r.get_variable_id()?.get_i().try_into().unwrap(),
-        ),
+        variable_id: crate::VariableId(r.get_variable_id()?.get_i().try_into().unwrap()),
         value: get_value_record(r.get_value()?)?,
     })
 }
@@ -570,83 +535,58 @@ pub fn read_trace(input: &mut impl std::io::BufRead) -> ::capnp::Result<Vec<crat
     if header_buf != HEADER {
         panic!("Invalid file header (wrong file format or incompatible version)");
     }
-    let message_reader = serialize_packed::read_message(
-        input,
-        ::capnp::message::ReaderOptions::new(),
-    )?;
+    let message_reader = serialize_packed::read_message(input, ::capnp::message::ReaderOptions::new())?;
 
     let trace = message_reader.get_root::<trace::Reader>()?;
 
-    let mut res: Vec<crate::TraceLowLevelEvent> =
-        Vec::with_capacity(trace.get_events()?.len().try_into().unwrap());
+    let mut res: Vec<crate::TraceLowLevelEvent> = Vec::with_capacity(trace.get_events()?.len().try_into().unwrap());
 
     for event in trace.get_events()? {
         let q = match event.which() {
             Ok(trace::trace_low_level_event::Which::Step(step_record)) => {
                 let step_record = step_record?;
                 TraceLowLevelEvent::Step(crate::StepRecord {
-                    path_id: crate::PathId(
-                        step_record.get_path_id()?.get_i().try_into().unwrap(),
-                    ),
+                    path_id: crate::PathId(step_record.get_path_id()?.get_i().try_into().unwrap()),
                     line: crate::Line(step_record.get_line()?.get_l()),
                 })
             }
             Ok(trace::trace_low_level_event::Which::Path(path_buf)) => {
-                TraceLowLevelEvent::Path(
-                    std::path::PathBuf::from_str(path_buf?.get_p()?.to_str()?).unwrap(),
-                )
+                TraceLowLevelEvent::Path(std::path::PathBuf::from_str(path_buf?.get_p()?.to_str()?).unwrap())
             }
-            Ok(trace::trace_low_level_event::Which::VariableName(variable_name)) => {
-                TraceLowLevelEvent::VariableName(variable_name?.to_string()?)
-            }
-            Ok(trace::trace_low_level_event::Which::Variable(variable)) => {
-                TraceLowLevelEvent::Variable(variable?.to_string()?)
-            }
+            Ok(trace::trace_low_level_event::Which::VariableName(variable_name)) => TraceLowLevelEvent::VariableName(variable_name?.to_string()?),
+            Ok(trace::trace_low_level_event::Which::Variable(variable)) => TraceLowLevelEvent::Variable(variable?.to_string()?),
             Ok(trace::trace_low_level_event::Which::Type(type_record)) => {
                 let type_record = type_record?;
                 TraceLowLevelEvent::Type(crate::TypeRecord {
                     kind: type_record.get_kind()?.into(),
                     lang_type: type_record.get_lang_type()?.to_string()?,
                     specific_info: match type_record.get_specific_info()?.which() {
-                        Ok(trace::type_specific_info::Which::None(())) => {
-                            crate::TypeSpecificInfo::None
-                        }
+                        Ok(trace::type_specific_info::Which::None(())) => crate::TypeSpecificInfo::None,
                         Ok(trace::type_specific_info::Which::Struct(s)) => {
                             let s_fields = s.get_fields()?;
-                            let mut fields: Vec<crate::FieldTypeRecord> =
-                                Vec::with_capacity(s_fields.len().try_into().unwrap());
+                            let mut fields: Vec<crate::FieldTypeRecord> = Vec::with_capacity(s_fields.len().try_into().unwrap());
                             for s_field in s_fields {
                                 fields.push(crate::FieldTypeRecord {
                                     name: s_field.get_name()?.to_string()?,
-                                    type_id: crate::TypeId(
-                                        s_field.get_type_id()?.get_i().try_into().unwrap(),
-                                    ),
+                                    type_id: crate::TypeId(s_field.get_type_id()?.get_i().try_into().unwrap()),
                                 });
                             }
                             crate::TypeSpecificInfo::Struct { fields }
                         }
-                        Ok(trace::type_specific_info::Which::Pointer(p)) => {
-                            crate::TypeSpecificInfo::Pointer {
-                                dereference_type_id: crate::TypeId(
-                                    p.get_dereference_type_id()?.get_i().try_into().unwrap(),
-                                ),
-                            }
-                        }
+                        Ok(trace::type_specific_info::Which::Pointer(p)) => crate::TypeSpecificInfo::Pointer {
+                            dereference_type_id: crate::TypeId(p.get_dereference_type_id()?.get_i().try_into().unwrap()),
+                        },
                         Err(_) => {
                             panic!()
                         }
                     },
                 })
             }
-            Ok(trace::trace_low_level_event::Which::Value(fvr)) => {
-                TraceLowLevelEvent::Value(get_full_value_record(fvr?)?)
-            }
+            Ok(trace::trace_low_level_event::Which::Value(fvr)) => TraceLowLevelEvent::Value(get_full_value_record(fvr?)?),
             Ok(trace::trace_low_level_event::Which::Function(function_record)) => {
                 let function_record = function_record?;
                 TraceLowLevelEvent::Function(crate::FunctionRecord {
-                    path_id: crate::PathId(
-                        function_record.get_path_id()?.get_i().try_into().unwrap(),
-                    ),
+                    path_id: crate::PathId(function_record.get_path_id()?.get_i().try_into().unwrap()),
                     line: crate::Line(function_record.get_line()?.get_l()),
                     name: function_record.get_name()?.to_string()?,
                 })
@@ -654,28 +594,21 @@ pub fn read_trace(input: &mut impl std::io::BufRead) -> ::capnp::Result<Vec<crat
             Ok(trace::trace_low_level_event::Which::Call(call_record)) => {
                 let call_record = call_record?;
                 let sargs = call_record.get_args()?;
-                let mut args: Vec<crate::FullValueRecord> =
-                    Vec::with_capacity(sargs.len().try_into().unwrap());
+                let mut args: Vec<crate::FullValueRecord> = Vec::with_capacity(sargs.len().try_into().unwrap());
                 for sarg in sargs {
                     args.push(crate::FullValueRecord {
-                        variable_id: crate::VariableId(
-                            sarg.get_variable_id()?.get_i().try_into().unwrap(),
-                        ),
+                        variable_id: crate::VariableId(sarg.get_variable_id()?.get_i().try_into().unwrap()),
                         value: get_value_record(sarg.get_value()?)?,
                     });
                 }
                 TraceLowLevelEvent::Call(crate::CallRecord {
-                    function_id: crate::FunctionId(
-                        call_record.get_function_id()?.get_i().try_into().unwrap(),
-                    ),
+                    function_id: crate::FunctionId(call_record.get_function_id()?.get_i().try_into().unwrap()),
                     args,
                 })
             }
-            Ok(trace::trace_low_level_event::Which::Return(return_record)) => {
-                TraceLowLevelEvent::Return(crate::ReturnRecord {
-                    return_value: get_value_record(return_record?.get_return_value()?)?,
-                })
-            }
+            Ok(trace::trace_low_level_event::Which::Return(return_record)) => TraceLowLevelEvent::Return(crate::ReturnRecord {
+                return_value: get_value_record(return_record?.get_return_value()?)?,
+            }),
             Ok(trace::trace_low_level_event::Which::Event(record_event)) => {
                 let record_event = record_event?;
                 TraceLowLevelEvent::Event(crate::RecordEvent {
@@ -686,8 +619,7 @@ pub fn read_trace(input: &mut impl std::io::BufRead) -> ::capnp::Result<Vec<crat
             }
             Ok(trace::trace_low_level_event::Which::Asm(asm_strings)) => {
                 let asm_strings = asm_strings?;
-                let mut strs: Vec<String> =
-                    Vec::with_capacity(asm_strings.len().try_into().unwrap());
+                let mut strs: Vec<String> = Vec::with_capacity(asm_strings.len().try_into().unwrap());
                 for s in asm_strings {
                     strs.push(s?.to_string()?);
                 }
@@ -696,40 +628,27 @@ pub fn read_trace(input: &mut impl std::io::BufRead) -> ::capnp::Result<Vec<crat
             Ok(trace::trace_low_level_event::Which::BindVariable(bind_variable_record)) => {
                 let bind_variable_record = bind_variable_record?;
                 TraceLowLevelEvent::BindVariable(crate::BindVariableRecord {
-                    variable_id: crate::VariableId(
-                        bind_variable_record
-                            .get_variable_id()?
-                            .get_i()
-                            .try_into()
-                            .unwrap(),
-                    ),
+                    variable_id: crate::VariableId(bind_variable_record.get_variable_id()?.get_i().try_into().unwrap()),
                     place: crate::Place(bind_variable_record.get_place()?.get_p()),
                 })
             }
             Ok(trace::trace_low_level_event::Which::Assignment(assignment_record)) => {
                 let assignment_record = assignment_record?;
                 TraceLowLevelEvent::Assignment(crate::AssignmentRecord {
-                    to: crate::VariableId(
-                        assignment_record.get_to()?.get_i().try_into().unwrap(),
-                    ),
+                    to: crate::VariableId(assignment_record.get_to()?.get_i().try_into().unwrap()),
                     pass_by: match assignment_record.get_pass_by()? {
                         trace::PassBy::Value => crate::PassBy::Value,
                         trace::PassBy::Reference => crate::PassBy::Reference,
                     },
                     from: match assignment_record.get_from()?.which()? {
                         trace::r_value::Which::Simple(variable_id) => {
-                            crate::RValue::Simple(crate::VariableId(
-                                variable_id?.get_i().try_into().unwrap(),
-                            ))
+                            crate::RValue::Simple(crate::VariableId(variable_id?.get_i().try_into().unwrap()))
                         }
                         trace::r_value::Which::Compound(variables) => {
                             let variables = variables?;
-                            let mut v: Vec<VariableId> =
-                                Vec::with_capacity(variables.len().try_into().unwrap());
+                            let mut v: Vec<VariableId> = Vec::with_capacity(variables.len().try_into().unwrap());
                             for vv in variables {
-                                v.push(crate::VariableId(
-                                    vv.get_i().try_into().unwrap(),
-                                ));
+                                v.push(crate::VariableId(vv.get_i().try_into().unwrap()));
                             }
                             crate::RValue::Compound(v)
                         }
@@ -738,8 +657,7 @@ pub fn read_trace(input: &mut impl std::io::BufRead) -> ::capnp::Result<Vec<crat
             }
             Ok(trace::trace_low_level_event::Which::DropVariables(variables)) => {
                 let variables = variables?;
-                let mut v: Vec<crate::VariableId> =
-                    Vec::with_capacity(variables.len().try_into().unwrap());
+                let mut v: Vec<crate::VariableId> = Vec::with_capacity(variables.len().try_into().unwrap());
                 for vv in variables {
                     v.push(crate::VariableId(vv.get_i().try_into().unwrap()))
                 }
@@ -759,21 +677,13 @@ pub fn read_trace(input: &mut impl std::io::BufRead) -> ::capnp::Result<Vec<crat
                     value: get_value_record(cell_value_record.get_value()?)?,
                 })
             }
-            Ok(trace::trace_low_level_event::Which::AssignCompoundItem(
-                assign_compound_item_record,
-            )) => {
+            Ok(trace::trace_low_level_event::Which::AssignCompoundItem(assign_compound_item_record)) => {
                 let assign_compound_item_record = assign_compound_item_record?;
-                TraceLowLevelEvent::AssignCompoundItem(
-                    crate::AssignCompoundItemRecord {
-                        place: crate::Place(
-                            assign_compound_item_record.get_place()?.get_p(),
-                        ),
-                        index: assign_compound_item_record.get_index().try_into().unwrap(),
-                        item_place: crate::Place(
-                            assign_compound_item_record.get_item_place()?.get_p(),
-                        ),
-                    },
-                )
+                TraceLowLevelEvent::AssignCompoundItem(crate::AssignCompoundItemRecord {
+                    place: crate::Place(assign_compound_item_record.get_place()?.get_p()),
+                    index: assign_compound_item_record.get_index().try_into().unwrap(),
+                    item_place: crate::Place(assign_compound_item_record.get_item_place()?.get_p()),
+                })
             }
             Ok(trace::trace_low_level_event::Which::AssignCell(assign_cell_record)) => {
                 let assign_cell_record = assign_cell_record?;
@@ -785,24 +695,14 @@ pub fn read_trace(input: &mut impl std::io::BufRead) -> ::capnp::Result<Vec<crat
             Ok(trace::trace_low_level_event::Which::VariableCell(variable_cell_record)) => {
                 let variable_cell_record = variable_cell_record?;
                 TraceLowLevelEvent::VariableCell(crate::VariableCellRecord {
-                    variable_id: crate::VariableId(
-                        variable_cell_record
-                            .get_variable_id()?
-                            .get_i()
-                            .try_into()
-                            .unwrap(),
-                    ),
+                    variable_id: crate::VariableId(variable_cell_record.get_variable_id()?.get_i().try_into().unwrap()),
                     place: crate::Place(variable_cell_record.get_place()?.get_p()),
                 })
             }
             Ok(trace::trace_low_level_event::Which::DropVariable(variable_id)) => {
-                TraceLowLevelEvent::DropVariable(crate::VariableId(
-                    variable_id?.get_i().try_into().unwrap(),
-                ))
+                TraceLowLevelEvent::DropVariable(crate::VariableId(variable_id?.get_i().try_into().unwrap()))
             }
-            Ok(trace::trace_low_level_event::Which::DropLastStep(())) => {
-                TraceLowLevelEvent::DropLastStep
-            }
+            Ok(trace::trace_low_level_event::Which::DropLastStep(())) => TraceLowLevelEvent::DropLastStep,
             Err(_) => {
                 panic!()
             }

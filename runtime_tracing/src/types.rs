@@ -6,10 +6,10 @@ use std::cmp::Ord;
 use std::ops;
 use std::path::PathBuf;
 
+use crate::base64;
 use num_derive::FromPrimitive;
 use serde::{Deserialize, Serialize};
 use serde_repr::*;
-use crate::base64;
 
 // currently, we do assume that we record the whole program
 // so, we try to include minimal amount of data,
@@ -474,5 +474,5 @@ pub enum EventLogKind {
     Error,
     // used for trace events
     TraceLogEvent,
-    EvmEvent
+    EvmEvent,
 }

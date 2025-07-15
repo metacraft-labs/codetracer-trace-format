@@ -47,7 +47,7 @@ fn main() {
             let mut trace_reader = create_trace_reader(input_file_format);
             let mut trace_writer = create_trace_writer("", &[], output_file_format);
             let mut trace_events = trace_reader.load_trace_events(Path::new(&convert_command.input_file)).unwrap();
-            trace_writer.begin_writing_trace_events(Path::new(&convert_command.output_file));
+            trace_writer.begin_writing_trace_events(Path::new(&convert_command.output_file)).unwrap();
             trace_writer.append_events(&mut trace_events);
             trace_writer.store_trace_events(Path::new(&convert_command.output_file), output_file_format).unwrap();
         },

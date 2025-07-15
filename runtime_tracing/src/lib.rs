@@ -8,11 +8,13 @@
 //! This crate provides the [`Tracer`] type for emitting trace events and a
 //! collection of serializable structures describing the trace format.
 //! The format is documented in `docs/` and the README.
-mod tracer;
-mod types;
 mod base64;
 mod capnptrace;
-pub use crate::tracer::{TraceReader, NonStreamingTraceWriter, TraceWriter, TraceEventsFileFormat, NONE_TYPE_ID, NONE_VALUE, create_trace_reader, create_trace_writer};
+mod tracer;
+mod types;
+pub use crate::tracer::{
+    create_trace_reader, create_trace_writer, NonStreamingTraceWriter, TraceEventsFileFormat, TraceReader, TraceWriter, NONE_TYPE_ID, NONE_VALUE,
+};
 pub use crate::types::*;
 
 pub mod trace_capnp {

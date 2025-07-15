@@ -18,8 +18,7 @@ pub trait TraceReader {
     fn load_trace_events(&mut self, path: &Path) -> Result<Vec<TraceLowLevelEvent>, Box<dyn Error>>;
 }
 
-pub struct JsonTraceReader {
-}
+pub struct JsonTraceReader {}
 
 impl TraceReader for JsonTraceReader {
     fn load_trace_events(&mut self, path: &Path) -> Result<Vec<TraceLowLevelEvent>, Box<dyn Error>> {
@@ -28,8 +27,7 @@ impl TraceReader for JsonTraceReader {
     }
 }
 
-pub struct BinaryTraceReader {
-}
+pub struct BinaryTraceReader {}
 
 impl TraceReader for BinaryTraceReader {
     fn load_trace_events(&mut self, path: &Path) -> Result<Vec<TraceLowLevelEvent>, Box<dyn Error>> {
@@ -87,7 +85,6 @@ pub trait TraceWriter {
     fn finish_writing_trace_paths(&mut self) -> Result<(), Box<dyn Error>>;
 }
 
-
 /// State machine used to record [`TraceLowLevelEvent`]s.
 ///
 /// A `NonStreamingTraceWriter` instance accumulates events in memory and stores them on
@@ -118,7 +115,7 @@ pub struct NonStreamingTraceWriter {
 #[derive(Debug, Clone, Copy)]
 pub enum TraceEventsFileFormat {
     Json,
-    Binary
+    Binary,
 }
 
 // we ensure in start they are registered with those id-s
@@ -460,14 +457,9 @@ impl TraceWriter for NonStreamingTraceWriter {
 
 pub fn create_trace_reader(format: TraceEventsFileFormat) -> Box<dyn TraceReader> {
     match format {
-        TraceEventsFileFormat::Json => {
-            Box::new(JsonTraceReader { } )
-        }
-        TraceEventsFileFormat::Binary => {
-            Box::new(BinaryTraceReader { } )
-        }
+        TraceEventsFileFormat::Json => Box::new(JsonTraceReader {}),
+        TraceEventsFileFormat::Binary => Box::new(BinaryTraceReader {}),
     }
-
 }
 
 pub fn create_trace_writer(program: &str, args: &[String], format: TraceEventsFileFormat) -> Box<dyn TraceWriter> {

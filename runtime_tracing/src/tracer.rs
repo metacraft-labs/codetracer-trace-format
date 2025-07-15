@@ -84,7 +84,7 @@ pub trait TraceWriter {
 
     fn finish_writing_trace_metadata(&self) -> Result<(), Box<dyn Error>>;
     fn finish_writing_trace_events(&self) -> Result<(), Box<dyn Error>>;
-    fn finish_writing_trace_paths(&self, path: &Path) -> Result<(), Box<dyn Error>>;
+    fn finish_writing_trace_paths(&self) -> Result<(), Box<dyn Error>>;
 }
 
 
@@ -447,10 +447,14 @@ impl TraceWriter for NonStreamingTraceWriter {
         }
     }
 
-    fn finish_writing_trace_paths(&self, path: &Path) -> Result<(), Box<dyn Error>> {
-        let json = serde_json::to_string(&self.path_list)?;
-        fs::write(path, json)?;
-        Ok(())
+    fn finish_writing_trace_paths(&self) -> Result<(), Box<dyn Error>> {
+        if let Some(path) = &self.trace_paths_path {
+            let json = serde_json::to_string(&self.path_list)?;
+            fs::write(path, json)?;
+            Ok(())
+        } else {
+            panic!("finish_writing_trace_paths() called without previous call to begin_writing_trace_paths()");
+        }
     }
 }
 

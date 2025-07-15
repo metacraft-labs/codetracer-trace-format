@@ -82,9 +82,9 @@ pub trait TraceWriter {
     fn add_event(&mut self, event: TraceLowLevelEvent);
     fn append_events(&mut self, events: &mut Vec<TraceLowLevelEvent>);
 
-    fn finish_writing_trace_metadata(&self) -> Result<(), Box<dyn Error>>;
-    fn finish_writing_trace_events(&self) -> Result<(), Box<dyn Error>>;
-    fn finish_writing_trace_paths(&self) -> Result<(), Box<dyn Error>>;
+    fn finish_writing_trace_metadata(&mut self) -> Result<(), Box<dyn Error>>;
+    fn finish_writing_trace_events(&mut self) -> Result<(), Box<dyn Error>>;
+    fn finish_writing_trace_paths(&mut self) -> Result<(), Box<dyn Error>>;
 }
 
 
@@ -414,7 +414,7 @@ impl TraceWriter for NonStreamingTraceWriter {
         self.events.append(events);
     }
 
-    fn finish_writing_trace_metadata(&self) -> Result<(), Box<dyn Error>> {
+    fn finish_writing_trace_metadata(&mut self) -> Result<(), Box<dyn Error>> {
         if let Some(path) = &self.trace_metadata_path {
             let trace_metadata = TraceMetadata {
                 program: self.program.clone(),
@@ -429,7 +429,7 @@ impl TraceWriter for NonStreamingTraceWriter {
         }
     }
 
-    fn finish_writing_trace_events(&self) -> Result<(), Box<dyn Error>> {
+    fn finish_writing_trace_events(&mut self) -> Result<(), Box<dyn Error>> {
         if let Some(path) = &self.trace_events_path {
             match self.format {
                 TraceEventsFileFormat::Json => {
@@ -447,7 +447,7 @@ impl TraceWriter for NonStreamingTraceWriter {
         }
     }
 
-    fn finish_writing_trace_paths(&self) -> Result<(), Box<dyn Error>> {
+    fn finish_writing_trace_paths(&mut self) -> Result<(), Box<dyn Error>> {
         if let Some(path) = &self.trace_paths_path {
             let json = serde_json::to_string(&self.path_list)?;
             fs::write(path, json)?;

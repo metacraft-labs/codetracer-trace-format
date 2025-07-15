@@ -81,7 +81,7 @@ pub trait TraceWriter {
     fn append_events(&mut self, events: &mut Vec<TraceLowLevelEvent>);
 
     fn store_trace_metadata(&self, path: &Path) -> Result<(), Box<dyn Error>>;
-    fn store_trace_events(&self, path: &Path, format: TraceEventsFileFormat) -> Result<(), Box<dyn Error>>;
+    fn store_trace_events(&self, path: &Path) -> Result<(), Box<dyn Error>>;
     fn store_trace_paths(&self, path: &Path) -> Result<(), Box<dyn Error>>;
 }
 
@@ -408,8 +408,8 @@ impl TraceWriter for Tracer {
         Ok(())
     }
 
-    fn store_trace_events(&self, path: &Path, format: TraceEventsFileFormat) -> Result<(), Box<dyn Error>> {
-        match format {
+    fn store_trace_events(&self, path: &Path) -> Result<(), Box<dyn Error>> {
+        match self.format {
             TraceEventsFileFormat::Json => {
                 let json = serde_json::to_string(&self.events)?;
                 fs::write(path, json)?;

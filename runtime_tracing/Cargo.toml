@@ -1,6 +1,6 @@
 [package]
 name = "runtime_tracing"
-version = "0.12.2"
+version = "0.13.0"
 edition = "2021"
 authors = ["Metacraft Labs Ltd"]
 description = "A library for the schema and tracing helpers for the CodeTracer db trace format"

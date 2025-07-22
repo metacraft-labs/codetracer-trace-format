@@ -115,7 +115,8 @@ pub struct NonStreamingTraceWriter {
 #[derive(Debug, Clone, Copy)]
 pub enum TraceEventsFileFormat {
     Json,
-    Binary,
+    BinaryV0,
+    Binary
 }
 
 // we ensure in start they are registered with those id-s
@@ -162,7 +163,9 @@ impl NonStreamingTraceWriter {
                 let json = std::fs::read_to_string(path)?;
                 self.events = serde_json::from_str(&json)?;
             }
-            TraceEventsFileFormat::Binary => {
+            TraceEventsFileFormat::Binary |
+            TraceEventsFileFormat::BinaryV0 => {
+                // TODO: autodetect the version of the format, from the header
                 let file = fs::File::open(path)?;
                 let mut buf_reader = BufReader::new(file);
                 self.events = crate::capnptrace::read_trace(&mut buf_reader)?;
@@ -433,9 +436,12 @@ impl TraceWriter for NonStreamingTraceWriter {
                     let json = serde_json::to_string(&self.events)?;
                     fs::write(path, json)?;
                 }
-                TraceEventsFileFormat::Binary => {
+                TraceEventsFileFormat::BinaryV0 => {
                     let mut file = fs::File::create(path)?;
                     crate::capnptrace::write_trace(&self.events, &mut file)?;
+                }
+                TraceEventsFileFormat::Binary => {
+                    unreachable!()
                 }
             }
             Ok(())
@@ -458,12 +464,21 @@ impl TraceWriter for NonStreamingTraceWriter {
 pub fn create_trace_reader(format: TraceEventsFileFormat) -> Box<dyn TraceReader> {
     match format {
         TraceEventsFileFormat::Json => Box::new(JsonTraceReader {}),
+        TraceEventsFileFormat::BinaryV0 |
         TraceEventsFileFormat::Binary => Box::new(BinaryTraceReader {}),
     }
 }
 
 pub fn create_trace_writer(program: &str, args: &[String], format: TraceEventsFileFormat) -> Box<dyn TraceWriter> {
-    let mut result = Box::new(NonStreamingTraceWriter::new(program, args));
-    result.set_format(format);
-    result
+    match format {
+        TraceEventsFileFormat::Json |
+        TraceEventsFileFormat::BinaryV0 => {
+            let mut result = Box::new(NonStreamingTraceWriter::new(program, args));
+            result.set_format(format);
+            result
+        }
+        TraceEventsFileFormat::Binary => {
+            Box::new(crate::cborzstdwriter::StreamingTraceWriter::new(program, args))
+        }
+    }
 }

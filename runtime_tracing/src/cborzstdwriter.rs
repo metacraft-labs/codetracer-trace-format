@@ -15,8 +15,6 @@ pub struct StreamingTraceWriter<'a> {
     workdir: PathBuf,
     program: String,
     args: Vec<String>,
-    // trace events
-    //pub events: Vec<TraceLowLevelEvent>,
     // internal tracer state:
     path_list: Vec<PathBuf>,
     function_list: Vec<(String, PathId, Line)>,
@@ -26,7 +24,6 @@ pub struct StreamingTraceWriter<'a> {
     variables: HashMap<String, VariableId>,
     types: HashMap<String, TypeId>,
 
-    //format: TraceEventsFileFormat,
     trace_metadata_path: Option<PathBuf>,
     trace_events_path: Option<PathBuf>,
     trace_events_file_zstd_encoder: Option<Encoder<'a, File>>,
@@ -40,7 +37,6 @@ impl<'a> StreamingTraceWriter<'a> {
             workdir: env::current_dir().expect("can access the current dir"),
             program: program.to_string(),
             args: args.to_vec(),
-            //events: vec![],
 
             path_list: vec![],
             function_list: vec![],
@@ -49,7 +45,6 @@ impl<'a> StreamingTraceWriter<'a> {
             variables: HashMap::new(),
             types: HashMap::new(),
 
-            //format: TraceEventsFileFormat::Binary,
             trace_metadata_path: None,
             trace_events_path: None,
             trace_events_file_zstd_encoder: None,

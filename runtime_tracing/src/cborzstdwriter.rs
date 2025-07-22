@@ -3,6 +3,13 @@ use zeekstd::Encoder;
 
 use crate::{tracer::TOP_LEVEL_FUNCTION_ID, AssignCellRecord, AssignCompoundItemRecord, AssignmentRecord, CallRecord, CellValueRecord, CompoundValueRecord, FullValueRecord, FunctionId, FunctionRecord, Line, PathId, RValue, RecordEvent, ReturnRecord, StepRecord, TraceLowLevelEvent, TraceMetadata, TraceWriter, TypeId, TypeKind, TypeRecord, TypeSpecificInfo, VariableCellRecord, VariableId, NONE_TYPE_ID};
 
+/// The next 3 bytes are reserved/version info.
+/// The header is 8 bytes in size, ensuring 64-bit alignment for the rest of the file.
+const HEADERV1: &[u8] = &[
+    0xC0, 0xDE, 0x72, 0xAC, 0xE2,  // The first 5 bytes identify the file as a CodeTracer file (hex l33tsp33k - C0DE72ACE2 for "CodeTracer").
+    0x01,                          // Indicates version 1 of the file format
+    0x00, 0x00];                   // Reserved, must be zero in this version.
+
 pub struct StreamingTraceWriter<'a> {
     // trace metadata:
     workdir: PathBuf,
@@ -22,8 +29,7 @@ pub struct StreamingTraceWriter<'a> {
     //format: TraceEventsFileFormat,
     trace_metadata_path: Option<PathBuf>,
     trace_events_path: Option<PathBuf>,
-    trace_events_file_output: Option<File>,
-    trace_events_file_zstd_encoder: Option<Encoder<'a, &'a Option<File>>>,
+    trace_events_file_zstd_encoder: Option<Encoder<'a, File>>,
     trace_paths_path: Option<PathBuf>,
 }
 
@@ -46,7 +52,6 @@ impl<'a> StreamingTraceWriter<'a> {
             //format: TraceEventsFileFormat::Binary,
             trace_metadata_path: None,
             trace_events_path: None,
-            trace_events_file_output: None,
             trace_events_file_zstd_encoder: None,
             trace_paths_path: None,
         }
@@ -62,8 +67,9 @@ impl<'a> TraceWriter for StreamingTraceWriter<'a> {
     fn begin_writing_trace_events(&mut self, path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
         let pb = path.to_path_buf();
         self.trace_events_path = Some(pb.clone());
-        self.trace_events_file_output = Some(std::fs::File::create(pb)?);
-        //self.trace_events_file_zstd_encoder = Some(Encoder::new(&self.trace_events_file_output)?);
+        let mut file_output = std::fs::File::create(pb)?;
+        file_output.write_all(HEADERV1)?;
+        self.trace_events_file_zstd_encoder = Some(Encoder::new(file_output)?);
 
         Ok(())
     }
@@ -287,11 +293,17 @@ impl<'a> TraceWriter for StreamingTraceWriter<'a> {
     }
 
     fn add_event(&mut self, event: TraceLowLevelEvent) {
-        todo!()
+        let buf: Vec<u8> = Vec::new();
+        let q = cbor4ii::serde::to_vec(buf, &event).unwrap();
+        if let Some(enc) = &mut self.trace_events_file_zstd_encoder {
+            enc.write(&q).unwrap();
+        }
     }
 
     fn append_events(&mut self, events: &mut Vec<TraceLowLevelEvent>) {
-        todo!()
+        for e in events {
+            self.add_event(e.clone());
+        }
     }
 
     fn finish_writing_trace_metadata(&mut self) -> Result<(), Box<dyn std::error::Error>> {
@@ -310,7 +322,13 @@ impl<'a> TraceWriter for StreamingTraceWriter<'a> {
     }
 
     fn finish_writing_trace_events(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        todo!()
+        if let Some(enc) = self.trace_events_file_zstd_encoder.take() {
+            enc.finish()?;
+
+            Ok(())
+        } else {
+            panic!("finish_writing_trace_events() called without previous call to begin_writing_trace_events()");
+        }
     }
 
     fn finish_writing_trace_paths(&mut self) -> Result<(), Box<dyn std::error::Error>> {

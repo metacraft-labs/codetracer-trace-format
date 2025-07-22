@@ -156,23 +156,6 @@ impl NonStreamingTraceWriter {
     pub fn set_format(&mut self, format: TraceEventsFileFormat) {
         self.format = format;
     }
-
-    pub fn load_trace_events(&mut self, path: &Path, format: TraceEventsFileFormat) -> Result<(), Box<dyn Error>> {
-        match format {
-            TraceEventsFileFormat::Json => {
-                let json = std::fs::read_to_string(path)?;
-                self.events = serde_json::from_str(&json)?;
-            }
-            TraceEventsFileFormat::Binary |
-            TraceEventsFileFormat::BinaryV0 => {
-                // TODO: autodetect the version of the format, from the header
-                let file = fs::File::open(path)?;
-                let mut buf_reader = BufReader::new(file);
-                self.events = crate::capnptrace::read_trace(&mut buf_reader)?;
-            }
-        }
-        Ok(())
-    }
 }
 
 impl TraceWriter for NonStreamingTraceWriter {

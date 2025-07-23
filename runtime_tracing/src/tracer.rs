@@ -3,10 +3,12 @@
 use std::collections::HashMap;
 use std::env;
 use std::error::Error;
-use std::fs;
-use std::io::BufReader;
+use std::fs::{self, File};
+use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
+use crate::capnptrace::HEADER;
+use crate::cborzstdwriter::HEADERV1;
 use crate::types::{
     AssignCellRecord, AssignCompoundItemRecord, AssignmentRecord, CallRecord, CellValueRecord, CompoundValueRecord, EventLogKind, FullValueRecord,
     FunctionId, FunctionRecord, Line, PassBy, PathId, Place, RecordEvent, ReturnRecord, StepRecord, TraceLowLevelEvent, TraceMetadata, TypeId,
@@ -29,11 +31,40 @@ impl TraceReader for JsonTraceReader {
 
 pub struct BinaryTraceReader {}
 
+fn detect_bin_file_version(input: &mut File) -> Result<Option<TraceEventsFileFormat>, Box<dyn Error>> {
+    input.seek(SeekFrom::Start(0))?;
+    let mut header_buf = [0; 8];
+    input.read_exact(&mut header_buf)?;
+    input.seek(SeekFrom::Start(0))?;
+
+    if header_buf == HEADER {
+        Ok(Some(TraceEventsFileFormat::BinaryV0))
+    } else if header_buf == HEADERV1 {
+        Ok(Some(TraceEventsFileFormat::Binary))
+    } else {
+        Ok(None)
+    }
+}
+
 impl TraceReader for BinaryTraceReader {
     fn load_trace_events(&mut self, path: &Path) -> Result<Vec<TraceLowLevelEvent>, Box<dyn Error>> {
-        let file = fs::File::open(path)?;
-        let mut buf_reader = BufReader::new(file);
-        Ok(crate::capnptrace::read_trace(&mut buf_reader)?)
+        let mut file = fs::File::open(path)?;
+        let ver = detect_bin_file_version(&mut file)?;
+        match ver {
+            Some(TraceEventsFileFormat::BinaryV0) => {
+                let mut buf_reader = BufReader::new(file);
+                Ok(crate::capnptrace::read_trace(&mut buf_reader)?)
+            }
+            Some(TraceEventsFileFormat::Binary) => {
+                Ok(crate::cborzstdreader::read_trace(&mut file)?)
+            }
+            Some(TraceEventsFileFormat::Json) => {
+                unreachable!()
+            }
+            None => {
+                panic!("Invalid file header (wrong file format or incompatible version)");
+            }
+        }
     }
 }
 

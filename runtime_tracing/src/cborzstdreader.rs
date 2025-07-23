@@ -1,7 +1,7 @@
 use std::io::{self, BufRead, BufReader, Read, Seek, Write};
 
 use fscommon::StreamSlice;
-use zeekstd::{DecodeOptions, Decoder};
+use zeekstd::Decoder;
 
 use crate::{cborzstdwriter::HEADERV1, TraceLowLevelEvent};
 

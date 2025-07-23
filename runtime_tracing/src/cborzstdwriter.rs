@@ -336,26 +336,3 @@ impl<'a> TraceWriter for StreamingTraceWriter<'a> {
         }
     }
 }
-
-fn test_zstd() {
-    let output = std::fs::File::create("tralala.zstd").unwrap();
-    let mut encoder = Encoder::new(output).unwrap();
-
-    let event: TraceLowLevelEvent = TraceLowLevelEvent::Path(PathBuf::new());
-
-    let buf: Vec<u8> = Vec::new();
-    let q = cbor4ii::serde::to_vec(buf, &event).unwrap();
-    encoder.write(&q).unwrap();
-
-    let f = encoder.finish().unwrap();
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::cborzstdwriter::test_zstd;
-
-    #[test]
-    fn run_zstd_test() {
-        test_zstd();
-    }
-}

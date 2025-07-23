@@ -2,13 +2,14 @@ use runtime_tracing::{create_trace_reader, create_trace_writer, TraceEventsFileF
 use std::fs;
 use std::path::Path;
 
-fn test_binary_roundtrip(ver: TraceEventsFileFormat) {
+fn test_binary_roundtrip(ver: TraceEventsFileFormat, binfile: &str) {
     let json_path = Path::new("tests/data/trace.json");
 
     let mut json_reader = create_trace_reader(TraceEventsFileFormat::Json);
     let original = json_reader.load_trace_events(json_path).unwrap();
 
-    let bin_path = Path::new("tests/data/trace.bin");
+    let bin_path_str = format!("tests/data/{}", binfile);
+    let bin_path = Path::new(&bin_path_str);
 
     let mut bin_writer = create_trace_writer("", &[], ver);
     bin_writer.begin_writing_trace_events(bin_path).unwrap();
@@ -28,10 +29,10 @@ fn test_binary_roundtrip(ver: TraceEventsFileFormat) {
 
 #[test]
 fn test_binary_roundtrip_v0() {
-    test_binary_roundtrip(TraceEventsFileFormat::BinaryV0);
+    test_binary_roundtrip(TraceEventsFileFormat::BinaryV0, "trace.v0.bin");
 }
 
 #[test]
 fn test_binary_roundtrip_v1() {
-    test_binary_roundtrip(TraceEventsFileFormat::Binary);
+    test_binary_roundtrip(TraceEventsFileFormat::Binary, "trace.v1.bin");
 }

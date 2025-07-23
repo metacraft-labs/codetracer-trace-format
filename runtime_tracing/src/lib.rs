@@ -12,6 +12,7 @@ mod base64;
 mod capnptrace;
 mod tracer;
 mod types;
+mod cborzstdreader;
 mod cborzstdwriter;
 
 pub use crate::tracer::{

@@ -57,7 +57,7 @@ impl TraceReader for BinaryTraceReader {
                 Ok(crate::capnptrace::read_trace(&mut buf_reader)?)
             }
             Some(TraceEventsFileFormat::Binary) => {
-                Ok(crate::cborzstdreader::read_trace(&mut file)?)
+                Ok(crate::cbor_zstd_reader::read_trace(&mut file)?)
             }
             Some(TraceEventsFileFormat::Json) => {
                 unreachable!()

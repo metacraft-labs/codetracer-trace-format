@@ -13,7 +13,7 @@ mod capnptrace;
 mod tracer;
 mod types;
 mod cbor_zstd_reader;
-mod cborzstdwriter;
+mod cbor_zstd_writer;
 mod abstract_trace_writer;
 
 pub use crate::tracer::{

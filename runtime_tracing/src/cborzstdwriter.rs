@@ -1,7 +1,7 @@
 use std::{collections::HashMap, env, fs::{self, File}, io::Write, path::PathBuf};
 use zeekstd::Encoder;
 
-use crate::{abstracttracewriter::{AbstractTraceWriter, AbstractTraceWriterData}, TraceLowLevelEvent, TraceMetadata, TraceWriter};
+use crate::{abstract_trace_writer::{AbstractTraceWriter, AbstractTraceWriterData}, TraceLowLevelEvent, TraceMetadata, TraceWriter};
 
 /// The next 3 bytes are reserved/version info.
 /// The header is 8 bytes in size, ensuring 64-bit alignment for the rest of the file.

@@ -8,7 +8,7 @@ use std::io::{BufReader, Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 
 use crate::capnptrace::HEADER;
-use crate::cborzstdwriter::HEADERV1;
+use crate::cbor_zstd_writer::HEADERV1;
 use crate::abstract_trace_writer::{AbstractTraceWriter, AbstractTraceWriterData};
 use crate::types::{
     EventLogKind, FullValueRecord,
@@ -349,7 +349,7 @@ pub fn create_trace_writer(program: &str, args: &[String], format: TraceEventsFi
             result
         }
         TraceEventsFileFormat::Binary => {
-            Box::new(crate::cborzstdwriter::StreamingTraceWriter::new(program, args))
+            Box::new(crate::cbor_zstd_writer::StreamingTraceWriter::new(program, args))
         }
     }
 }

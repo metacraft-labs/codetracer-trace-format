@@ -3,7 +3,7 @@ use std::io::{self, BufRead, BufReader, Read, Seek, Write};
 use fscommon::StreamSlice;
 use zeekstd::Decoder;
 
-use crate::{cborzstdwriter::HEADERV1, TraceLowLevelEvent};
+use crate::{cbor_zstd_writer::HEADERV1, TraceLowLevelEvent};
 
 fn is_at_eof<R: BufRead>(reader: &mut R) -> io::Result<bool> {
     let buffer = reader.fill_buf()?;

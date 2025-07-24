@@ -12,7 +12,7 @@ mod base64;
 mod capnptrace;
 mod tracer;
 mod types;
-mod cborzstdreader;
+mod cbor_zstd_reader;
 mod cborzstdwriter;
 mod abstract_trace_writer;
 

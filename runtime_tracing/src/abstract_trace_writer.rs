@@ -1,4 +1,4 @@
-use std::{collections::HashMap, error::Error, fs, path::{Path, PathBuf}};
+use std::{collections::HashMap, env, error::Error, fs, path::{Path, PathBuf}};
 
 use crate::{tracer::TOP_LEVEL_FUNCTION_ID, AssignCellRecord, AssignCompoundItemRecord, AssignmentRecord, CallRecord, CellValueRecord, CompoundValueRecord, FullValueRecord, FunctionId, FunctionRecord, Line, PathId, RValue, RecordEvent, ReturnRecord, StepRecord, TraceLowLevelEvent, TraceMetadata, TypeId, TypeKind, TypeRecord, TypeSpecificInfo, VariableCellRecord, VariableId, NONE_TYPE_ID};
 
@@ -18,6 +18,26 @@ pub struct AbstractTraceWriterData {
 
     pub trace_metadata_path: Option<PathBuf>,
     pub trace_paths_path: Option<PathBuf>,
+}
+
+impl AbstractTraceWriterData {
+    pub fn new(program: &str, args: &[String]) -> Self {
+        AbstractTraceWriterData {
+            workdir: env::current_dir().expect("can access the current dir"),
+            program: program.to_string(),
+            args: args.to_vec(),
+
+            path_list: vec![],
+            function_list: vec![],
+            paths: HashMap::new(),
+            functions: HashMap::new(),
+            variables: HashMap::new(),
+            types: HashMap::new(),
+
+            trace_metadata_path: None,
+            trace_paths_path: None,
+        }
+    }
 }
 
 pub trait AbstractTraceWriter {

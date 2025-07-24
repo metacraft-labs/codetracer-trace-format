@@ -10,17 +10,17 @@ pub const HEADERV1: &[u8] = &[
     0x01,                          // Indicates version 1 of the file format
     0x00, 0x00];                   // Reserved, must be zero in this version.
 
-pub struct StreamingTraceWriter<'a> {
+pub struct CborZstdTraceWriter<'a> {
     base: AbstractTraceWriterData,
 
     trace_events_path: Option<PathBuf>,
     trace_events_file_zstd_encoder: Option<Encoder<'a, File>>,
 }
 
-impl<'a> StreamingTraceWriter<'a> {
+impl<'a> CborZstdTraceWriter<'a> {
     /// Create a new tracer instance for the given program and arguments.
     pub fn new(program: &str, args: &[String]) -> Self {
-        StreamingTraceWriter {
+        CborZstdTraceWriter {
             base: AbstractTraceWriterData::new(program, args),
 
             trace_events_path: None,
@@ -29,7 +29,7 @@ impl<'a> StreamingTraceWriter<'a> {
     }
 }
 
-impl<'a> AbstractTraceWriter for StreamingTraceWriter<'a> {
+impl<'a> AbstractTraceWriter for CborZstdTraceWriter<'a> {
     fn get_data(&self) -> &AbstractTraceWriterData {
         &self.base
     }
@@ -53,7 +53,7 @@ impl<'a> AbstractTraceWriter for StreamingTraceWriter<'a> {
     }
 }
 
-impl<'a> TraceWriter for StreamingTraceWriter<'a> {
+impl<'a> TraceWriter for CborZstdTraceWriter<'a> {
     fn begin_writing_trace_events(&mut self, path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
         let pb = path.to_path_buf();
         self.trace_events_path = Some(pb.clone());

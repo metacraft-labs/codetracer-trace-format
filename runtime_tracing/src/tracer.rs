@@ -44,7 +44,7 @@ pub fn create_trace_writer(program: &str, args: &[String], format: TraceEventsFi
             result
         }
         TraceEventsFileFormat::Binary => {
-            Box::new(crate::cbor_zstd_writer::StreamingTraceWriter::new(program, args))
+            Box::new(crate::cbor_zstd_writer::CborZstdTraceWriter::new(program, args))
         }
     }
 }

@@ -1,4 +1,4 @@
-use std::{collections::HashMap, env, fs::File, io::Write, path::PathBuf};
+use std::{fs::File, io::Write, path::PathBuf};
 use zeekstd::Encoder;
 
 use crate::{abstract_trace_writer::{AbstractTraceWriter, AbstractTraceWriterData}, trace_writer::TraceWriter, TraceLowLevelEvent};
@@ -21,21 +21,7 @@ impl<'a> StreamingTraceWriter<'a> {
     /// Create a new tracer instance for the given program and arguments.
     pub fn new(program: &str, args: &[String]) -> Self {
         StreamingTraceWriter {
-            base: AbstractTraceWriterData {
-                workdir: env::current_dir().expect("can access the current dir"),
-                program: program.to_string(),
-                args: args.to_vec(),
-
-                path_list: vec![],
-                function_list: vec![],
-                paths: HashMap::new(),
-                functions: HashMap::new(),
-                variables: HashMap::new(),
-                types: HashMap::new(),
-
-                trace_metadata_path: None,
-                trace_paths_path: None,
-            },
+            base: AbstractTraceWriterData::new(program, args),
 
             trace_events_path: None,
             trace_events_file_zstd_encoder: None,

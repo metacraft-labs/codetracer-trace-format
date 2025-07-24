@@ -1,4 +1,4 @@
-use std::{collections::HashMap, env, error::Error, fs, path::{Path, PathBuf}};
+use std::{error::Error, fs, path::{Path, PathBuf}};
 
 use crate::{abstract_trace_writer::{AbstractTraceWriter, AbstractTraceWriterData}, TraceEventsFileFormat, TraceLowLevelEvent, TraceWriter};
 
@@ -21,21 +21,7 @@ impl NonStreamingTraceWriter {
     /// Create a new tracer instance for the given program and arguments.
     pub fn new(program: &str, args: &[String]) -> Self {
         NonStreamingTraceWriter {
-                base: AbstractTraceWriterData {
-                workdir: env::current_dir().expect("can access the current dir"),
-                program: program.to_string(),
-                args: args.to_vec(),
-
-                path_list: vec![],
-                function_list: vec![],
-                paths: HashMap::new(),
-                functions: HashMap::new(),
-                variables: HashMap::new(),
-                types: HashMap::new(),
-
-                trace_metadata_path: None,
-                trace_paths_path: None,
-            },
+            base: AbstractTraceWriterData::new(program, args),
 
             events: vec![],
 

@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use crate::capnptrace::HEADER;
 use crate::cborzstdwriter::HEADERV1;
-use crate::abstracttracewriter::{AbstractTraceWriter, AbstractTraceWriterData};
+use crate::abstract_trace_writer::{AbstractTraceWriter, AbstractTraceWriterData};
 use crate::types::{
     EventLogKind, FullValueRecord,
     FunctionId, Line, PassBy, PathId, Place, TraceLowLevelEvent, TraceMetadata, TypeId,

@@ -3,14 +3,14 @@ use std::io::{self, BufRead, BufReader, Read, Seek, Write};
 use fscommon::StreamSlice;
 use zeekstd::Decoder;
 
-use crate::{cbor_zstd_writer::HEADERV1, TraceLowLevelEvent};
+use crate::{TraceLowLevelEvent, cbor_zstd_writer::HEADERV1};
 
 fn is_at_eof<R: BufRead>(reader: &mut R) -> io::Result<bool> {
     let buffer = reader.fill_buf()?;
     Ok(buffer.is_empty())
 }
 
-pub fn read_trace(input: &mut (impl Read + Write + Seek)) -> Result<Vec<TraceLowLevelEvent>,  Box<dyn std::error::Error>> {
+pub fn read_trace(input: &mut (impl Read + Write + Seek)) -> Result<Vec<TraceLowLevelEvent>, Box<dyn std::error::Error>> {
     let end_pos = input.seek(io::SeekFrom::End(0))?;
     input.seek(io::SeekFrom::Start(0))?;
 

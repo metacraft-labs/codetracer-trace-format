@@ -1,6 +1,11 @@
-use std::{error::Error, fs::{self, File}, io::{BufReader, Read, Seek, SeekFrom}, path::Path};
+use std::{
+    error::Error,
+    fs::{self, File},
+    io::{BufReader, Read, Seek, SeekFrom},
+    path::Path,
+};
 
-use crate::{capnptrace::HEADER, cbor_zstd_writer::HEADERV1, TraceEventsFileFormat, TraceLowLevelEvent};
+use crate::{TraceEventsFileFormat, TraceLowLevelEvent, capnptrace::HEADER, cbor_zstd_writer::HEADERV1};
 
 pub trait TraceReader {
     fn load_trace_events(&mut self, path: &Path) -> Result<Vec<TraceLowLevelEvent>, Box<dyn Error>>;
@@ -41,9 +46,7 @@ impl TraceReader for BinaryTraceReader {
                 let mut buf_reader = BufReader::new(file);
                 Ok(crate::capnptrace::read_trace(&mut buf_reader)?)
             }
-            Some(TraceEventsFileFormat::Binary) => {
-                Ok(crate::cbor_zstd_reader::read_trace(&mut file)?)
-            }
+            Some(TraceEventsFileFormat::Binary) => Ok(crate::cbor_zstd_reader::read_trace(&mut file)?),
             Some(TraceEventsFileFormat::Json) => {
                 unreachable!()
             }

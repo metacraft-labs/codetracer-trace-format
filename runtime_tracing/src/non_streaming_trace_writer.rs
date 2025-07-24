@@ -1,6 +1,13 @@
-use std::{error::Error, fs, path::{Path, PathBuf}};
+use std::{
+    error::Error,
+    fs,
+    path::{Path, PathBuf},
+};
 
-use crate::{abstract_trace_writer::{AbstractTraceWriter, AbstractTraceWriterData}, TraceEventsFileFormat, TraceLowLevelEvent, TraceWriter};
+use crate::{
+    TraceEventsFileFormat, TraceLowLevelEvent, TraceWriter,
+    abstract_trace_writer::{AbstractTraceWriter, AbstractTraceWriterData},
+};
 
 /// State machine used to record [`TraceLowLevelEvent`]s.
 ///

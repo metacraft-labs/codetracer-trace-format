@@ -1,6 +1,9 @@
 use std::{error::Error, path::Path};
 
-use crate::{abstract_trace_writer::AbstractTraceWriter, EventLogKind, FullValueRecord, FunctionId, Line, PassBy, PathId, Place, RValue, TraceLowLevelEvent, TypeId, TypeKind, TypeRecord, ValueRecord, VariableId};
+use crate::{
+    EventLogKind, FullValueRecord, FunctionId, Line, PassBy, PathId, Place, RValue, TraceLowLevelEvent, TypeId, TypeKind, TypeRecord, ValueRecord,
+    VariableId, abstract_trace_writer::AbstractTraceWriter,
+};
 
 pub trait TraceWriter: AbstractTraceWriter {
     fn begin_writing_trace_metadata(&mut self, path: &Path) -> Result<(), Box<dyn Error>> {

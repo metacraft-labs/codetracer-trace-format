@@ -1,4 +1,4 @@
-use runtime_tracing::{create_trace_reader, create_trace_writer, TraceEventsFileFormat, TraceWriter};
+use runtime_tracing::{TraceEventsFileFormat, TraceWriter, create_trace_reader, create_trace_writer};
 use std::fs;
 use std::path::Path;
 

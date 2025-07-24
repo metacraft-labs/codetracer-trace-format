@@ -1,6 +1,16 @@
-use std::{collections::HashMap, env, error::Error, fs, path::{Path, PathBuf}};
+use std::{
+    collections::HashMap,
+    env,
+    error::Error,
+    fs,
+    path::{Path, PathBuf},
+};
 
-use crate::{tracer::TOP_LEVEL_FUNCTION_ID, AssignCellRecord, AssignCompoundItemRecord, AssignmentRecord, CallRecord, CellValueRecord, CompoundValueRecord, FullValueRecord, FunctionId, FunctionRecord, Line, PathId, RValue, RecordEvent, ReturnRecord, StepRecord, TraceLowLevelEvent, TraceMetadata, TypeId, TypeKind, TypeRecord, TypeSpecificInfo, VariableCellRecord, VariableId, NONE_TYPE_ID};
+use crate::{
+    AssignCellRecord, AssignCompoundItemRecord, AssignmentRecord, CallRecord, CellValueRecord, CompoundValueRecord, FullValueRecord, FunctionId,
+    FunctionRecord, Line, NONE_TYPE_ID, PathId, RValue, RecordEvent, ReturnRecord, StepRecord, TraceLowLevelEvent, TraceMetadata, TypeId, TypeKind,
+    TypeRecord, TypeSpecificInfo, VariableCellRecord, VariableId, tracer::TOP_LEVEL_FUNCTION_ID,
+};
 
 pub struct AbstractTraceWriterData {
     // trace metadata:

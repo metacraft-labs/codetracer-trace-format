@@ -2,7 +2,7 @@ use std::path::Path;
 
 use crate::fmt_trace_cmd::FmtTraceCommand;
 use clap::{Args, Parser, Subcommand};
-use runtime_tracing::{create_trace_reader, create_trace_writer, TraceEventsFileFormat};
+use runtime_tracing::{create_trace_reader, create_trace_writer, TraceEventsFileFormat, TraceWriter};
 mod fmt_trace_cmd;
 
 #[derive(Debug, Clone, Args)]
@@ -48,7 +48,7 @@ fn main() {
             let mut trace_writer = create_trace_writer("", &[], output_file_format);
             let mut trace_events = trace_reader.load_trace_events(Path::new(&convert_command.input_file)).unwrap();
             trace_writer.begin_writing_trace_events(Path::new(&convert_command.output_file)).unwrap();
-            trace_writer.append_events(&mut trace_events);
+            TraceWriter::append_events(trace_writer.as_mut(), &mut trace_events);
             trace_writer.finish_writing_trace_events().unwrap();
         }
         RuntimeTracingCliCommand::FormatTrace(fmt_trace_cmd) => {

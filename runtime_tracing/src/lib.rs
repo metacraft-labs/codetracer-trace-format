@@ -14,6 +14,7 @@ mod tracer;
 mod types;
 mod cborzstdreader;
 mod cborzstdwriter;
+mod abstracttracewriter;
 
 pub use crate::tracer::{
     create_trace_reader, create_trace_writer, NonStreamingTraceWriter, TraceEventsFileFormat, TraceReader, TraceWriter, NONE_TYPE_ID, NONE_VALUE,

@@ -22,7 +22,7 @@ pub struct CborZstdTraceWriter<'a> {
     trace_events_file_zstd_encoder: Option<Encoder<'a, File>>,
 }
 
-impl<'a> CborZstdTraceWriter<'a> {
+impl CborZstdTraceWriter<'_> {
     /// Create a new tracer instance for the given program and arguments.
     pub fn new(program: &str, args: &[String]) -> Self {
         CborZstdTraceWriter {
@@ -34,7 +34,7 @@ impl<'a> CborZstdTraceWriter<'a> {
     }
 }
 
-impl<'a> AbstractTraceWriter for CborZstdTraceWriter<'a> {
+impl AbstractTraceWriter for CborZstdTraceWriter<'_> {
     fn get_data(&self) -> &AbstractTraceWriterData {
         &self.base
     }
@@ -58,7 +58,7 @@ impl<'a> AbstractTraceWriter for CborZstdTraceWriter<'a> {
     }
 }
 
-impl<'a> TraceWriter for CborZstdTraceWriter<'a> {
+impl TraceWriter for CborZstdTraceWriter<'_> {
     fn begin_writing_trace_events(&mut self, path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
         let pb = path.to_path_buf();
         self.trace_events_path = Some(pb.clone());

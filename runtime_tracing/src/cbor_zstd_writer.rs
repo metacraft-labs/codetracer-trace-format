@@ -47,7 +47,7 @@ impl<'a> AbstractTraceWriter for CborZstdTraceWriter<'a> {
         let buf: Vec<u8> = Vec::new();
         let q = cbor4ii::serde::to_vec(buf, &event).unwrap();
         if let Some(enc) = &mut self.trace_events_file_zstd_encoder {
-            enc.write(&q).unwrap();
+            enc.write_all(&q).unwrap();
         }
     }
 

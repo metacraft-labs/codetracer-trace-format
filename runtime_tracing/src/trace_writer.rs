@@ -3,9 +3,13 @@ use std::{error::Error, path::Path};
 use crate::{abstract_trace_writer::AbstractTraceWriter, EventLogKind, FullValueRecord, FunctionId, Line, PassBy, PathId, Place, RValue, TraceLowLevelEvent, TypeId, TypeKind, TypeRecord, ValueRecord, VariableId};
 
 pub trait TraceWriter: AbstractTraceWriter {
-    fn begin_writing_trace_metadata(&mut self, path: &Path) -> Result<(), Box<dyn Error>>;
+    fn begin_writing_trace_metadata(&mut self, path: &Path) -> Result<(), Box<dyn Error>> {
+        AbstractTraceWriter::begin_writing_trace_metadata(self, path)
+    }
     fn begin_writing_trace_events(&mut self, path: &Path) -> Result<(), Box<dyn Error>>;
-    fn begin_writing_trace_paths(&mut self, path: &Path) -> Result<(), Box<dyn Error>>;
+    fn begin_writing_trace_paths(&mut self, path: &Path) -> Result<(), Box<dyn Error>> {
+        AbstractTraceWriter::begin_writing_trace_paths(self, path)
+    }
 
     fn start(&mut self, path: &Path, line: Line) {
         AbstractTraceWriter::start(self, path, line)
@@ -113,7 +117,11 @@ pub trait TraceWriter: AbstractTraceWriter {
         AbstractTraceWriter::append_events(self, events)
     }
 
-    fn finish_writing_trace_metadata(&mut self) -> Result<(), Box<dyn Error>>;
+    fn finish_writing_trace_metadata(&mut self) -> Result<(), Box<dyn Error>> {
+        AbstractTraceWriter::finish_writing_trace_metadata(self)
+    }
     fn finish_writing_trace_events(&mut self) -> Result<(), Box<dyn Error>>;
-    fn finish_writing_trace_paths(&mut self) -> Result<(), Box<dyn Error>>;
+    fn finish_writing_trace_paths(&mut self) -> Result<(), Box<dyn Error>> {
+        AbstractTraceWriter::finish_writing_trace_paths(self)
+    }
 }

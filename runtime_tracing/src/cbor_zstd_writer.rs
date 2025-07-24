@@ -1,7 +1,7 @@
-use std::{collections::HashMap, env, fs::{self, File}, io::Write, path::PathBuf};
+use std::{collections::HashMap, env, fs::File, io::Write, path::PathBuf};
 use zeekstd::Encoder;
 
-use crate::{abstract_trace_writer::{AbstractTraceWriter, AbstractTraceWriterData}, trace_writer::TraceWriter, TraceLowLevelEvent, TraceMetadata};
+use crate::{abstract_trace_writer::{AbstractTraceWriter, AbstractTraceWriterData}, trace_writer::TraceWriter, TraceLowLevelEvent};
 
 /// The next 3 bytes are reserved/version info.
 /// The header is 8 bytes in size, ensuring 64-bit alignment for the rest of the file.
@@ -13,10 +13,8 @@ pub const HEADERV1: &[u8] = &[
 pub struct StreamingTraceWriter<'a> {
     base: AbstractTraceWriterData,
 
-    trace_metadata_path: Option<PathBuf>,
     trace_events_path: Option<PathBuf>,
     trace_events_file_zstd_encoder: Option<Encoder<'a, File>>,
-    trace_paths_path: Option<PathBuf>,
 }
 
 impl<'a> StreamingTraceWriter<'a> {
@@ -34,12 +32,13 @@ impl<'a> StreamingTraceWriter<'a> {
                 functions: HashMap::new(),
                 variables: HashMap::new(),
                 types: HashMap::new(),
+
+                trace_metadata_path: None,
+                trace_paths_path: None,
             },
 
-            trace_metadata_path: None,
             trace_events_path: None,
             trace_events_file_zstd_encoder: None,
-            trace_paths_path: None,
         }
     }
 }
@@ -69,11 +68,6 @@ impl<'a> AbstractTraceWriter for StreamingTraceWriter<'a> {
 }
 
 impl<'a> TraceWriter for StreamingTraceWriter<'a> {
-    fn begin_writing_trace_metadata(&mut self, path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
-        self.trace_metadata_path = Some(path.to_path_buf());
-        Ok(())
-    }
-
     fn begin_writing_trace_events(&mut self, path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
         let pb = path.to_path_buf();
         self.trace_events_path = Some(pb.clone());
@@ -84,26 +78,6 @@ impl<'a> TraceWriter for StreamingTraceWriter<'a> {
         Ok(())
     }
 
-    fn begin_writing_trace_paths(&mut self, path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
-        self.trace_paths_path = Some(path.to_path_buf());
-        Ok(())
-    }
-
-    fn finish_writing_trace_metadata(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        if let Some(path) = &self.trace_metadata_path {
-            let trace_metadata = TraceMetadata {
-                program: self.get_data().program.clone(),
-                args: self.get_data().args.clone(),
-                workdir: self.get_data().workdir.clone(),
-            };
-            let json = serde_json::to_string(&trace_metadata)?;
-            fs::write(path, json)?;
-            Ok(())
-        } else {
-            panic!("finish_writing_trace_metadata() called without previous call to begin_writing_trace_metadata()");
-        }
-    }
-
     fn finish_writing_trace_events(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(enc) = self.trace_events_file_zstd_encoder.take() {
             enc.finish()?;
@@ -111,16 +85,6 @@ impl<'a> TraceWriter for StreamingTraceWriter<'a> {
             Ok(())
         } else {
             panic!("finish_writing_trace_events() called without previous call to begin_writing_trace_events()");
-        }
-    }
-
-    fn finish_writing_trace_paths(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        if let Some(path) = &self.trace_paths_path {
-            let json = serde_json::to_string(&self.get_data().path_list)?;
-            fs::write(path, json)?;
-            Ok(())
-        } else {
-            panic!("finish_writing_trace_paths() called without previous call to begin_writing_trace_paths()");
         }
     }
 }

@@ -1,6 +1,6 @@
 use std::{collections::HashMap, env, error::Error, fs, path::{Path, PathBuf}};
 
-use crate::{abstract_trace_writer::{AbstractTraceWriter, AbstractTraceWriterData}, TraceEventsFileFormat, TraceLowLevelEvent, TraceMetadata, TraceWriter};
+use crate::{abstract_trace_writer::{AbstractTraceWriter, AbstractTraceWriterData}, TraceEventsFileFormat, TraceLowLevelEvent, TraceWriter};
 
 /// State machine used to record [`TraceLowLevelEvent`]s.
 ///
@@ -14,9 +14,7 @@ pub struct NonStreamingTraceWriter {
     pub events: Vec<TraceLowLevelEvent>,
 
     format: TraceEventsFileFormat,
-    trace_metadata_path: Option<PathBuf>,
     trace_events_path: Option<PathBuf>,
-    trace_paths_path: Option<PathBuf>,
 }
 
 impl NonStreamingTraceWriter {
@@ -34,14 +32,15 @@ impl NonStreamingTraceWriter {
                 functions: HashMap::new(),
                 variables: HashMap::new(),
                 types: HashMap::new(),
+
+                trace_metadata_path: None,
+                trace_paths_path: None,
             },
 
             events: vec![],
 
             format: TraceEventsFileFormat::Binary,
-            trace_metadata_path: None,
             trace_events_path: None,
-            trace_paths_path: None,
         }
     }
 
@@ -69,34 +68,9 @@ impl AbstractTraceWriter for NonStreamingTraceWriter {
 }
 
 impl TraceWriter for NonStreamingTraceWriter {
-    fn begin_writing_trace_metadata(&mut self, path: &Path) -> Result<(), Box<dyn Error>> {
-        self.trace_metadata_path = Some(path.to_path_buf());
-        Ok(())
-    }
-
     fn begin_writing_trace_events(&mut self, path: &Path) -> Result<(), Box<dyn Error>> {
         self.trace_events_path = Some(path.to_path_buf());
         Ok(())
-    }
-
-    fn begin_writing_trace_paths(&mut self, path: &Path) -> Result<(), Box<dyn Error>> {
-        self.trace_paths_path = Some(path.to_path_buf());
-        Ok(())
-    }
-
-    fn finish_writing_trace_metadata(&mut self) -> Result<(), Box<dyn Error>> {
-        if let Some(path) = &self.trace_metadata_path {
-            let trace_metadata = TraceMetadata {
-                program: self.get_data().program.clone(),
-                args: self.get_data().args.clone(),
-                workdir: self.get_data().workdir.clone(),
-            };
-            let json = serde_json::to_string(&trace_metadata)?;
-            fs::write(path, json)?;
-            Ok(())
-        } else {
-            panic!("finish_writing_trace_metadata() called without previous call to begin_writing_trace_metadata()");
-        }
     }
 
     fn finish_writing_trace_events(&mut self) -> Result<(), Box<dyn Error>> {
@@ -117,16 +91,6 @@ impl TraceWriter for NonStreamingTraceWriter {
             Ok(())
         } else {
             panic!("finish_writing_trace_events() called without previous call to begin_writing_trace_events()");
-        }
-    }
-
-    fn finish_writing_trace_paths(&mut self) -> Result<(), Box<dyn Error>> {
-        if let Some(path) = &self.trace_paths_path {
-            let json = serde_json::to_string(&self.get_data().path_list)?;
-            fs::write(path, json)?;
-            Ok(())
-        } else {
-            panic!("finish_writing_trace_paths() called without previous call to begin_writing_trace_paths()");
         }
     }
 }

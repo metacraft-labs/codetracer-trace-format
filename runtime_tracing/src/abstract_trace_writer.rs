@@ -1,6 +1,6 @@
-use std::{collections::HashMap, path::PathBuf};
+use std::{collections::HashMap, error::Error, fs, path::{Path, PathBuf}};
 
-use crate::{tracer::TOP_LEVEL_FUNCTION_ID, AssignCellRecord, AssignCompoundItemRecord, AssignmentRecord, CallRecord, CellValueRecord, CompoundValueRecord, FullValueRecord, FunctionId, FunctionRecord, Line, PathId, RValue, RecordEvent, ReturnRecord, StepRecord, TraceLowLevelEvent, TypeId, TypeKind, TypeRecord, TypeSpecificInfo, VariableCellRecord, VariableId, NONE_TYPE_ID};
+use crate::{tracer::TOP_LEVEL_FUNCTION_ID, AssignCellRecord, AssignCompoundItemRecord, AssignmentRecord, CallRecord, CellValueRecord, CompoundValueRecord, FullValueRecord, FunctionId, FunctionRecord, Line, PathId, RValue, RecordEvent, ReturnRecord, StepRecord, TraceLowLevelEvent, TraceMetadata, TypeId, TypeKind, TypeRecord, TypeSpecificInfo, VariableCellRecord, VariableId, NONE_TYPE_ID};
 
 pub struct AbstractTraceWriterData {
     // trace metadata:
@@ -15,6 +15,9 @@ pub struct AbstractTraceWriterData {
     pub functions: HashMap<String, FunctionId>,
     pub variables: HashMap<String, VariableId>,
     pub types: HashMap<String, TypeId>,
+
+    pub trace_metadata_path: Option<PathBuf>,
+    pub trace_paths_path: Option<PathBuf>,
 }
 
 pub trait AbstractTraceWriter {
@@ -23,6 +26,16 @@ pub trait AbstractTraceWriter {
 
     fn add_event(&mut self, event: TraceLowLevelEvent);
     fn append_events(&mut self, events: &mut Vec<TraceLowLevelEvent>);
+
+    fn begin_writing_trace_metadata(&mut self, path: &Path) -> Result<(), Box<dyn Error>> {
+        self.get_mut_data().trace_metadata_path = Some(path.to_path_buf());
+        Ok(())
+    }
+
+    fn begin_writing_trace_paths(&mut self, path: &Path) -> Result<(), Box<dyn Error>> {
+        self.get_mut_data().trace_paths_path = Some(path.to_path_buf());
+        Ok(())
+    }
 
     fn start(&mut self, path: &std::path::Path, line: Line) {
         let function_id = self.ensure_function_id("<toplevel>", path, line);
@@ -239,5 +252,30 @@ pub trait AbstractTraceWriter {
 
     fn drop_last_step(&mut self) {
         self.add_event(TraceLowLevelEvent::DropLastStep);
+    }
+
+    fn finish_writing_trace_metadata(&mut self) -> Result<(), Box<dyn Error>> {
+        if let Some(path) = &self.get_data().trace_metadata_path {
+            let trace_metadata = TraceMetadata {
+                program: self.get_data().program.clone(),
+                args: self.get_data().args.clone(),
+                workdir: self.get_data().workdir.clone(),
+            };
+            let json = serde_json::to_string(&trace_metadata)?;
+            fs::write(path, json)?;
+            Ok(())
+        } else {
+            panic!("finish_writing_trace_metadata() called without previous call to begin_writing_trace_metadata()");
+        }
+    }
+
+    fn finish_writing_trace_paths(&mut self) -> Result<(), Box<dyn Error>> {
+        if let Some(path) = &self.get_data().trace_paths_path {
+            let json = serde_json::to_string(&self.get_data().path_list)?;
+            fs::write(path, json)?;
+            Ok(())
+        } else {
+            panic!("finish_writing_trace_paths() called without previous call to begin_writing_trace_paths()");
+        }
     }
 }

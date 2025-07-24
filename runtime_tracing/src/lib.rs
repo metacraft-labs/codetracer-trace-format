@@ -16,11 +16,13 @@ mod cbor_zstd_reader;
 mod cbor_zstd_writer;
 mod abstract_trace_writer;
 mod trace_readers;
+mod trace_writer;
 
 pub use crate::tracer::{
-    create_trace_reader, create_trace_writer, NonStreamingTraceWriter, TraceEventsFileFormat, TraceWriter, NONE_TYPE_ID, NONE_VALUE,
+    create_trace_reader, create_trace_writer, NonStreamingTraceWriter, TraceEventsFileFormat, NONE_TYPE_ID, NONE_VALUE,
 };
 pub use crate::trace_readers::TraceReader;
+pub use crate::trace_writer::TraceWriter;
 pub use crate::types::*;
 
 pub mod trace_capnp {

@@ -60,6 +60,15 @@ Each bullet below represents a low-level operation translating a single `sys.mon
 - Track every file path referenced; copy each into the trace directory under `files/`.
 - Record `VariableName`, `Type`, and `Value` entries when variables are inspected or logged.
 
+## Value Translation and Recording
+- Maintain a type registry that maps Python `type` objects to `runtime_tracing` `Type` entries and assigns new `type_id` values on first encounter.
+- Convert primitives (`int`, `float`, `bool`, `None`, `str`) directly to their corresponding `ValueRecord` variants.
+- Encode `bytes` and `bytearray` as `Raw` records containing base64 text to preserve binary data.
+- Represent lists and sets as `Sequence` records and tuples as `Tuple` records, converting each element recursively.
+- Serialize dictionaries as a `Sequence` of two-element `Tuple` records for key/value pairs to avoid fixed field layouts.
+- For objects with accessible attributes, emit a `Struct` record with sorted field names; fall back to `Raw` with `repr(obj)` when inspection is unsafe.
+- Track object identities to detect cycles and reuse `Reference` records with `id(obj)` for repeated structures.
+
 ## Shutdown
 - On `stop_tracing`, call `sys.monitoring.set_events` with `NO_EVENTS` for the tool ID.
 - Unregister callbacks and free the tool ID with `sys.monitoring.free_tool_id`.

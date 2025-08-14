@@ -65,6 +65,21 @@ Each bullet below represents a low-level operation translating a single `sys.mon
 - Unregister callbacks and free the tool ID with `sys.monitoring.free_tool_id`.
 - Close the writer and ensure all buffered events are flushed to disk.
 
+## Current Limitations
+- **No structured support for threads or async tasks** – the trace format lacks explicit identifiers for concurrent execution.
+  Distinguishing events emitted by different Python threads or `asyncio` tasks requires ad hoc `Event` entries, complicating
+  analysis and preventing downstream tools from reasoning about scheduling.
+- **Generic `Event` log** – several `sys.monitoring` notifications like resume, unwind, and branch outcomes have no dedicated
+  `runtime_tracing` variant. They must be encoded as free‑form `Event` logs, which reduces machine readability and hinders
+  automation.
+- **Heavy value snapshots** – arguments and returns expect full `ValueRecord` structures. Serializing arbitrary Python objects is
+  expensive and often degrades to lossy string dumps, limiting the visibility of rich runtime state.
+- **Append‑only path and function tables** – `runtime_tracing` assumes files and functions are discovered once and never change.
+  Dynamically generated code (`eval`, REPL snippets) forces extra bookkeeping and cannot update earlier entries, making
+  dynamic features awkward to trace.
+- **No built‑in compression or streaming** – traces are written as monolithic JSON or binary files. Long sessions quickly grow in
+  size and cannot be streamed to remote consumers without additional tooling.
+
 ## Future Extensions
 - Add filtering to enable subsets of events for performance-sensitive scenarios.
 - Support streaming traces over a socket for live debugging.

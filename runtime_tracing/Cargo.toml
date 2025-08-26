@@ -19,6 +19,7 @@ num-derive = "0.4"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_repr = "0.1"
+schemars = "0.8.2"
 capnp = "0.21.1"
 zeekstd = "0.5.0"
 cbor4ii = { version = "1.0.0", features = ["serde1", "use_std"] }

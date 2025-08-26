@@ -10,6 +10,7 @@ use crate::base64;
 use num_derive::FromPrimitive;
 use serde::{Deserialize, Serialize};
 use serde_repr::*;
+use schemars::JsonSchema;
 
 // currently, we do assume that we record the whole program
 // so, we try to include minimal amount of data,
@@ -396,7 +397,7 @@ pub enum ValueRecord {
 }
 
 /// Categories of types recorded in the trace.
-#[derive(Debug, Default, Copy, Clone, FromPrimitive, Serialize_repr, Deserialize_repr, PartialEq)]
+#[derive(Debug, Default, Copy, Clone, FromPrimitive, Serialize_repr, Deserialize_repr, PartialEq, JsonSchema)]
 #[repr(u8)]
 pub enum TypeKind {
     #[default]
@@ -455,7 +456,7 @@ pub enum TypeKind {
 }
 
 /// Kinds of I/O or log events that can appear in a trace.
-#[derive(Debug, Default, Copy, Clone, FromPrimitive, Serialize_repr, Deserialize_repr, PartialEq)]
+#[derive(Debug, Default, Copy, Clone, FromPrimitive, Serialize_repr, Deserialize_repr, PartialEq, JsonSchema)]
 #[repr(u8)]
 pub enum EventLogKind {
     #[default]

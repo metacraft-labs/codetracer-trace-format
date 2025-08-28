@@ -23,6 +23,11 @@ schemars = "0.8.2"
 capnp = "0.21.1"
 cbor4ii = { version = "1.0.0", features = ["serde1", "use_std"] }
 fscommon = "0.1.1"
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+zeekstd = "0.6.0"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
 ruzstd = "0.8.1"
 
 [build-dependencies]

@@ -1,7 +1,8 @@
 use std::io::{self, BufRead, BufReader, Read, Seek, Write};
 
 use fscommon::StreamSlice;
-use zeekstd::Decoder;
+
+use ruzstd::decoding::StreamingDecoder;
 
 use crate::{TraceLowLevelEvent, cbor_zstd_writer::HEADERV1};
 
@@ -24,7 +25,7 @@ pub fn read_trace(input: &mut (impl Read + Write + Seek)) -> Result<Vec<TraceLow
     input.seek(io::SeekFrom::Start(0))?;
     let input2 = StreamSlice::new(&mut *input, 8, end_pos)?;
 
-    let decoder = Decoder::new(input2)?;
+    let decoder = StreamingDecoder::new(input2)?;
     let mut buf_reader = BufReader::new(decoder);
 
     let mut result: Vec<TraceLowLevelEvent> = vec![];

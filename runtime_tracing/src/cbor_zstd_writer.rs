@@ -1,15 +1,11 @@
-use std::{
-    fs::File,
-    io::{Cursor, Write},
-    path::PathBuf,
-};
+use std::{fs::File, io::Write, path::PathBuf};
 
 use zeekstd::Encoder;
 
 use crate::{
-    TraceLowLevelEvent,
     abstract_trace_writer::{AbstractTraceWriter, AbstractTraceWriterData},
     trace_writer::TraceWriter,
+    TraceLowLevelEvent,
 };
 
 /// The next 3 bytes are reserved/version info.

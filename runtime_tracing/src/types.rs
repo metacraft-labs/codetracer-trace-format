@@ -49,6 +49,10 @@ pub enum TraceLowLevelEvent {
     VariableCell(VariableCellRecord),
     DropVariable(VariableId),
 
+    ThreadStart(ThreadId),
+    ThreadExit(ThreadId),
+    ThreadSwitch(ThreadId),
+
     // normal event, workaround for cases when we need to drop
     // a step event, but the trace needs to be append-only
     DropLastStep,
@@ -241,6 +245,15 @@ pub struct FunctionId(pub usize);
 
 impl Into<usize> for FunctionId {
     fn into(self) -> usize {
+        self.0
+    }
+}
+
+#[derive(Hash, Debug, Default, Copy, Clone, Serialize, Deserialize, Ord, PartialOrd, Eq, PartialEq)]
+pub struct ThreadId(pub u64);
+
+impl Into<u64> for ThreadId {
+    fn into(self) -> u64 {
         self.0
     }
 }

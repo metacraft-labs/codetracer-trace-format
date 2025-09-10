@@ -449,6 +449,18 @@ pub fn write_trace(q: &[crate::TraceLowLevelEvent], output: &mut impl std::io::W
                 let mut ret_place = ret.init_place();
                 ret_place.set_p(vcr.place.0.try_into().unwrap());
             }
+            TraceLowLevelEvent::ThreadStart(tid) => {
+                let mut ret = event.init_thread_start();
+                ret.set_i(tid.0);
+            }
+            TraceLowLevelEvent::ThreadExit(tid) => {
+                let mut ret = event.init_thread_exit();
+                ret.set_i(tid.0);
+            }
+            TraceLowLevelEvent::ThreadSwitch(tid) => {
+                let mut ret = event.init_thread_switch();
+                ret.set_i(tid.0);
+            }
         }
     }
 
@@ -715,6 +727,15 @@ pub fn read_trace(input: &mut impl std::io::BufRead) -> ::capnp::Result<Vec<crat
             }
             Ok(trace::trace_low_level_event::Which::DropVariable(variable_id)) => {
                 TraceLowLevelEvent::DropVariable(crate::VariableId(variable_id?.get_i().try_into().unwrap()))
+            }
+            Ok(trace::trace_low_level_event::Which::ThreadStart(thread_id)) => {
+                TraceLowLevelEvent::ThreadStart(crate::ThreadId(thread_id?.get_i()))
+            }
+            Ok(trace::trace_low_level_event::Which::ThreadExit(thread_id)) => {
+                TraceLowLevelEvent::ThreadExit(crate::ThreadId(thread_id?.get_i()))
+            }
+            Ok(trace::trace_low_level_event::Which::ThreadSwitch(thread_id)) => {
+                TraceLowLevelEvent::ThreadSwitch(crate::ThreadId(thread_id?.get_i()))
             }
             Ok(trace::trace_low_level_event::Which::DropLastStep(())) => TraceLowLevelEvent::DropLastStep,
             Err(_) => {

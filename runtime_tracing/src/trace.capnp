@@ -31,6 +31,10 @@ struct Trace {
             variableCell @18 :VariableCellRecord;
             dropVariable @19 :VariableId;
 
+            threadStart @21 :ThreadId;
+            threadExit @22 :ThreadId;
+            threadSwitch @23 :ThreadId;
+
             dropLastStep @20 :Void;
         }
     }
@@ -113,6 +117,10 @@ struct Trace {
 
     struct FunctionId {
         i @0 :Int64;
+    }
+
+    struct ThreadId {
+        i @0 :UInt64;
     }
 
     struct CallRecord {

@@ -7,9 +7,7 @@ use std::{
 };
 
 use crate::{
-    AssignCellRecord, AssignCompoundItemRecord, AssignmentRecord, CallRecord, CellValueRecord, CompoundValueRecord, FullValueRecord, FunctionId,
-    FunctionRecord, Line, NONE_TYPE_ID, PathId, RValue, RecordEvent, ReturnRecord, StepRecord, TraceLowLevelEvent, TraceMetadata, TypeId, TypeKind,
-    TypeRecord, TypeSpecificInfo, VariableCellRecord, VariableId, tracer::TOP_LEVEL_FUNCTION_ID,
+    tracer::TOP_LEVEL_FUNCTION_ID, AssignCellRecord, AssignCompoundItemRecord, AssignmentRecord, CallRecord, CellValueRecord, CompoundValueRecord, FullValueRecord, FunctionId, FunctionRecord, Line, PathId, RValue, RecordEvent, ReturnRecord, StepRecord, ThreadId, TraceLowLevelEvent, TraceMetadata, TypeId, TypeKind, TypeRecord, TypeSpecificInfo, VariableCellRecord, VariableId, NONE_TYPE_ID
 };
 
 pub struct AbstractTraceWriterData {
@@ -278,6 +276,18 @@ pub trait AbstractTraceWriter {
             .map(|variable_dependency| self.ensure_variable_id(variable_dependency))
             .collect();
         RValue::Compound(variable_ids)
+    }
+
+    fn thread_start(&mut self, thread_id: ThreadId) {
+        self.add_event(TraceLowLevelEvent::ThreadStart(thread_id));
+    }
+
+    fn thread_exit(&mut self, thread_id: ThreadId) {
+        self.add_event(TraceLowLevelEvent::ThreadExit(thread_id));
+    }
+
+    fn thread_switch(&mut self, thread_id: ThreadId) {
+        self.add_event(TraceLowLevelEvent::ThreadSwitch(thread_id));
     }
 
     fn drop_last_step(&mut self) {

@@ -40,6 +40,11 @@ There are some actual usages of it as well which can be also used as an example:
 
 One can always directly produce the same traces from various languages. We're open for cooperation or discussion on usecases!
 
+### Tutorial
+
+For a step-by-step guide on recording traces with this crate, see the
+[tutorial](../docs/tutorial.md).
+
 ### Building the Documentation
 
 The library API docs can be built locally with:

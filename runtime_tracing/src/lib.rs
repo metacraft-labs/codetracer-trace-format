@@ -8,38 +8,59 @@
 //! This crate provides the [`Tracer`] type for emitting trace events and a
 //! collection of serializable structures describing the trace format.
 //! The format is documented in `docs/` and the README.
+
+#[cfg(feature = "writers_and_readers")]
 mod abstract_trace_writer;
 mod base64;
+#[cfg(feature = "writers_and_readers")]
 mod capnptrace;
 
+#[cfg(feature = "writers_and_readers")]
 #[cfg(target_arch = "wasm32")]
 #[path = "./cbor_zstd_reader_wasm.rs"]
 mod cbor_zstd_reader;
+#[cfg(feature = "writers_and_readers")]
 #[cfg(target_arch = "wasm32")]
 #[path = "./cbor_zstd_writer_wasm.rs"]
 mod cbor_zstd_writer;
 
 #[cfg(not(target_arch = "wasm32"))]
+#[cfg(feature = "writers_and_readers")]
 mod cbor_zstd_reader;
 #[cfg(not(target_arch = "wasm32"))]
+#[cfg(feature = "writers_and_readers")]
 mod cbor_zstd_writer;
 
+#[cfg(feature = "writers_and_readers")]
 mod non_streaming_trace_writer;
+#[cfg(feature = "writers_and_readers")]
 mod trace_readers;
+#[cfg(feature = "writers_and_readers")]
 mod trace_writer;
+#[cfg(feature = "writers_and_readers")]
 mod tracer;
+
+// enabled always!
 mod types;
 
+#[cfg(feature = "writers_and_readers")]
 pub use crate::non_streaming_trace_writer::NonStreamingTraceWriter;
+#[cfg(feature = "writers_and_readers")]
 pub use crate::trace_readers::TraceReader;
+#[cfg(feature = "writers_and_readers")]
 pub use crate::trace_writer::TraceWriter;
-pub use crate::tracer::{NONE_TYPE_ID, NONE_VALUE, TraceEventsFileFormat, create_trace_reader, create_trace_writer};
+#[cfg(feature = "writers_and_readers")]
+pub use crate::tracer::{create_trace_reader, create_trace_writer, TraceEventsFileFormat, NONE_TYPE_ID, NONE_VALUE};
+
+// enabled always!
 pub use crate::types::*;
 
+#[cfg(feature = "writers_and_readers")]
 pub mod trace_capnp {
     include!(concat!(env!("OUT_DIR"), "/src/trace_capnp.rs"));
 }
 
+#[cfg(feature = "writers_and_readers")]
 #[cfg(test)]
 mod tests {
     use super::*;

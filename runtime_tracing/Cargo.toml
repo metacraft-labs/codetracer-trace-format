@@ -1,6 +1,6 @@
 [package]
 name = "runtime_tracing"
-version = "0.15.0"
+version = "0.16.0"
 edition = "2024"
 authors = ["Metacraft Labs Ltd"]
 description = "A library for the schema and tracing helpers for the CodeTracer db trace format"
@@ -20,19 +20,25 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_repr = "0.1"
 schemars = "0.8.2"
-capnp = "0.21.1"
-cbor4ii = { version = "1.0.0", features = ["serde1", "use_std"] }
-fscommon = "0.1.1"
+capnp = { version = "0.21.1", optional = true }
+cbor4ii = { version = "1.0.0", features = ["serde1", "use_std"], optional = true }
+fscommon = { version = "0.1.1", optional = true }
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-zeekstd = "0.6.0"
+zeekstd = { version = "0.6.0", optional = true }
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-ruzstd = "0.8.1"
+ruzstd = { version = "0.8.1", optional = true }
 
 [build-dependencies]
-capnpc = "0.21.0"
+capnpc = { version = "0.21.0", optional = true }
 
 [lib]
 name = "runtime_tracing"
 path = "src/lib.rs"
+
+[features]
+writers_and_readers = ["dep:capnp", "dep:cbor4ii", "dep:fscommon", "dep:zeekstd", "dep:ruzstd", "dep:capnpc"]
+# to disable the default features, a dependency must use: `default-features = false ` !
+#   https://doc.rust-lang.org/cargo/reference/features.html
+default = ["writers_and_readers"]

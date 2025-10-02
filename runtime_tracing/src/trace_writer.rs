@@ -1,8 +1,9 @@
 use std::{error::Error, path::Path};
 
-use crate::{
+use crate::abstract_trace_writer::AbstractTraceWriter;
+use codetracer_trace_types::{
     EventLogKind, FullValueRecord, FunctionId, Line, PassBy, PathId, Place, RValue, TraceLowLevelEvent, TypeId, TypeKind, TypeRecord, ValueRecord,
-    VariableId, abstract_trace_writer::AbstractTraceWriter,
+    VariableId,
 };
 
 pub trait TraceWriter: AbstractTraceWriter {

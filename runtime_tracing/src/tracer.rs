@@ -3,7 +3,7 @@
 use crate::TraceWriter;
 use crate::non_streaming_trace_writer::NonStreamingTraceWriter;
 use crate::trace_readers::{BinaryTraceReader, JsonTraceReader, TraceReader};
-use crate::types::{FunctionId, TypeId, ValueRecord};
+use codetracer_trace_types::{FunctionId, TypeId, ValueRecord};
 
 #[derive(Debug, Clone, Copy)]
 pub enum TraceEventsFileFormat {

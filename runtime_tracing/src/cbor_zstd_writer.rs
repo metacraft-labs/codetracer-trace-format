@@ -5,8 +5,8 @@ use zeekstd::Encoder;
 use crate::{
     abstract_trace_writer::{AbstractTraceWriter, AbstractTraceWriterData},
     trace_writer::TraceWriter,
-    TraceLowLevelEvent,
 };
+use codetracer_trace_types::TraceLowLevelEvent;
 
 /// The next 3 bytes are reserved/version info.
 /// The header is 8 bytes in size, ensuring 64-bit alignment for the rest of the file.

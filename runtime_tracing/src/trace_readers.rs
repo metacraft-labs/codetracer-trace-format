@@ -5,7 +5,8 @@ use std::{
     path::Path,
 };
 
-use crate::{TraceEventsFileFormat, TraceLowLevelEvent, capnptrace::HEADER, cbor_zstd_writer::HEADERV1};
+use crate::{TraceEventsFileFormat, capnptrace::HEADER, cbor_zstd_writer::HEADERV1};
+use codetracer_trace_types::TraceLowLevelEvent;
 
 pub trait TraceReader {
     fn load_trace_events(&mut self, path: &Path) -> Result<Vec<TraceLowLevelEvent>, Box<dyn Error>>;

@@ -9,7 +9,6 @@
 //! collection of serializable structures describing the trace format.
 //! The format is documented in `docs/` and the README.
 mod abstract_trace_writer;
-mod base64;
 mod capnptrace;
 
 #[cfg(target_arch = "wasm32")]
@@ -28,13 +27,12 @@ mod non_streaming_trace_writer;
 mod trace_readers;
 mod trace_writer;
 mod tracer;
-mod types;
 
 pub use crate::non_streaming_trace_writer::NonStreamingTraceWriter;
 pub use crate::trace_readers::TraceReader;
 pub use crate::trace_writer::TraceWriter;
 pub use crate::tracer::{NONE_TYPE_ID, NONE_VALUE, TraceEventsFileFormat, create_trace_reader, create_trace_writer};
-pub use crate::types::*;
+//pub use crate::types::*;
 
 pub mod trace_capnp {
     include!(concat!(env!("OUT_DIR"), "/src/trace_capnp.rs"));
@@ -43,6 +41,7 @@ pub mod trace_capnp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codetracer_trace_types::*;
     use std::path::Path;
     // use std::path::PathBuf;
 

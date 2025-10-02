@@ -4,7 +4,8 @@ use fscommon::StreamSlice;
 
 use zeekstd::Decoder;
 
-use crate::{TraceLowLevelEvent, cbor_zstd_writer::HEADERV1};
+use crate::{cbor_zstd_writer::HEADERV1};
+use codetracer_trace_types::TraceLowLevelEvent;
 
 fn is_at_eof<R: BufRead>(reader: &mut R) -> io::Result<bool> {
     let buffer = reader.fill_buf()?;

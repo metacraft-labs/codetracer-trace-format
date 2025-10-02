@@ -5,9 +5,10 @@ use std::{
 };
 
 use crate::{
-    TraceEventsFileFormat, TraceLowLevelEvent, TraceWriter,
+    TraceEventsFileFormat, TraceWriter,
     abstract_trace_writer::{AbstractTraceWriter, AbstractTraceWriterData},
 };
+use codetracer_trace_types::TraceLowLevelEvent;
 
 /// State machine used to record [`TraceLowLevelEvent`]s.
 ///

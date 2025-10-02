@@ -7,7 +7,10 @@ use std::{
 };
 
 use crate::{
-    tracer::TOP_LEVEL_FUNCTION_ID, AssignCellRecord, AssignCompoundItemRecord, AssignmentRecord, CallRecord, CellValueRecord, CompoundValueRecord, FullValueRecord, FunctionId, FunctionRecord, Line, PathId, RValue, RecordEvent, ReturnRecord, StepRecord, ThreadId, TraceLowLevelEvent, TraceMetadata, TypeId, TypeKind, TypeRecord, TypeSpecificInfo, VariableCellRecord, VariableId, NONE_TYPE_ID
+    tracer::TOP_LEVEL_FUNCTION_ID, NONE_TYPE_ID
+};
+use codetracer_trace_types::{
+    AssignCellRecord, AssignCompoundItemRecord, AssignmentRecord, BindVariableRecord, CallRecord, CellValueRecord, CompoundValueRecord, EventLogKind, FullValueRecord, FunctionId, FunctionRecord, Line, PassBy, PathId, Place, RValue, RecordEvent, ReturnRecord, StepRecord, ThreadId, TraceLowLevelEvent, TraceMetadata, TypeId, TypeKind, TypeRecord, TypeSpecificInfo, ValueRecord, VariableCellRecord, VariableId
 };
 
 pub struct AbstractTraceWriterData {
@@ -98,12 +101,12 @@ pub trait AbstractTraceWriter {
         *self.get_data().functions.get(function_name).unwrap()
     }
 
-    fn ensure_type_id(&mut self, kind: crate::TypeKind, lang_type: &str) -> TypeId {
+    fn ensure_type_id(&mut self, kind: TypeKind, lang_type: &str) -> TypeId {
         let typ = self.to_raw_type(kind, lang_type);
         self.ensure_raw_type_id(typ)
     }
 
-    fn ensure_raw_type_id(&mut self, typ: crate::TypeRecord) -> TypeId {
+    fn ensure_raw_type_id(&mut self, typ: TypeRecord) -> TypeId {
         if !self.get_data().types.contains_key(&typ.lang_type) {
             let mut_data = self.get_mut_data();
             mut_data.types.insert(typ.lang_type.clone(), TypeId(mut_data.types.len()));
@@ -141,7 +144,7 @@ pub trait AbstractTraceWriter {
         self.add_event(TraceLowLevelEvent::Step(StepRecord { path_id, line }));
     }
 
-    fn register_call(&mut self, function_id: FunctionId, args: Vec<crate::FullValueRecord>) {
+    fn register_call(&mut self, function_id: FunctionId, args: Vec<FullValueRecord>) {
         // register a step for each call, the backend expects this for
         // non-toplevel calls, so
         // we ensure it directly from register_call
@@ -159,16 +162,16 @@ pub trait AbstractTraceWriter {
         self.add_event(TraceLowLevelEvent::Call(CallRecord { function_id, args }));
     }
 
-    fn arg(&mut self, name: &str, value: crate::ValueRecord) -> FullValueRecord {
+    fn arg(&mut self, name: &str, value: ValueRecord) -> FullValueRecord {
         let variable_id = self.ensure_variable_id(name);
         FullValueRecord { variable_id, value }
     }
 
-    fn register_return(&mut self, return_value: crate::ValueRecord) {
+    fn register_return(&mut self, return_value: ValueRecord) {
         self.add_event(TraceLowLevelEvent::Return(ReturnRecord { return_value }));
     }
 
-    fn register_special_event(&mut self, kind: crate::EventLogKind, content: &str) {
+    fn register_special_event(&mut self, kind: EventLogKind, content: &str) {
         self.add_event(TraceLowLevelEvent::Event(RecordEvent {
             kind,
             metadata: "".to_string(),
@@ -176,7 +179,7 @@ pub trait AbstractTraceWriter {
         }));
     }
 
-    fn to_raw_type(&self, kind: crate::TypeKind, lang_type: &str) -> crate::TypeRecord {
+    fn to_raw_type(&self, kind: TypeKind, lang_type: &str) -> TypeRecord {
         TypeRecord {
             kind,
             lang_type: lang_type.to_string(),
@@ -184,12 +187,12 @@ pub trait AbstractTraceWriter {
         }
     }
 
-    fn register_type(&mut self, kind: crate::TypeKind, lang_type: &str) {
+    fn register_type(&mut self, kind: TypeKind, lang_type: &str) {
         let typ = self.to_raw_type(kind, lang_type);
         self.add_event(TraceLowLevelEvent::Type(typ));
     }
 
-    fn register_raw_type(&mut self, typ: crate::TypeRecord) {
+    fn register_raw_type(&mut self, typ: TypeRecord) {
         self.add_event(TraceLowLevelEvent::Type(typ));
     }
 
@@ -197,7 +200,7 @@ pub trait AbstractTraceWriter {
         self.add_event(TraceLowLevelEvent::Asm(instructions.to_vec()));
     }
 
-    fn register_variable_with_full_value(&mut self, name: &str, value: crate::ValueRecord) {
+    fn register_variable_with_full_value(&mut self, name: &str, value: ValueRecord) {
         let variable_id = self.ensure_variable_id(name);
         self.register_full_value(variable_id, value);
     }
@@ -206,19 +209,19 @@ pub trait AbstractTraceWriter {
         self.add_event(TraceLowLevelEvent::VariableName(variable_name.to_string()));
     }
 
-    fn register_full_value(&mut self, variable_id: VariableId, value: crate::ValueRecord) {
+    fn register_full_value(&mut self, variable_id: VariableId, value: ValueRecord) {
         self.add_event(TraceLowLevelEvent::Value(FullValueRecord { variable_id, value }));
     }
 
-    fn register_compound_value(&mut self, place: crate::Place, value: crate::ValueRecord) {
+    fn register_compound_value(&mut self, place: Place, value: ValueRecord) {
         self.add_event(TraceLowLevelEvent::CompoundValue(CompoundValueRecord { place, value }));
     }
 
-    fn register_cell_value(&mut self, place: crate::Place, value: crate::ValueRecord) {
+    fn register_cell_value(&mut self, place: Place, value: ValueRecord) {
         self.add_event(TraceLowLevelEvent::CellValue(CellValueRecord { place, value }));
     }
 
-    fn assign_compound_item(&mut self, place: crate::Place, index: usize, item_place: crate::Place) {
+    fn assign_compound_item(&mut self, place: Place, index: usize, item_place: Place) {
         self.add_event(TraceLowLevelEvent::AssignCompoundItem(AssignCompoundItemRecord {
             place,
             index,
@@ -226,11 +229,11 @@ pub trait AbstractTraceWriter {
         }));
     }
 
-    fn assign_cell(&mut self, place: crate::Place, new_value: crate::ValueRecord) {
+    fn assign_cell(&mut self, place: Place, new_value: ValueRecord) {
         self.add_event(TraceLowLevelEvent::AssignCell(AssignCellRecord { place, new_value }));
     }
 
-    fn register_variable(&mut self, variable_name: &str, place: crate::Place) {
+    fn register_variable(&mut self, variable_name: &str, place: Place) {
         let variable_id = self.ensure_variable_id(variable_name);
         self.add_event(TraceLowLevelEvent::VariableCell(VariableCellRecord { variable_id, place }));
     }
@@ -241,7 +244,7 @@ pub trait AbstractTraceWriter {
     }
 
     // history event helpers
-    fn assign(&mut self, variable_name: &str, rvalue: crate::RValue, pass_by: crate::PassBy) {
+    fn assign(&mut self, variable_name: &str, rvalue: RValue, pass_by: PassBy) {
         let variable_id = self.ensure_variable_id(variable_name);
         self.add_event(TraceLowLevelEvent::Assignment(AssignmentRecord {
             to: variable_id,
@@ -250,9 +253,9 @@ pub trait AbstractTraceWriter {
         }));
     }
 
-    fn bind_variable(&mut self, variable_name: &str, place: crate::Place) {
+    fn bind_variable(&mut self, variable_name: &str, place: Place) {
         let variable_id = self.ensure_variable_id(variable_name);
-        self.add_event(TraceLowLevelEvent::BindVariable(crate::BindVariableRecord { variable_id, place }));
+        self.add_event(TraceLowLevelEvent::BindVariable(BindVariableRecord { variable_id, place }));
     }
 
     fn drop_variables(&mut self, variable_names: &[String]) {
@@ -264,12 +267,12 @@ pub trait AbstractTraceWriter {
         self.add_event(TraceLowLevelEvent::DropVariables(variable_ids))
     }
 
-    fn simple_rvalue(&mut self, variable_name: &str) -> crate::RValue {
+    fn simple_rvalue(&mut self, variable_name: &str) -> RValue {
         let variable_id = self.ensure_variable_id(variable_name);
         RValue::Simple(variable_id)
     }
 
-    fn compound_rvalue(&mut self, variable_dependencies: &[String]) -> crate::RValue {
+    fn compound_rvalue(&mut self, variable_dependencies: &[String]) -> RValue {
         let variable_ids: Vec<VariableId> = variable_dependencies
             .to_vec()
             .iter()

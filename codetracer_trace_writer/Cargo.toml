@@ -1,0 +1,7 @@
+[package]
+name = "codetracer_trace_writer"
+version = "0.16.0"
+edition = "2024"
+
+[dependencies]
+codetracer_trace_types.workspace = true

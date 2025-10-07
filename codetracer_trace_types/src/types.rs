@@ -18,6 +18,11 @@ use schemars::JsonSchema;
 // afterwards in postprocessing
 // this assumption can change in the future
 
+pub const NONE_TYPE_ID: TypeId = TypeId(0);
+pub const NONE_VALUE: ValueRecord = ValueRecord::None { type_id: NONE_TYPE_ID };
+
+pub const TOP_LEVEL_FUNCTION_ID: FunctionId = FunctionId(0);
+
 /// Low level building blocks that make up a recorded trace.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TraceLowLevelEvent {

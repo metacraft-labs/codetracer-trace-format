@@ -2,6 +2,8 @@
 resolver = "2"
 members = [
     "codetracer_trace_types",
+    "codetracer_trace_reader",
+    "codetracer_trace_writer",
     "runtime_tracing",
     "runtime_tracing_cli",
     "trace_formatter",

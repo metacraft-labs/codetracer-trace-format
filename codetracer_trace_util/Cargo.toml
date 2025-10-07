@@ -1,5 +1,5 @@
 [package]
-name = "runtime_tracing_cli"
+name = "codetracer_trace_util"
 version = "0.1.0"
 edition = "2021"
 

@@ -1,0 +1,11 @@
+[package]
+name = "codetracer_trace_format_capnp"
+version = "0.16.0"
+edition = "2024"
+
+[dependencies]
+codetracer_trace_types.workspace = true
+capnp = "0.21.1"
+
+[build-dependencies]
+capnpc = "0.21.0"

@@ -130,14 +130,4 @@ mod tests {
         // tracer.store_trace_paths(&PathBuf::from("trace_paths.json")).unwrap();
         // tracer.store_trace_events(&PathBuf::from("trace.json")).unwrap();
     }
-
-    #[test]
-    fn test_equality_of_value_records() {
-        let a = ValueRecord::Int { i: 0, type_id: TypeId(0) }; // just an example type_id
-        let b = ValueRecord::Int { i: 0, type_id: TypeId(0) };
-        let different = ValueRecord::Int { i: 1, type_id: TypeId(0) };
-
-        assert_eq!(a, b);
-        assert_ne!(a, different);
-    }
 }

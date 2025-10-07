@@ -1,6 +1,11 @@
 [workspace]
 resolver = "2"
-members = ["codetracer_trace_types","runtime_tracing", "runtime_tracing_cli", "trace_formatter"]
+members = [
+    "codetracer_trace_types",
+    "runtime_tracing",
+    "runtime_tracing_cli",
+    "trace_formatter",
+]
 
 [workspace.dependencies]
 runtime_tracing = { path = "runtime_tracing/" }

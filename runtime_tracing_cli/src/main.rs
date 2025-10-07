@@ -2,7 +2,8 @@ use std::path::Path;
 
 use crate::fmt_trace_cmd::FmtTraceCommand;
 use clap::{Args, Parser, Subcommand};
-use runtime_tracing::{create_trace_reader, create_trace_writer, TraceEventsFileFormat, TraceWriter};
+use codetracer_trace_reader::create_trace_reader;
+use codetracer_trace_writer::{create_trace_writer, trace_writer::TraceWriter};
 mod fmt_trace_cmd;
 
 #[derive(Debug, Clone, Args)]
@@ -27,11 +28,21 @@ struct RuntimeTracingCli {
     command: RuntimeTracingCliCommand,
 }
 
-fn determine_file_format_from_name(s: &str) -> Option<TraceEventsFileFormat> {
+fn determine_input_file_format_from_name(s: &str) -> Option<codetracer_trace_reader::TraceEventsFileFormat> {
     if s.ends_with(".json") {
-        Some(TraceEventsFileFormat::Json)
+        Some(codetracer_trace_reader::TraceEventsFileFormat::Json)
     } else if s.ends_with(".bin") {
-        Some(TraceEventsFileFormat::Binary)
+        Some(codetracer_trace_reader::TraceEventsFileFormat::Binary)
+    } else {
+        None
+    }
+}
+
+fn determine_output_file_format_from_name(s: &str) -> Option<codetracer_trace_writer::TraceEventsFileFormat> {
+    if s.ends_with(".json") {
+        Some(codetracer_trace_writer::TraceEventsFileFormat::Json)
+    } else if s.ends_with(".bin") {
+        Some(codetracer_trace_writer::TraceEventsFileFormat::Binary)
     } else {
         None
     }
@@ -42,8 +53,8 @@ fn main() {
 
     match args.command {
         RuntimeTracingCliCommand::Convert(convert_command) => {
-            let input_file_format = determine_file_format_from_name(&convert_command.input_file).unwrap();
-            let output_file_format = determine_file_format_from_name(&convert_command.output_file).unwrap();
+            let input_file_format = determine_input_file_format_from_name(&convert_command.input_file).unwrap();
+            let output_file_format = determine_output_file_format_from_name(&convert_command.output_file).unwrap();
             let mut trace_reader = create_trace_reader(input_file_format);
             let mut trace_writer = create_trace_writer("", &[], output_file_format);
             let mut trace_events = trace_reader.load_trace_events(Path::new(&convert_command.input_file)).unwrap();

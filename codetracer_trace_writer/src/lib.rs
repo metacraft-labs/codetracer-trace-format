@@ -1,6 +1,6 @@
 mod abstract_trace_writer;
 mod non_streaming_trace_writer;
-mod trace_writer;
+pub mod trace_writer;
 
 #[cfg(target_arch = "wasm32")]
 #[path = "./cbor_zstd_writer_wasm.rs"]

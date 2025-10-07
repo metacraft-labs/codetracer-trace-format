@@ -15,3 +15,14 @@ pub enum TraceEventsFileFormat {
     BinaryV0,
     Binary,
 }
+
+pub fn create_trace_writer(program: &str, args: &[String], format: TraceEventsFileFormat) -> Box<dyn trace_writer::TraceWriter> {
+    match format {
+        TraceEventsFileFormat::Json | TraceEventsFileFormat::BinaryV0 => {
+            let mut result = Box::new(non_streaming_trace_writer::NonStreamingTraceWriter::new(program, args));
+            result.set_format(format);
+            result
+        }
+        TraceEventsFileFormat::Binary => Box::new(crate::cbor_zstd_writer::CborZstdTraceWriter::new(program, args)),
+    }
+}

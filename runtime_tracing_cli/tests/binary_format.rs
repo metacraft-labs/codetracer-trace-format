@@ -1,11 +1,14 @@
-use runtime_tracing::{TraceEventsFileFormat, TraceWriter, create_trace_reader, create_trace_writer};
 use std::fs;
 use std::path::Path;
 
-fn test_binary_roundtrip(ver: TraceEventsFileFormat, binfile: &str) {
+use codetracer_trace_reader::create_trace_reader;
+use codetracer_trace_writer::create_trace_writer;
+use codetracer_trace_writer::trace_writer::TraceWriter;
+
+fn test_binary_roundtrip(ver: codetracer_trace_writer::TraceEventsFileFormat, binfile: &str) {
     let json_path = Path::new("tests/data/trace.json");
 
-    let mut json_reader = create_trace_reader(TraceEventsFileFormat::Json);
+    let mut json_reader = create_trace_reader(codetracer_trace_reader::TraceEventsFileFormat::Json);
     let original = json_reader.load_trace_events(json_path).unwrap();
 
     let bin_path_str = format!("tests/data/{}", binfile);
@@ -16,7 +19,7 @@ fn test_binary_roundtrip(ver: TraceEventsFileFormat, binfile: &str) {
     TraceWriter::append_events(bin_writer.as_mut(), &mut original.clone());
     bin_writer.finish_writing_trace_events().unwrap();
 
-    let mut bin_reader = create_trace_reader(TraceEventsFileFormat::Binary);
+    let mut bin_reader = create_trace_reader(codetracer_trace_reader::TraceEventsFileFormat::Binary);
     let tracer2_events = bin_reader.load_trace_events(bin_path).unwrap();
 
     fs::remove_file(bin_path).unwrap();
@@ -29,10 +32,10 @@ fn test_binary_roundtrip(ver: TraceEventsFileFormat, binfile: &str) {
 
 #[test]
 fn test_binary_roundtrip_v0() {
-    test_binary_roundtrip(TraceEventsFileFormat::BinaryV0, "trace.v0.bin");
+    test_binary_roundtrip(codetracer_trace_writer::TraceEventsFileFormat::BinaryV0, "trace.v0.bin");
 }
 
 #[test]
 fn test_binary_roundtrip_v1() {
-    test_binary_roundtrip(TraceEventsFileFormat::Binary, "trace.v1.bin");
+    test_binary_roundtrip(codetracer_trace_writer::TraceEventsFileFormat::Binary, "trace.v1.bin");
 }

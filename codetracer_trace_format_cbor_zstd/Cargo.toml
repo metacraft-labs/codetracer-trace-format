@@ -1,0 +1,4 @@
+[package]
+name = "codetracer_trace_format_cbor_zstd"
+version = "0.16.0"
+edition = "2024"

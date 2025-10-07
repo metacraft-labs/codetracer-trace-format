@@ -7,7 +7,7 @@ members = [
     "codetracer_trace_reader",
     "codetracer_trace_writer",
     "runtime_tracing",
-    "runtime_tracing_cli",
+    "codetracer_trace_util",
     "trace_formatter",
 ]
 

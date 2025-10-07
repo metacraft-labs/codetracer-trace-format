@@ -1,46 +1,5 @@
-// allow it, because I am not sure we need it?
-// better to explicitly turn into the newtype types
-// but i might be wrong
-// also for now, allowing it to pass `cargo clippy`
-#![allow(clippy::from_over_into)]
-//! Runtime tracing structures and helpers for the CodeTracer debugger.
-//!
-//! This crate provides the [`Tracer`] type for emitting trace events and a
-//! collection of serializable structures describing the trace format.
-//! The format is documented in `docs/` and the README.
-mod abstract_trace_writer;
-mod capnptrace;
-
-#[cfg(target_arch = "wasm32")]
-#[path = "./cbor_zstd_reader_wasm.rs"]
-mod cbor_zstd_reader;
-#[cfg(target_arch = "wasm32")]
-#[path = "./cbor_zstd_writer_wasm.rs"]
-mod cbor_zstd_writer;
-
-#[cfg(not(target_arch = "wasm32"))]
-mod cbor_zstd_reader;
-#[cfg(not(target_arch = "wasm32"))]
-mod cbor_zstd_writer;
-
-mod non_streaming_trace_writer;
-mod trace_readers;
-mod trace_writer;
-mod tracer;
-
-pub use crate::non_streaming_trace_writer::NonStreamingTraceWriter;
-pub use crate::trace_readers::TraceReader;
-pub use crate::trace_writer::TraceWriter;
-pub use crate::tracer::{NONE_TYPE_ID, NONE_VALUE, TraceEventsFileFormat, create_trace_reader, create_trace_writer};
-//pub use crate::types::*;
-
-pub mod trace_capnp {
-    include!(concat!(env!("OUT_DIR"), "/src/trace_capnp.rs"));
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
     use codetracer_trace_types::*;
     use std::path::Path;
     // use std::path::PathBuf;

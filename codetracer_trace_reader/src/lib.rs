@@ -13,3 +13,10 @@ pub enum TraceEventsFileFormat {
     BinaryV0,
     Binary,
 }
+
+pub fn create_trace_reader(format: TraceEventsFileFormat) -> Box<dyn trace_readers::TraceReader> {
+    match format {
+        TraceEventsFileFormat::Json => Box::new(trace_readers::JsonTraceReader {}),
+        TraceEventsFileFormat::BinaryV0 | TraceEventsFileFormat::Binary => Box::new(trace_readers::BinaryTraceReader {}),
+    }
+}

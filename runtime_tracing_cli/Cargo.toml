@@ -7,7 +7,8 @@ edition = "2021"
 
 [dependencies]
 clap = { version = "4.5.40", features = ["derive"] }
-runtime_tracing.workspace = true
+codetracer_trace_reader.workspace = true
+codetracer_trace_writer.workspace = true
 trace_formatter.workspace = true
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"

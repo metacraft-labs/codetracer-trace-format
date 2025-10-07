@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "codetracer_trace_types",
     "codetracer_trace_format_capnp",
+    "codetracer_trace_format_cbor_zstd",
     "codetracer_trace_reader",
     "codetracer_trace_writer",
     "runtime_tracing",
@@ -15,3 +16,4 @@ runtime_tracing = { path = "runtime_tracing/" }
 trace_formatter = { path = "trace_formatter/"}
 codetracer_trace_types = { path = "codetracer_trace_types" }
 codetracer_trace_format_capnp = { path = "codetracer_trace_format_capnp" }
+codetracer_trace_format_cbor_zstd = { path = "codetracer_trace_format_cbor_zstd" }

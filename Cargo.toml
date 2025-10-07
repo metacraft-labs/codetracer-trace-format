@@ -14,3 +14,4 @@ members = [
 runtime_tracing = { path = "runtime_tracing/" }
 trace_formatter = { path = "trace_formatter/"}
 codetracer_trace_types = { path = "codetracer_trace_types" }
+codetracer_trace_format_capnp = { path = "codetracer_trace_format_capnp" }

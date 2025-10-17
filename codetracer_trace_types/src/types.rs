@@ -349,59 +349,59 @@ impl Into<usize> for TypeId {
 /// Representation of a runtime value captured in a trace.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind")]
-pub enum ValueRecord {
+pub enum ValueRecord<T: Debug, Clone, Serialize, Deserialize, PartialEq> {
     Int {
         i: i64,
-        type_id: TypeId,
+        type_id: T,
     },
     Float {
         f: f64,
-        type_id: TypeId,
+        type_id: T,
     },
     Bool {
         b: bool,
-        type_id: TypeId,
+        type_id: T,
     },
     String {
         text: String,
-        type_id: TypeId,
+        type_id: T,
     },
     Sequence {
-        elements: Vec<ValueRecord>,
+        elements: Vec<ValueRecord<T>>,
         is_slice: bool,
-        type_id: TypeId,
+        type_id: T,
     },
     Tuple {
-        elements: Vec<ValueRecord>,
-        type_id: TypeId,
+        elements: Vec<ValueRecord<T>>,
+        type_id: T,
     },
     Struct {
-        field_values: Vec<ValueRecord>,
-        type_id: TypeId, // must point to Type with STRUCT kind and TypeSpecificInfo::Struct
+        field_values: Vec<ValueRecord<T>>,
+        type_id: T, // (if TypeId: must point to), must be Type with STRUCT kind and TypeSpecificInfo::Struct
     },
     Variant {
         discriminator: String,      // TODO: eventually a more specific kind of value/type
-        contents: Box<ValueRecord>, // usually a Struct or a Tuple
-        type_id: TypeId,
+        contents: Box<ValueRecord<T>>, // usually a Struct or a Tuple
+        type_id: T,
     },
     // TODO: eventually add more pointer-like variants
     // or more fields (address?)
     Reference {
-        dereferenced: Box<ValueRecord>,
+        dereferenced: Box<ValueRecord<T>>,
         address: u64,
         mutable: bool,
-        type_id: TypeId,
+        type_id: T,
     },
     Raw {
         r: String,
-        type_id: TypeId,
+        type_id: T,
     },
     Error {
         msg: String,
-        type_id: TypeId,
+        type_id: T,
     },
     None {
-        type_id: TypeId,
+        type_id: T,
     },
     Cell {
         place: Place,
@@ -410,7 +410,7 @@ pub enum ValueRecord {
         #[serde(with = "base64")]
         b: Vec<u8>, // Base64 encoded bytes of a big-endian unsigned integer
         negative: bool,
-        type_id: TypeId,
+        type_id: T,
     },
 }
 

@@ -301,7 +301,7 @@ pub struct VariableRecord {
     pub value: ValueRecord,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TypeRecord {
     pub kind: TypeKind,
     pub lang_type: String,
@@ -311,13 +311,13 @@ pub struct TypeRecord {
     pub specific_info: TypeSpecificInfo,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FieldTypeRecord {
     pub name: String,
     pub type_id: TypeId,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind")]
 pub enum TypeSpecificInfo {
     None,

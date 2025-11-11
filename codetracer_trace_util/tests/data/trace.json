@@ -3,5 +3,10 @@
   {"Function":{"path_id":0,"line":1,"name":"main"}},
   {"Step":{"path_id":0,"line":1}},
   {"Call":{"function_id":0,"args":[]}},
-  {"Return":{"return_value":{"kind":"None","type_id":0}}}
+  {"Return":{"return_value":{"kind":"None","type_id":0}}},
+  {"Return":{"return_value":{"kind":"Float","f":"2.5","type_id":0}}},
+  {"Return":{"return_value":{"kind":"Float","f":"inf","type_id":0}}},
+  {"Return":{"return_value":{"kind":"Float","f":"+inf","type_id":0}}},
+  {"Return":{"return_value":{"kind":"Float","f":"-inf","type_id":0}}},
+  {"Return":{"return_value":{"kind":"Float","f":"nan","type_id":0}}}
 ]

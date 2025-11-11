@@ -11,6 +11,7 @@ use num_derive::FromPrimitive;
 use serde::{Deserialize, Serialize};
 use serde_repr::*;
 use schemars::JsonSchema;
+use serde_with::{serde_as, DisplayFromStr};
 
 // currently, we do assume that we record the whole program
 // so, we try to include minimal amount of data,
@@ -347,6 +348,7 @@ impl Into<usize> for TypeId {
 // TODO: convert between them or
 // serialize ValueRecord in a compatible way?
 /// Representation of a runtime value captured in a trace.
+#[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind")]
 pub enum ValueRecord {
@@ -355,6 +357,7 @@ pub enum ValueRecord {
         type_id: TypeId,
     },
     Float {
+        #[serde_as(as = "DisplayFromStr")]
         f: f64,
         type_id: TypeId,
     },

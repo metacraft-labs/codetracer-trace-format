@@ -1,6 +1,6 @@
 [package]
 name = "codetracer_trace_reader"
-version = "0.16.0"
+version = "0.17.0"
 edition = "2024"
 authors = ["Metacraft Labs Ltd"]
 description = "A library for reading the CodeTracer db trace format"

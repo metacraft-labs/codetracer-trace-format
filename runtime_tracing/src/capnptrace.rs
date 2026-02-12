@@ -260,6 +260,14 @@ fn conv_valuerecord(bldr: crate::trace_capnp::trace::value_record::Builder, vr: 
             let mut q_typ_id = qbigint.init_type_id();
             q_typ_id.set_i(type_id.0.try_into().unwrap());
         }
+        // The legacy capnp schema does not have a dedicated Char union member,
+        // so we serialize it as Raw with the char's string representation.
+        crate::ValueRecord::Char { c, type_id } => {
+            let mut qraw = bldr.init_raw();
+            qraw.set_r(&c.to_string());
+            let mut q_typ_id = qraw.init_type_id();
+            q_typ_id.set_i(type_id.0.try_into().unwrap());
+        }
     }
 }
 

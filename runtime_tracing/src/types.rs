@@ -394,6 +394,10 @@ pub enum ValueRecord {
         negative: bool,
         type_id: TypeId,
     },
+    Char {
+        c: char,
+        type_id: TypeId,
+    },
 }
 
 /// Categories of types recorded in the trace.

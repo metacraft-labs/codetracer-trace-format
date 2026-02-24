@@ -260,6 +260,14 @@ fn conv_valuerecord(bldr: crate::trace_capnp::trace::value_record::Builder, vr: 
             let mut q_typ_id = qbigint.init_type_id();
             q_typ_id.set_i(type_id.0.try_into().unwrap());
         }
+        // The legacy capnp schema does not have a dedicated Char union member,
+        // so we serialize it as Raw with the char's string representation.
+        codetracer_trace_types::ValueRecord::Char { c, type_id } => {
+            let mut qraw = bldr.init_raw();
+            qraw.set_r(&c.to_string());
+            let mut q_typ_id = qraw.init_type_id();
+            q_typ_id.set_i(type_id.0.try_into().unwrap());
+        }
     }
 }
 
@@ -547,7 +555,13 @@ pub fn read_trace(input: &mut impl std::io::BufRead) -> ::capnp::Result<Vec<code
     if header_buf != HEADER {
         panic!("Invalid file header (wrong file format or incompatible version)");
     }
-    let message_reader = serialize_packed::read_message(input, ::capnp::message::ReaderOptions::new())?;
+    // The default traversal limit (8 M words = 64 MB) is too small for
+    // traces from real-world programs (e.g. the Python recorder can produce
+    // 96 MB+ capnproto files with ~100 K events).  Disable the limit so
+    // that arbitrarily large traces can be loaded.
+    let mut reader_opts = ::capnp::message::ReaderOptions::new();
+    reader_opts.traversal_limit_in_words(None);
+    let message_reader = serialize_packed::read_message(input, reader_opts)?;
 
     let trace = message_reader.get_root::<trace::Reader>()?;
 

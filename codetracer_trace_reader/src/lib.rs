@@ -1,4 +1,4 @@
-mod trace_readers;
+pub mod trace_readers;
 
 #[cfg(target_arch = "wasm32")]
 #[path = "./cbor_zstd_reader_wasm.rs"]

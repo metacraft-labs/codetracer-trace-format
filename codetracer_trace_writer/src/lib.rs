@@ -16,7 +16,7 @@ pub enum TraceEventsFileFormat {
     Binary,
 }
 
-pub fn create_trace_writer(program: &str, args: &[String], format: TraceEventsFileFormat) -> Box<dyn trace_writer::TraceWriter> {
+pub fn create_trace_writer(program: &str, args: &[String], format: TraceEventsFileFormat) -> Box<dyn trace_writer::TraceWriter + Send> {
     match format {
         TraceEventsFileFormat::Json | TraceEventsFileFormat::BinaryV0 => {
             let mut result = Box::new(non_streaming_trace_writer::NonStreamingTraceWriter::new(program, args));

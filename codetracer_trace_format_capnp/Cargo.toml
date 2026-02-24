@@ -1,6 +1,6 @@
 [package]
 name = "codetracer_trace_format_capnp"
-version = "0.16.0"
+version = "0.16.1"
 edition = "2024"
 authors = ["Metacraft Labs Ltd"]
 description = "A library containing some helpers, used internally in the reading and writing of the CodeTracer db trace format"

@@ -68,6 +68,10 @@ impl TraceWriter for NonStreamingTraceWriter {
         Ok(())
     }
 
+    fn events(&self) -> &[TraceLowLevelEvent] {
+        &self.events
+    }
+
     fn finish_writing_trace_events(&mut self) -> Result<(), Box<dyn Error>> {
         if let Some(path) = &self.trace_events_path {
             match self.format {

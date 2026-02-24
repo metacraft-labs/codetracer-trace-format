@@ -16,4 +16,4 @@ codetracer_trace_types = { version = "0.16.3", path = "codetracer_trace_types" }
 codetracer_trace_format_capnp = { version = "0.16.1", path = "codetracer_trace_format_capnp" }
 codetracer_trace_format_cbor_zstd = { version = "0.16.0", path = "codetracer_trace_format_cbor_zstd" }
 codetracer_trace_reader = { version = "0.17.1", path = "codetracer_trace_reader" }
-codetracer_trace_writer = { version = "0.17.1", path = "codetracer_trace_writer" }
+codetracer_trace_writer = { version = "0.17.2", path = "codetracer_trace_writer" }

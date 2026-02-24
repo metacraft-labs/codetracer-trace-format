@@ -128,4 +128,13 @@ pub trait TraceWriter: AbstractTraceWriter {
     fn finish_writing_trace_paths(&mut self) -> Result<(), Box<dyn Error>> {
         AbstractTraceWriter::finish_writing_trace_paths(self)
     }
+
+    /// Access the in-memory event buffer.
+    ///
+    /// Returns the accumulated events for writers that buffer in memory
+    /// (e.g. [`NonStreamingTraceWriter`]). Streaming writers that flush
+    /// events directly to disk return an empty slice.
+    fn events(&self) -> &[TraceLowLevelEvent] {
+        &[]
+    }
 }

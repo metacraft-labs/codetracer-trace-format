@@ -1,0 +1,19 @@
+[package]
+name = "codetracer_trace_writer_ffi"
+version = "0.1.0"
+edition = "2024"
+authors = ["Metacraft Labs Ltd"]
+description = "C FFI bindings for codetracer_trace_writer, enabling Go (cgo) and other C-compatible languages to produce CodeTracer traces"
+license = "MIT"
+
+[lib]
+crate-type = ["staticlib", "cdylib"]
+
+[dependencies]
+codetracer_trace_types.workspace = true
+codetracer_trace_writer.workspace = true
+num-traits = "0.2"
+serde_json = "1.0"
+
+[build-dependencies]
+cbindgen = "0.28"

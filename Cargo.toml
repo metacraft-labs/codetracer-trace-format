@@ -6,6 +6,7 @@ members = [
     "codetracer_trace_format_cbor_zstd",
     "codetracer_trace_reader",
     "codetracer_trace_writer",
+    "codetracer_trace_writer_ffi",
     "codetracer_trace_util",
     "trace_formatter",
 ]

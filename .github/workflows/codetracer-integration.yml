@@ -32,37 +32,14 @@ jobs:
             exit 1
           fi
 
-      - name: Install Nix
-        uses: cachix/install-nix-action@v27
-
-      - name: Configure Nix and Git authentication
-        run: |
-          mkdir -p $HOME/.config/nix
-
-          cat << EOF > "$HOME/.config/nix/nix.conf"
-            accept-flake-config = true
-            allow-import-from-derivation = true
-            substituters = https://cache.nixos.org ${{ vars.SUBSTITUTERS }}
-            trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY= ${{ vars.TRUSTED_PUBLIC_KEYS }}
-            netrc-file = $HOME/.config/nix/netrc
-            access-tokens = github.com=${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS }}
-          EOF
-
-          cat << EOF > "$HOME/.config/nix/netrc"
-            machine github.com login x-access-token password ${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS }}
-          EOF
-
-          # Rewrite GitHub URLs for authenticated access to private repos
-          git config --global url."https://x-access-token:${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS }}@github.com/".insteadOf "git@github.com:"
-          git config --global url."https://x-access-token:${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS }}@github.com/".insteadOf "ssh://git@github.com/"
-          git config --global url."https://x-access-token:${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS }}@github.com/".insteadOf "https://github.com/"
-
-      - name: Setup Cachix
-        uses: cachix/cachix-action@v15
-        if: vars.CACHIX_CACHE != ''
+      - name: Setup Nix and Git authentication
+        uses: metacraft-labs/metacraft-github-actions/setup-nix@main
         with:
-          name: ${{ vars.CACHIX_CACHE }}
-          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          gh-token: ${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS }}
+          cachix-cache: ${{ vars.CACHIX_CACHE }}
+          cachix-auth-token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          substituters: ${{ vars.SUBSTITUTERS }}
+          trusted-public-keys: ${{ vars.TRUSTED_PUBLIC_KEYS }}
 
       - name: Resolve codetracer ref
         id: resolve-ref
@@ -78,37 +55,13 @@ jobs:
           echo "Resolved codetracer ref: $REF"
 
       - name: Clone codetracer
-        run: |
-          REF="${{ steps.resolve-ref.outputs.ref }}"
-          echo "Cloning codetracer at ref: $REF"
-
-          rm -rf codetracer
-          git clone \
-            "https://x-access-token:${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS }}@github.com/metacraft-labs/codetracer.git" \
-            codetracer
-          cd codetracer
-          git checkout "$REF"
-
-          # Explicitly rewrite submodule URLs with token (url.insteadOf may
-          # not apply to URLs already written to .git/config by submodule init)
-          git submodule init
-          for url in $(git config --get-regexp '^submodule\..*\.url$' \
-                       | grep -E 'git@github\.com:|https://github\.com/' \
-                       | cut -d' ' -f1); do
-            old_url=$(git config --get "$url")
-            new_url=$(echo "$old_url" \
-              | sed "s|git@github.com:|https://x-access-token:${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS }}@github.com/|" \
-              | sed "s|https://github.com/|https://x-access-token:${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS }}@github.com/|")
-            git config "$url" "$new_url"
-          done
-          git submodule update --recursive
-
-          # Rewrite .gitmodules SSH URLs to HTTPS so nix's internal git fetcher
-          # (which may not honor url.insteadOf) can resolve submodules
-          sed -i 's|git@github.com:|https://github.com/|g' .gitmodules
-          sed -i 's|ssh://git@github.com/|https://github.com/|g' .gitmodules
-          git add .gitmodules
-          git -c user.name="CI" -c user.email="ci@local" commit --no-gpg-sign -m "CI: rewrite submodule URLs to HTTPS" || true
+        uses: metacraft-labs/metacraft-github-actions/clone-repo@main
+        with:
+          repo: metacraft-labs/codetracer
+          ref: ${{ steps.resolve-ref.outputs.ref }}
+          path: codetracer
+          gh-token: ${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS }}
+          submodules: 'true'
 
       - name: Replace trace-format submodule with PR code
         run: |

@@ -1,0 +1,115 @@
+name: CodeTracer Integration Tests
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+  workflow_dispatch:
+    inputs:
+      codetracer_ref:
+        description: 'codetracer git ref to test against (default: from sibling-pins.json)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  codetracer-integration:
+    runs-on: [self-hosted, nixos]
+
+    steps:
+      - name: Checkout codetracer-trace-format
+        uses: actions/checkout@v5
+        with:
+          path: codetracer-trace-format
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v27
+
+      - name: Configure Nix
+        run: |
+          mkdir -p $HOME/.config/nix
+          cat << EOF > "$HOME/.config/nix/nix.conf"
+            accept-flake-config = true
+            allow-import-from-derivation = true
+            substituters = https://cache.nixos.org ${{ vars.SUBSTITUTERS }}
+            trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY= ${{ vars.TRUSTED_PUBLIC_KEYS }}
+            access-tokens = github.com=${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS }}
+          EOF
+
+          # Rewrite GitHub URLs for authenticated access to private repos
+          git config --global url."https://x-access-token:${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS }}@github.com/".insteadOf "git@github.com:"
+          git config --global url."https://x-access-token:${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS }}@github.com/".insteadOf "ssh://git@github.com/"
+          git config --global url."https://x-access-token:${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS }}@github.com/".insteadOf "https://github.com/"
+
+      - name: Setup Cachix
+        uses: cachix/cachix-action@v15
+        if: vars.CACHIX_CACHE != ''
+        with:
+          name: ${{ vars.CACHIX_CACHE }}
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+
+      - name: Resolve codetracer ref
+        id: resolve-ref
+        run: |
+          if [[ -n "${{ github.event.inputs.codetracer_ref }}" ]]; then
+            REF="${{ github.event.inputs.codetracer_ref }}"
+          elif [[ -f codetracer-trace-format/.github/sibling-pins.json ]]; then
+            REF=$(python3 -c "
+          import json
+          with open('codetracer-trace-format/.github/sibling-pins.json') as f:
+              pins = json.load(f)
+          print(pins.get('codetracer', ''))
+          " 2>/dev/null) || true
+          fi
+          REF="${REF:-main}"
+          echo "ref=$REF" >> "$GITHUB_OUTPUT"
+          echo "Resolved codetracer ref: $REF"
+
+      - name: Clone codetracer
+        run: |
+          REF="${{ steps.resolve-ref.outputs.ref }}"
+          echo "Cloning codetracer at ref: $REF"
+
+          git clone --recursive \
+            "https://x-access-token:${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS }}@github.com/metacraft-labs/codetracer.git" \
+            codetracer
+          cd codetracer
+          git checkout "$REF"
+          git submodule update --init --recursive
+
+          # Rewrite .gitmodules SSH URLs to HTTPS for nix's internal git fetcher
+          sed -i 's|git@github.com:|https://github.com/|g' .gitmodules
+          sed -i 's|ssh://git@github.com/|https://github.com/|g' .gitmodules
+          git add .gitmodules
+          git -c user.name="CI" -c user.email="ci@local" commit --no-gpg-sign -m "CI: rewrite submodule URLs to HTTPS" || true
+
+      - name: Replace trace-format submodule with PR code
+        run: |
+          rm -rf codetracer/libs/codetracer-trace-format
+          cp -r codetracer-trace-format codetracer/libs/codetracer-trace-format
+          cd codetracer
+          git add libs/codetracer-trace-format
+          git -c user.name="CI" -c user.email="ci@local" commit --no-gpg-sign -m "CI: use PR trace-format code" || true
+
+      - name: Run WASM flow integration test
+        run: |
+          cd codetracer
+          nix develop .?submodules=1 --command bash -c '
+            set -e
+            rustup target add wasm32-wasip1 2>/dev/null || true
+            echo "Running WASM flow integration test..."
+            cd src/db-backend
+            cargo test test_wasm_flow -- --nocapture
+            echo "WASM flow integration test passed!"
+          '
+
+      - name: Upload test logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: codetracer-integration-logs
+          path: codetracer/target/
+          retention-days: 14
+          if-no-files-found: ignore

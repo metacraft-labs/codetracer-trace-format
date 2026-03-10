@@ -24,10 +24,18 @@ jobs:
         with:
           path: codetracer-trace-format
 
+      - name: Check required secrets
+        run: |
+          TOKEN="${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS }}"
+          if [[ -z "$TOKEN" ]]; then
+            echo "::error::GH_READ_METACRAFT_PRIVATE_REPOS secret is not configured. This secret is required to clone the codetracer repo (which has private submodules). Please add it in the repo Settings > Secrets and variables > Actions."
+            exit 1
+          fi
+
       - name: Install Nix
         uses: cachix/install-nix-action@v27
 
-      - name: Configure Nix
+      - name: Configure Nix and Git authentication
         run: |
           mkdir -p $HOME/.config/nix
           cat << EOF > "$HOME/.config/nix/nix.conf"

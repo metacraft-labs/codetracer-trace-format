@@ -38,12 +38,18 @@ jobs:
       - name: Configure Nix and Git authentication
         run: |
           mkdir -p $HOME/.config/nix
+
           cat << EOF > "$HOME/.config/nix/nix.conf"
             accept-flake-config = true
             allow-import-from-derivation = true
             substituters = https://cache.nixos.org ${{ vars.SUBSTITUTERS }}
             trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY= ${{ vars.TRUSTED_PUBLIC_KEYS }}
+            netrc-file = $HOME/.config/nix/netrc
             access-tokens = github.com=${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS }}
+          EOF
+
+          cat << EOF > "$HOME/.config/nix/netrc"
+            machine github.com login x-access-token password ${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS }}
           EOF
 
           # Rewrite GitHub URLs for authenticated access to private repos
@@ -77,14 +83,28 @@ jobs:
           echo "Cloning codetracer at ref: $REF"
 
           rm -rf codetracer
-          git clone --recursive \
+          git clone \
             "https://x-access-token:${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS }}@github.com/metacraft-labs/codetracer.git" \
             codetracer
           cd codetracer
           git checkout "$REF"
-          git submodule update --init --recursive
 
-          # Rewrite .gitmodules SSH URLs to HTTPS for nix's internal git fetcher
+          # Explicitly rewrite submodule URLs with token (url.insteadOf may
+          # not apply to URLs already written to .git/config by submodule init)
+          git submodule init
+          for url in $(git config --get-regexp '^submodule\..*\.url$' \
+                       | grep -E 'git@github\.com:|https://github\.com/' \
+                       | cut -d' ' -f1); do
+            old_url=$(git config --get "$url")
+            new_url=$(echo "$old_url" \
+              | sed "s|git@github.com:|https://x-access-token:${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS }}@github.com/|" \
+              | sed "s|https://github.com/|https://x-access-token:${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS }}@github.com/|")
+            git config "$url" "$new_url"
+          done
+          git submodule update --recursive
+
+          # Rewrite .gitmodules SSH URLs to HTTPS so nix's internal git fetcher
+          # (which may not honor url.insteadOf) can resolve submodules
           sed -i 's|git@github.com:|https://github.com/|g' .gitmodules
           sed -i 's|ssh://git@github.com/|https://github.com/|g' .gitmodules
           git add .gitmodules

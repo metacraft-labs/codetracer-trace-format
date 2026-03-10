@@ -62,20 +62,10 @@ jobs:
         id: resolve-ref
         run: |
           PINS="codetracer-trace-format/.github/sibling-pins.json"
-          echo "Sibling pins file exists: $(test -f "$PINS" && echo yes || echo no)"
-          if [[ -f "$PINS" ]]; then
-            echo "Sibling pins content:"
-            cat "$PINS"
-          fi
           if [[ -n "${{ github.event.inputs.codetracer_ref }}" ]]; then
             REF="${{ github.event.inputs.codetracer_ref }}"
           elif [[ -f "$PINS" ]]; then
-            REF=$(python3 -c "
-          import json
-          with open('$PINS') as f:
-              pins = json.load(f)
-          print(pins.get('codetracer', ''))
-          ")
+            REF=$(grep '"codetracer"' "$PINS" | head -1 | sed 's/.*: *"\([^"]*\)".*/\1/')
           fi
           REF="${REF:-main}"
           echo "ref=$REF" >> "$GITHUB_OUTPUT"

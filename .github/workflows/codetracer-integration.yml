@@ -109,7 +109,12 @@ jobs:
             rustup target add wasm32-wasip1 2>/dev/null || true
             echo "Running WASM flow integration test..."
             cd src/db-backend
-            cargo test test_wasm_flow -- --nocapture
+            OUTPUT=$(cargo test --test wasm_flow_integration -- --nocapture 2>&1) || { echo "$OUTPUT"; exit 1; }
+            echo "$OUTPUT"
+            if echo "$OUTPUT" | grep -q "running 0 tests"; then
+              echo "ERROR: wasm_flow_integration test binary compiled but no tests ran"
+              exit 1
+            fi
             echo "WASM flow integration test passed!"
           '
 

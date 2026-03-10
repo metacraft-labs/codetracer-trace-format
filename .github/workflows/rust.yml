@@ -2,7 +2,7 @@ name: Rust
 
 on:
   push:
-    branches: [ "master" ]
+    branches: [ "master", "main" ]
   pull_request:
 
 env:
@@ -16,18 +16,21 @@ jobs:
     - uses: actions/checkout@v4
     - name: Install capnproto
       run: sudo apt-get install -y capnproto
+    - name: Install just
+      uses: extractions/setup-just@v2
     - name: Lint
-      run: cargo clippy
+      run: just lint
 
   build-and-test:
-
     runs-on: ubuntu-latest
 
     steps:
     - uses: actions/checkout@v4
     - name: Install capnproto
       run: sudo apt-get install -y capnproto
+    - name: Install just
+      uses: extractions/setup-just@v2
     - name: Build
-      run: cargo build --verbose
+      run: just build
     - name: Run tests
-      run: cargo test --verbose
+      run: just test

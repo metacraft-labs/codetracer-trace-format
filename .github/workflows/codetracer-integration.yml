@@ -61,15 +61,21 @@ jobs:
       - name: Resolve codetracer ref
         id: resolve-ref
         run: |
+          PINS="codetracer-trace-format/.github/sibling-pins.json"
+          echo "Sibling pins file exists: $(test -f "$PINS" && echo yes || echo no)"
+          if [[ -f "$PINS" ]]; then
+            echo "Sibling pins content:"
+            cat "$PINS"
+          fi
           if [[ -n "${{ github.event.inputs.codetracer_ref }}" ]]; then
             REF="${{ github.event.inputs.codetracer_ref }}"
-          elif [[ -f codetracer-trace-format/.github/sibling-pins.json ]]; then
+          elif [[ -f "$PINS" ]]; then
             REF=$(python3 -c "
           import json
-          with open('codetracer-trace-format/.github/sibling-pins.json') as f:
+          with open('$PINS') as f:
               pins = json.load(f)
           print(pins.get('codetracer', ''))
-          " 2>/dev/null) || true
+          ")
           fi
           REF="${REF:-main}"
           echo "ref=$REF" >> "$GITHUB_OUTPUT"
@@ -80,6 +86,7 @@ jobs:
           REF="${{ steps.resolve-ref.outputs.ref }}"
           echo "Cloning codetracer at ref: $REF"
 
+          rm -rf codetracer
           git clone --recursive \
             "https://x-access-token:${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS }}@github.com/metacraft-labs/codetracer.git" \
             codetracer

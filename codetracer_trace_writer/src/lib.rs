@@ -41,9 +41,9 @@ mod tests {
         tracer.register_step(path, Line(1));
         tracer.register_step(path, Line(2));
         tracer.register_asm(&["asm0".to_string(), "asm1".to_string()]);
-        tracer.register_special_event(EventLogKind::Write, "test");
-        tracer.register_special_event(EventLogKind::Write, "test2");
-        tracer.register_special_event(EventLogKind::Error, "testError");
+        tracer.register_special_event(EventLogKind::Write, "", "test");
+        tracer.register_special_event(EventLogKind::Write, "", "test2");
+        tracer.register_special_event(EventLogKind::Error, "", "testError");
 
         let function_path_id = tracer.ensure_path_id(&path);
         let function_line = Line(3);

@@ -124,6 +124,15 @@ bool trace_writer_finish_paths(struct TraceWriterHandle *handle);
 
 void trace_writer_start(struct TraceWriterHandle *handle, const char *path, int64_t line);
 
+/**
+ * Override the working directory recorded in the trace metadata.
+ *
+ * By default the workdir is set to the process's current directory at
+ * the time [`trace_writer_new`] is called.  Call this before
+ * [`trace_writer_finish_metadata`] to record a different directory.
+ */
+void trace_writer_set_workdir(struct TraceWriterHandle *handle, const char *workdir);
+
 void trace_writer_register_step(struct TraceWriterHandle *handle, const char *path, int64_t line);
 
 /**
@@ -156,6 +165,22 @@ void trace_writer_register_call(struct TraceWriterHandle *handle, uintptr_t func
 void trace_writer_register_return(struct TraceWriterHandle *handle);
 
 /**
+ * Register a function return with an integer return value.
+ */
+void trace_writer_register_return_int(struct TraceWriterHandle *handle,
+                                      int64_t value,
+                                      enum FfiTypeKind type_kind,
+                                      const char *type_name);
+
+/**
+ * Register a function return with a string (raw) return value.
+ */
+void trace_writer_register_return_raw(struct TraceWriterHandle *handle,
+                                      const char *value_repr,
+                                      enum FfiTypeKind type_kind,
+                                      const char *type_name);
+
+/**
  * Register a variable with an integer value.
  */
 void trace_writer_register_variable_int(struct TraceWriterHandle *handle,
@@ -174,10 +199,15 @@ void trace_writer_register_variable_raw(struct TraceWriterHandle *handle,
                                         const char *type_name);
 
 /**
- * Register an I/O or special event.
+ * Register an I/O or special event with optional metadata.
+ *
+ * `metadata` is an arbitrary NUL-terminated string attached to the event
+ * (for example a file descriptor or channel name).  Pass `NULL` or an empty
+ * string when no metadata is needed.
  */
 void trace_writer_register_special_event(struct TraceWriterHandle *handle,
                                          enum FfiEventLogKind kind,
+                                         const char *metadata,
                                          const char *content);
 
 #endif  /* CODETRACER_TRACE_WRITER_H */

@@ -58,6 +58,15 @@ pub trait AbstractTraceWriter {
     fn add_event(&mut self, event: TraceLowLevelEvent);
     fn append_events(&mut self, events: &mut Vec<TraceLowLevelEvent>);
 
+    /// Override the working directory stored in the trace metadata.
+    ///
+    /// By default the workdir is set to `std::env::current_dir()` at
+    /// construction time.  Call this before `finish_writing_trace_metadata`
+    /// to record a different directory.
+    fn set_workdir(&mut self, workdir: &Path) {
+        self.get_mut_data().workdir = workdir.to_path_buf();
+    }
+
     fn begin_writing_trace_metadata(&mut self, path: &Path) -> Result<(), Box<dyn Error>> {
         self.get_mut_data().trace_metadata_path = Some(path.to_path_buf());
         Ok(())
@@ -171,10 +180,10 @@ pub trait AbstractTraceWriter {
         self.add_event(TraceLowLevelEvent::Return(ReturnRecord { return_value }));
     }
 
-    fn register_special_event(&mut self, kind: EventLogKind, content: &str) {
+    fn register_special_event(&mut self, kind: EventLogKind, metadata: &str, content: &str) {
         self.add_event(TraceLowLevelEvent::Event(RecordEvent {
             kind,
-            metadata: "".to_string(),
+            metadata: metadata.to_string(),
             content: content.to_string(),
         }));
     }

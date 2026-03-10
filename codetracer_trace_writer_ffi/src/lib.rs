@@ -312,6 +312,23 @@ pub unsafe extern "C" fn trace_writer_start(
     TraceWriter::start(w(h), Path::new(unsafe { cstr_to_str(path) }), Line(line));
 }
 
+/// Override the working directory recorded in the trace metadata.
+///
+/// By default the workdir is set to the process's current directory at
+/// the time [`trace_writer_new`] is called.  Call this before
+/// [`trace_writer_finish_metadata`] to record a different directory.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trace_writer_set_workdir(
+    handle: *mut TraceWriterHandle,
+    workdir: *const c_char,
+) {
+    if handle.is_null() {
+        return;
+    }
+    let h = unsafe { &mut *handle };
+    TraceWriter::set_workdir(w(h), Path::new(unsafe { cstr_to_str(workdir) }));
+}
+
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_register_step(
     handle: *mut TraceWriterHandle,
@@ -387,6 +404,48 @@ pub unsafe extern "C" fn trace_writer_register_return(handle: *mut TraceWriterHa
     TraceWriter::register_return(w(h), codetracer_trace_types::NONE_VALUE);
 }
 
+/// Register a function return with an integer return value.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trace_writer_register_return_int(
+    handle: *mut TraceWriterHandle,
+    value: i64,
+    type_kind: FfiTypeKind,
+    type_name: *const c_char,
+) {
+    if handle.is_null() {
+        return;
+    }
+    let h = unsafe { &mut *handle };
+    let type_id = TraceWriter::ensure_type_id(w(h), to_type_kind(type_kind), unsafe {
+        cstr_to_str(type_name)
+    });
+    TraceWriter::register_return(w(h), ValueRecord::Int { i: value, type_id });
+}
+
+/// Register a function return with a string (raw) return value.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trace_writer_register_return_raw(
+    handle: *mut TraceWriterHandle,
+    value_repr: *const c_char,
+    type_kind: FfiTypeKind,
+    type_name: *const c_char,
+) {
+    if handle.is_null() {
+        return;
+    }
+    let h = unsafe { &mut *handle };
+    let type_id = TraceWriter::ensure_type_id(w(h), to_type_kind(type_kind), unsafe {
+        cstr_to_str(type_name)
+    });
+    TraceWriter::register_return(
+        w(h),
+        ValueRecord::Raw {
+            r: unsafe { cstr_to_str(value_repr) }.to_string(),
+            type_id,
+        },
+    );
+}
+
 /// Register a variable with an integer value.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_register_variable_int(
@@ -436,20 +495,28 @@ pub unsafe extern "C" fn trace_writer_register_variable_raw(
     );
 }
 
-/// Register an I/O or special event.
+/// Register an I/O or special event with optional metadata.
+///
+/// `metadata` is an arbitrary NUL-terminated string attached to the event
+/// (for example a file descriptor or channel name).  Pass `NULL` or an empty
+/// string when no metadata is needed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_register_special_event(
     handle: *mut TraceWriterHandle,
     kind: FfiEventLogKind,
+    metadata: *const c_char,
     content: *const c_char,
 ) {
     if handle.is_null() {
         return;
     }
     let h = unsafe { &mut *handle };
-    TraceWriter::register_special_event(w(h), to_event_log_kind(kind), unsafe {
-        cstr_to_str(content)
-    });
+    TraceWriter::register_special_event(
+        w(h),
+        to_event_log_kind(kind),
+        unsafe { cstr_to_str(metadata) },
+        unsafe { cstr_to_str(content) },
+    );
 }
 
 // ---------------------------------------------------------------------------

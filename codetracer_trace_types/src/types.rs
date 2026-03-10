@@ -268,6 +268,7 @@ impl Into<u64> for ThreadId {
 pub struct CallRecord {
     // pub key: CallKey,
     pub function_id: FunctionId,
+    #[serde(default)]
     pub args: Vec<FullValueRecord>,
 }
 

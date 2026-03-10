@@ -14,6 +14,9 @@ pub trait TraceWriter: AbstractTraceWriter {
     fn begin_writing_trace_paths(&mut self, path: &Path) -> Result<(), Box<dyn Error>> {
         AbstractTraceWriter::begin_writing_trace_paths(self, path)
     }
+    fn set_workdir(&mut self, workdir: &Path) {
+        AbstractTraceWriter::set_workdir(self, workdir)
+    }
 
     fn start(&mut self, path: &Path, line: Line) {
         AbstractTraceWriter::start(self, path, line)
@@ -51,9 +54,8 @@ pub trait TraceWriter: AbstractTraceWriter {
     fn register_return(&mut self, return_value: ValueRecord) {
         AbstractTraceWriter::register_return(self, return_value)
     }
-    // TODO: add metadata arg
-    fn register_special_event(&mut self, kind: EventLogKind, content: &str) {
-        AbstractTraceWriter::register_special_event(self, kind, content)
+    fn register_special_event(&mut self, kind: EventLogKind, metadata: &str, content: &str) {
+        AbstractTraceWriter::register_special_event(self, kind, metadata, content)
     }
     fn to_raw_type(&self, kind: TypeKind, lang_type: &str) -> TypeRecord {
         AbstractTraceWriter::to_raw_type(self, kind, lang_type)

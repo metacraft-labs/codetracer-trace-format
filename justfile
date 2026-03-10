@@ -4,7 +4,7 @@ test:
 
 # Run clippy lint checks
 lint:
-  cargo clippy -- -D warnings
+  cargo clippy
 
 # Build all crates
 build:

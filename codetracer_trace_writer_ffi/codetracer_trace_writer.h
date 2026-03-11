@@ -13,71 +13,71 @@
 /**
  * Event-log kind — mirrors [`EventLogKind`].
  */
-typedef enum FfiEventLogKind {
-    WRITE = 0,
-    WRITE_FILE = 1,
-    WRITE_OTHER = 2,
-    READ = 3,
-    READ_FILE = 4,
-    READ_OTHER = 5,
-    READ_DIR = 6,
-    OPEN_DIR = 7,
-    CLOSE_DIR = 8,
-    SOCKET = 9,
-    OPEN = 10,
-    ERROR = 11,
-    TRACE_LOG_EVENT = 12,
-    EVM_EVENT = 13,
-} FfiEventLogKind;
+typedef enum Elk {
+    ELK_WRITE = 0,
+    ELK_WRITE_FILE = 1,
+    ELK_WRITE_OTHER = 2,
+    ELK_READ = 3,
+    ELK_READ_FILE = 4,
+    ELK_READ_OTHER = 5,
+    ELK_READ_DIR = 6,
+    ELK_OPEN_DIR = 7,
+    ELK_CLOSE_DIR = 8,
+    ELK_SOCKET = 9,
+    ELK_OPEN = 10,
+    ELK_ERROR = 11,
+    ELK_TRACE_LOG_EVENT = 12,
+    ELK_EVM_EVENT = 13,
+} Elk;
 
 /**
  * Trace file format — mirrors [`TraceEventsFileFormat`].
  */
-typedef enum FfiTraceFormat {
-    JSON = 0,
-    BINARY_V0 = 1,
-    BINARY = 2,
-} FfiTraceFormat;
+typedef enum Fmt {
+    FMT_JSON = 0,
+    FMT_BINARY_V0 = 1,
+    FMT_BINARY = 2,
+} Fmt;
 
 /**
  * Type kind — mirrors [`TypeKind`] (subset used by the FFI).
  */
-typedef enum FfiTypeKind {
-    SEQ = 0,
-    SET = 1,
-    HASH_SET = 2,
-    ORDERED_SET = 3,
-    ARRAY = 4,
-    VARARGS = 5,
-    STRUCT = 6,
-    INT = 7,
-    FLOAT = 8,
-    STRING = 9,
-    C_STRING = 10,
-    CHAR = 11,
-    BOOL = 12,
-    LITERAL = 13,
-    REF = 14,
-    RECURSION = 15,
-    RAW = 16,
-    ENUM = 17,
-    ENUM16 = 18,
-    ENUM32 = 19,
-    C = 20,
-    TABLE_KIND = 21,
-    UNION = 22,
-    POINTER = 23,
-    ERROR = 24,
-    FUNCTION_KIND = 25,
-    TYPE_VALUE = 26,
-    TUPLE = 27,
-    VARIANT = 28,
-    HTML = 29,
-    NONE = 30,
-    NON_EXPANDED = 31,
-    ANY = 32,
-    SLICE = 33,
-} FfiTypeKind;
+typedef enum Tk {
+    TK_SEQ = 0,
+    TK_SET = 1,
+    TK_HASH_SET = 2,
+    TK_ORDERED_SET = 3,
+    TK_ARRAY = 4,
+    TK_VARARGS = 5,
+    TK_STRUCT = 6,
+    TK_INT = 7,
+    TK_FLOAT = 8,
+    TK_STRING = 9,
+    TK_C_STRING = 10,
+    TK_CHAR = 11,
+    TK_BOOL = 12,
+    TK_LITERAL = 13,
+    TK_REF = 14,
+    TK_RECURSION = 15,
+    TK_RAW = 16,
+    TK_ENUM = 17,
+    TK_ENUM16 = 18,
+    TK_ENUM32 = 19,
+    TK_C = 20,
+    TK_TABLE_KIND = 21,
+    TK_UNION = 22,
+    TK_POINTER = 23,
+    TK_ERROR = 24,
+    TK_FUNCTION_KIND = 25,
+    TK_TYPE_VALUE = 26,
+    TK_TUPLE = 27,
+    TK_VARIANT = 28,
+    TK_HTML = 29,
+    TK_NONE = 30,
+    TK_NON_EXPANDED = 31,
+    TK_ANY = 32,
+    TK_SLICE = 33,
+} Tk;
 
 /**
  * Opaque handle passed across the FFI boundary.
@@ -103,7 +103,7 @@ const char *trace_writer_last_error(void);
  * [`trace_writer_free`].  Returns `NULL` on failure (check
  * [`trace_writer_last_error`]).
  */
-struct TraceWriterHandle *trace_writer_new(const char *program, enum FfiTraceFormat format);
+struct TraceWriterHandle *trace_writer_new(const char *program, enum Fmt format);
 
 /**
  * Free a trace writer handle.  Passing `NULL` is a no-op.
@@ -147,7 +147,7 @@ uintptr_t trace_writer_ensure_function_id(struct TraceWriterHandle *handle,
  * Register a type and return its ID.  Returns `usize::MAX` on error.
  */
 uintptr_t trace_writer_ensure_type_id(struct TraceWriterHandle *handle,
-                                      enum FfiTypeKind kind,
+                                      enum Tk kind,
                                       const char *lang_type);
 
 /**
@@ -169,7 +169,7 @@ void trace_writer_register_return(struct TraceWriterHandle *handle);
  */
 void trace_writer_register_return_int(struct TraceWriterHandle *handle,
                                       int64_t value,
-                                      enum FfiTypeKind type_kind,
+                                      enum Tk type_kind,
                                       const char *type_name);
 
 /**
@@ -177,7 +177,7 @@ void trace_writer_register_return_int(struct TraceWriterHandle *handle,
  */
 void trace_writer_register_return_raw(struct TraceWriterHandle *handle,
                                       const char *value_repr,
-                                      enum FfiTypeKind type_kind,
+                                      enum Tk type_kind,
                                       const char *type_name);
 
 /**
@@ -186,7 +186,7 @@ void trace_writer_register_return_raw(struct TraceWriterHandle *handle,
 void trace_writer_register_variable_int(struct TraceWriterHandle *handle,
                                         const char *name,
                                         int64_t value,
-                                        enum FfiTypeKind type_kind,
+                                        enum Tk type_kind,
                                         const char *type_name);
 
 /**
@@ -195,7 +195,7 @@ void trace_writer_register_variable_int(struct TraceWriterHandle *handle,
 void trace_writer_register_variable_raw(struct TraceWriterHandle *handle,
                                         const char *name,
                                         const char *value_repr,
-                                        enum FfiTypeKind type_kind,
+                                        enum Tk type_kind,
                                         const char *type_name);
 
 /**
@@ -206,7 +206,7 @@ void trace_writer_register_variable_raw(struct TraceWriterHandle *handle,
  * string when no metadata is needed.
  */
 void trace_writer_register_special_event(struct TraceWriterHandle *handle,
-                                         enum FfiEventLogKind kind,
+                                         enum Elk kind,
                                          const char *metadata,
                                          const char *content);
 

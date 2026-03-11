@@ -13,5 +13,14 @@ include = [
     "FfiEventLogKind",
 ]
 
+# Short C-side names so that prefix_with_name produces compact prefixed
+# constants (e.g. TK_ERROR, ELK_ERROR) and avoids the flat-namespace
+# collision between FfiTypeKind::Error and FfiEventLogKind::Error.
+[export.rename]
+"FfiTraceFormat" = "Fmt"
+"FfiTypeKind" = "Tk"
+"FfiEventLogKind" = "Elk"
+
 [enum]
 rename_variants = "ScreamingSnakeCase"
+prefix_with_name = true

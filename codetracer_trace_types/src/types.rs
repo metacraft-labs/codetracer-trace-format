@@ -150,6 +150,7 @@ pub struct FullValueRecord {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TraceMetadata {
+    #[serde(default)]
     pub workdir: PathBuf,
     pub program: String,
     pub args: Vec<String>,

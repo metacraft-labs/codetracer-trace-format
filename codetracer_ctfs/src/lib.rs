@@ -156,6 +156,146 @@ mod tests {
     }
 
     #[test]
+    fn test_ctfs_large_file_100mb() {
+        let tmp = NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+
+        let block_size = 4096u32;
+        let file_size = 100 * 1024 * 1024usize; // 100 MB
+
+        // Write 100MB file with recognizable pattern
+        {
+            let mut w = CtfsWriter::create(&path, block_size, 4).unwrap();
+            let h = w.add_file("big.dat").unwrap();
+
+            // Write in 1MB chunks to avoid huge allocations
+            let chunk_size = 1024 * 1024;
+            let mut written = 0usize;
+            while written < file_size {
+                let remaining = file_size - written;
+                let this_chunk = remaining.min(chunk_size);
+                let data: Vec<u8> = (0..this_chunk)
+                    .map(|i| ((written + i) % 251) as u8)
+                    .collect();
+                w.write(h, &data).unwrap();
+                written += this_chunk;
+            }
+            w.close().unwrap();
+        }
+
+        // Read back: seek to 50MB and read 4KB
+        {
+            let mut r = CtfsReader::open(&path).unwrap();
+            assert_eq!(r.file_size("big.dat"), Some(file_size as u64));
+
+            let seek_offset = 50 * 1024 * 1024u64;
+            let mut buf = vec![0u8; 4096];
+            let n = r.read_at("big.dat", seek_offset, &mut buf).unwrap();
+            assert_eq!(n, 4096);
+
+            // Verify the pattern
+            for i in 0..4096 {
+                let expected = ((seek_offset as usize + i) % 251) as u8;
+                assert_eq!(buf[i], expected, "mismatch at offset {}", seek_offset as usize + i);
+            }
+        }
+    }
+
+    #[test]
+    fn test_ctfs_very_large_file_multilevel() {
+        let tmp = NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+
+        // Use 1024-byte blocks: N=128, usable=127
+        // Level 1 capacity = 127 blocks = 127 KB
+        // We need >127 blocks to exercise level 2
+        let block_size = 1024u32;
+        let num_blocks = 200u64; // requires level 2
+        let file_size = (num_blocks * block_size as u64) as usize;
+
+        {
+            let mut w = CtfsWriter::create(&path, block_size, 4).unwrap();
+            let h = w.add_file("multi.dat").unwrap();
+
+            // Write block by block with recognizable pattern
+            for block_idx in 0..num_blocks {
+                let data: Vec<u8> = (0..block_size as usize)
+                    .map(|i| ((block_idx as usize * block_size as usize + i) % 251) as u8)
+                    .collect();
+                w.write(h, &data).unwrap();
+            }
+            w.close().unwrap();
+        }
+
+        {
+            let mut r = CtfsReader::open(&path).unwrap();
+            assert_eq!(r.file_size("multi.dat"), Some(file_size as u64));
+
+            // Read the last block
+            let last_block_offset = (num_blocks - 1) * block_size as u64;
+            let mut buf = vec![0u8; block_size as usize];
+            let n = r.read_at("multi.dat", last_block_offset, &mut buf).unwrap();
+            assert_eq!(n, block_size as usize);
+
+            for i in 0..block_size as usize {
+                let expected = ((last_block_offset as usize + i) % 251) as u8;
+                assert_eq!(buf[i], expected, "mismatch at offset {}", last_block_offset as usize + i);
+            }
+
+            // Also verify full read
+            let all_data = r.read_file("multi.dat").unwrap();
+            assert_eq!(all_data.len(), file_size);
+            for i in 0..file_size {
+                assert_eq!(all_data[i], (i % 251) as u8, "full read mismatch at {}", i);
+            }
+        }
+    }
+
+    #[test]
+    fn test_ctfs_append_1000_times() {
+        let tmp = NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+
+        let block_size = 4096u32;
+        let append_size = 1024usize; // 1KB per append
+        let append_count = 1000;
+        let total_size = append_size * append_count; // 1MB
+
+        // Create file with initial data
+        {
+            let mut w = CtfsWriter::create(&path, block_size, 4).unwrap();
+            let h = w.add_file("append.dat").unwrap();
+            let data: Vec<u8> = (0..append_size).map(|i| (i % 251) as u8).collect();
+            w.write(h, &data).unwrap();
+            w.close().unwrap();
+        }
+
+        // Append 999 more times
+        for round in 1..append_count {
+            let mut w = CtfsWriter::open_append(&path).unwrap();
+            let h = w.find_file("append.dat").unwrap();
+            let offset = round * append_size;
+            let data: Vec<u8> = (0..append_size)
+                .map(|i| ((offset + i) % 251) as u8)
+                .collect();
+            w.append(h, &data).unwrap();
+            w.close().unwrap();
+        }
+
+        // Verify
+        {
+            let mut r = CtfsReader::open(&path).unwrap();
+            assert_eq!(r.file_size("append.dat"), Some(total_size as u64));
+
+            let all_data = r.read_file("append.dat").unwrap();
+            assert_eq!(all_data.len(), total_size);
+            for i in 0..total_size {
+                assert_eq!(all_data[i], (i % 251) as u8, "mismatch at byte {}", i);
+            }
+        }
+    }
+
+    #[test]
     fn test_ctfs_magic_and_version() {
         let tmp = NamedTempFile::new().unwrap();
         let path = tmp.path().to_path_buf();

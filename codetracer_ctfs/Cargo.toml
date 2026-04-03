@@ -1,0 +1,8 @@
+[package]
+name = "codetracer_ctfs"
+version = "0.1.0"
+edition = "2021"
+description = "CodeTracer File System (CTFS) binary container format"
+
+[dev-dependencies]
+tempfile = "3"

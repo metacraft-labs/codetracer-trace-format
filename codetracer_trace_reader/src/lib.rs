@@ -7,6 +7,9 @@ mod cbor_zstd_reader;
 #[cfg(not(target_arch = "wasm32"))]
 mod cbor_zstd_reader;
 
+#[cfg(not(target_arch = "wasm32"))]
+pub mod seekable_reader;
+
 #[derive(Debug, Clone, Copy)]
 pub enum TraceEventsFileFormat {
     Json,

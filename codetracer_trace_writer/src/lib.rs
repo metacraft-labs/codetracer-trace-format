@@ -9,6 +9,9 @@ mod cbor_zstd_writer;
 #[cfg(not(target_arch = "wasm32"))]
 mod cbor_zstd_writer;
 
+#[cfg(not(target_arch = "wasm32"))]
+pub mod streaming_writer;
+
 #[derive(Debug, Clone, Copy)]
 pub enum TraceEventsFileFormat {
     Json,

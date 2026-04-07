@@ -1,10 +1,12 @@
 use std::path::Path;
 
 use crate::fmt_trace_cmd::FmtTraceCommand;
+use crate::inspect_ctfs_cmd::InspectCtfsCommand;
 use clap::{Args, Parser, Subcommand};
 use codetracer_trace_reader::create_trace_reader;
 use codetracer_trace_writer::{create_trace_writer, trace_writer::TraceWriter};
 mod fmt_trace_cmd;
+mod inspect_ctfs_cmd;
 
 #[derive(Debug, Clone, Args)]
 struct ConvertCommand {
@@ -19,6 +21,8 @@ enum RuntimeTracingCliCommand {
     Convert(ConvertCommand),
     /// Format a trace which is in JSON file format
     FormatTrace(FmtTraceCommand),
+    /// Inspect a .ct CTFS container file
+    InspectCtfs(InspectCtfsCommand),
 }
 
 #[derive(Parser, Debug)]
@@ -33,6 +37,8 @@ fn determine_input_file_format_from_name(s: &str) -> Option<codetracer_trace_rea
         Some(codetracer_trace_reader::TraceEventsFileFormat::Json)
     } else if s.ends_with(".bin") {
         Some(codetracer_trace_reader::TraceEventsFileFormat::Binary)
+    } else if s.ends_with(".ct") {
+        Some(codetracer_trace_reader::TraceEventsFileFormat::Ctfs)
     } else {
         None
     }
@@ -43,6 +49,8 @@ fn determine_output_file_format_from_name(s: &str) -> Option<codetracer_trace_wr
         Some(codetracer_trace_writer::TraceEventsFileFormat::Json)
     } else if s.ends_with(".bin") {
         Some(codetracer_trace_writer::TraceEventsFileFormat::Binary)
+    } else if s.ends_with(".ct") {
+        Some(codetracer_trace_writer::TraceEventsFileFormat::Ctfs)
     } else {
         None
     }
@@ -64,6 +72,9 @@ fn main() {
         }
         RuntimeTracingCliCommand::FormatTrace(fmt_trace_cmd) => {
             fmt_trace_cmd::run(fmt_trace_cmd);
+        }
+        RuntimeTracingCliCommand::InspectCtfs(inspect_ctfs_cmd) => {
+            inspect_ctfs_cmd::run(inspect_ctfs_cmd);
         }
     }
 }

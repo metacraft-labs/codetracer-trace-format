@@ -43,6 +43,16 @@ impl CtfsReader {
         })
     }
 
+    /// Get the block size of this container.
+    pub fn block_size(&self) -> u32 {
+        self.block_size
+    }
+
+    /// Get the maximum number of root entries (files) this container supports.
+    pub fn max_entries(&self) -> u32 {
+        self.entries.len() as u32
+    }
+
     /// List all file names in the container.
     pub fn list_files(&self) -> Vec<String> {
         self.entries

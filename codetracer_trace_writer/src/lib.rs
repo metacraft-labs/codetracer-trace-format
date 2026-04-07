@@ -1,4 +1,4 @@
-mod abstract_trace_writer;
+pub mod abstract_trace_writer;
 pub mod non_streaming_trace_writer;
 pub mod trace_writer;
 
@@ -10,7 +10,7 @@ mod cbor_zstd_writer;
 mod cbor_zstd_writer;
 
 #[cfg(not(target_arch = "wasm32"))]
-mod ctfs_writer;
+pub mod ctfs_writer;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub mod streaming_writer;

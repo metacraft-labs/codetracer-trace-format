@@ -130,6 +130,9 @@ impl CtfsTraceWriter {
                 self.ensure_header_written()?;
                 if let (Some(writer), Some(handle)) = (&mut self.ctfs_writer, self.events_handle) {
                     writer.write(handle, &data)?;
+                    // Sync the file entry to disk so concurrent readers can see
+                    // the updated events.log size.
+                    writer.sync_entry(handle)?;
                 }
             }
         }

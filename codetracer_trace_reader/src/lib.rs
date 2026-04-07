@@ -13,6 +13,9 @@ pub mod seekable_reader;
 #[cfg(not(target_arch = "wasm32"))]
 mod ctfs_reader;
 
+#[cfg(not(target_arch = "wasm32"))]
+pub mod streaming_ctfs_reader;
+
 #[derive(Debug, Clone, Copy)]
 pub enum TraceEventsFileFormat {
     Json,

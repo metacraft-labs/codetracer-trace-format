@@ -42,6 +42,11 @@ struct OpenFile {
     size: u64,
     /// Buffered partial block data.
     buffer: Vec<u8>,
+    /// Block number used by `sync_entry` to write partial-block data.
+    /// This block is pre-allocated and its pointer is inserted into the
+    /// mapping chain. When the buffer fills a complete block, the pending
+    /// block becomes a regular data block (the pointer is already set).
+    pending_block: Option<u64>,
 }
 
 /// Writer for creating CTFS containers.
@@ -199,6 +204,7 @@ impl CtfsWriter {
                     },
                     size: logical_size,
                     buffer,
+                    pending_block: None,
                 });
             }
         }
@@ -236,6 +242,7 @@ impl CtfsWriter {
             },
             size: 0,
             buffer: Vec::new(),
+            pending_block: None,
         });
 
         Ok(FileHandle(entry_index))
@@ -276,19 +283,24 @@ impl CtfsWriter {
         let n = bs as u64 / 8; // entries per block
         let usable = n - 1; // usable entries (last is chain pointer)
 
-        // Allocate a data block and write data
-        let data_block = self.allocator.alloc();
+        // If sync_entry pre-allocated a pending block for this slot, reuse it.
+        // The mapping chain pointer is already set.
+        let data_block = if let Some(pending) = self.files[file_idx].pending_block.take() {
+            pending
+        } else {
+            let data_block = self.allocator.alloc();
+            let block_index = self.files[file_idx].mapping.data_block_count;
+            let root_block = self.files[file_idx].mapping.root_block;
+            self.insert_data_block_chain(root_block, block_index, data_block, usable, bs)?;
+            data_block
+        };
+
+        // Write block data (padded to block_size).
         let offset = data_block * bs as u64;
         self.writer.seek(SeekFrom::Start(offset))?;
         let mut padded = block_data.to_vec();
         padded.resize(bs as usize, 0);
         self.writer.write_all(&padded)?;
-
-        let block_index = self.files[file_idx].mapping.data_block_count;
-        let root_block = self.files[file_idx].mapping.root_block;
-
-        // Navigate the bottom-up chain to find the right slot
-        self.insert_data_block_chain(root_block, block_index, data_block, usable, bs)?;
 
         self.files[file_idx].mapping.data_block_count += 1;
 
@@ -400,6 +412,64 @@ impl CtfsWriter {
         };
 
         self.navigate_and_insert(target_block, level - 1, sub_idx, data_block, usable, bs)
+    }
+
+    /// Sync a file's data and metadata to disk so concurrent readers can see
+    /// all bytes written so far, including any partial block still in the
+    /// write buffer.
+    ///
+    /// If there is buffered data that does not fill a complete block, a
+    /// "pending block" is allocated (or reused from a previous sync), the
+    /// buffer content is written to it padded with zeros, and the block
+    /// pointer is inserted into the mapping chain. When the buffer later
+    /// fills to a complete block, `flush_data_block` reuses this pending
+    /// block instead of allocating a new one.
+    ///
+    /// The file entry's `size` field always reflects the true logical byte
+    /// count, so readers only access valid data even though the on-disk
+    /// pending block is zero-padded.
+    pub fn sync_entry(&mut self, handle: FileHandle) -> Result<(), CtfsError> {
+        let bs = self.block_size as usize;
+        let file_idx = handle.0;
+
+        if !self.files[file_idx].buffer.is_empty() {
+            // Allocate a pending block on the first sync; reuse on subsequent ones.
+            if self.files[file_idx].pending_block.is_none() {
+                let n = self.block_size as u64 / 8;
+                let usable = n - 1;
+                let block_index = self.files[file_idx].mapping.data_block_count;
+                let root_block = self.files[file_idx].mapping.root_block;
+
+                let data_block = self.allocator.alloc();
+                self.insert_data_block_chain(
+                    root_block, block_index, data_block, usable, self.block_size,
+                )?;
+                self.files[file_idx].pending_block = Some(data_block);
+            }
+
+            // Write current buffer contents to the pending block (padded).
+            let data_block = self.files[file_idx].pending_block.unwrap();
+            let offset = data_block as u64 * bs as u64;
+            self.writer.seek(SeekFrom::Start(offset))?;
+            let mut padded = self.files[file_idx].buffer.clone();
+            padded.resize(bs, 0);
+            self.writer.write_all(&padded)?;
+        }
+
+        // Write the file entry with the full logical size so readers can
+        // see all bytes written so far.
+        let file = &self.files[file_idx];
+        let entry = crate::file_entry::FileEntry {
+            size: file.size,
+            map_block: file.mapping.root_block,
+            name: file.name_encoded,
+        };
+        let entry_offset =
+            self.entries_offset + (file.entry_index as u64) * FILE_ENTRY_SIZE as u64;
+        self.writer.seek(SeekFrom::Start(entry_offset))?;
+        entry.write_to(&mut self.writer)?;
+        self.writer.flush()?;
+        Ok(())
     }
 
     /// Close the container, flushing all buffered data and writing metadata.

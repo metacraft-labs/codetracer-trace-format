@@ -50,12 +50,22 @@ impl TraceReader for BinaryTraceReader {
                 Ok(codetracer_trace_format_capnp::capnptrace::read_trace(&mut buf_reader)?)
             }
             Some(TraceEventsFileFormat::Binary) => Ok(crate::cbor_zstd_reader::read_trace(&mut file)?),
-            Some(TraceEventsFileFormat::Json) => {
+            Some(TraceEventsFileFormat::Json) | Some(TraceEventsFileFormat::Ctfs) => {
                 unreachable!()
             }
             None => {
                 panic!("Invalid file header (wrong file format or incompatible version)");
             }
         }
+    }
+}
+
+/// Reads trace events from `.ct` CTFS container files.
+pub struct CtfsTraceReader {}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl TraceReader for CtfsTraceReader {
+    fn load_trace_events(&mut self, path: &Path) -> Result<Vec<TraceLowLevelEvent>, Box<dyn Error>> {
+        crate::ctfs_reader::read_trace_from_ctfs(path)
     }
 }

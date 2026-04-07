@@ -83,7 +83,7 @@ impl TraceWriter for NonStreamingTraceWriter {
                     let mut file = fs::File::create(path)?;
                     write_trace(&self.events, &mut file)?;
                 }
-                TraceEventsFileFormat::Binary => {
+                TraceEventsFileFormat::Binary | TraceEventsFileFormat::Ctfs => {
                     unreachable!()
                 }
             }

@@ -23,6 +23,11 @@ pub enum TraceEventsFileFormat {
     Ctfs,
 }
 
+/// Create a trace writer for the given format.
+///
+/// `Ctfs` is the recommended default format for all new recorders.
+/// `Binary` (CBOR + Zstandard) and `Json` remain available for testing
+/// and backward compatibility.
 pub fn create_trace_writer(program: &str, args: &[String], format: TraceEventsFileFormat) -> Box<dyn trace_writer::TraceWriter + Send> {
     match format {
         TraceEventsFileFormat::Json | TraceEventsFileFormat::BinaryV0 => {

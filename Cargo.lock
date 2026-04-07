@@ -241,13 +241,18 @@ name = "codetracer_trace_reader"
 version = "0.17.1"
 dependencies = [
  "cbor4ii",
+ "codetracer_ctfs",
  "codetracer_trace_format_capnp",
  "codetracer_trace_format_cbor_zstd",
  "codetracer_trace_types",
+ "codetracer_trace_writer",
  "fscommon",
  "ruzstd",
  "serde_json",
+ "tempfile",
  "zeekstd",
+ "zstd",
+ "zstd-safe",
 ]
 
 [[package]]
@@ -269,6 +274,7 @@ name = "codetracer_trace_util"
 version = "0.3.0"
 dependencies = [
  "clap",
+ "codetracer_ctfs",
  "codetracer_trace_reader",
  "codetracer_trace_writer",
  "serde",
@@ -281,11 +287,14 @@ name = "codetracer_trace_writer"
 version = "0.17.3"
 dependencies = [
  "cbor4ii",
+ "codetracer_ctfs",
  "codetracer_trace_format_capnp",
  "codetracer_trace_format_cbor_zstd",
+ "codetracer_trace_reader",
  "codetracer_trace_types",
  "ruzstd",
  "serde_json",
+ "tempfile",
  "zeekstd",
 ]
 
@@ -1347,6 +1356,15 @@ name = "zmij"
 version = "1.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
+
+[[package]]
+name = "zstd"
+version = "0.13.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e91ee311a569c327171651566e07972200e76fcfe2242a4fa446149a3881c08a"
+dependencies = [
+ "zstd-safe",
+]
 
 [[package]]
 name = "zstd-safe"

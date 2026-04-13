@@ -2,16 +2,74 @@ use std::io::{Read, Write};
 use crate::CtfsError;
 
 pub const MAGIC: [u8; 5] = [0xC0, 0xDE, 0x72, 0xAC, 0xE2];
-pub const VERSION: u8 = 2;
+pub const VERSION: u8 = 3;
+pub const VERSION_V2: u8 = 2;
 pub const HEADER_SIZE: usize = 8;
 pub const EXTENDED_HEADER_SIZE: usize = 8;
+
+/// Compression method stored in header byte 6.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum CompressionMethod {
+    None = 0,
+    Zstd = 1,
+    Lz4 = 2,
+}
+
+impl CompressionMethod {
+    pub fn from_byte(b: u8) -> Self {
+        match b {
+            0 => CompressionMethod::None,
+            1 => CompressionMethod::Zstd,
+            2 => CompressionMethod::Lz4,
+            _ => CompressionMethod::None, // Unknown, treat as none
+        }
+    }
+}
+
+/// Encryption method stored in header byte 7.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum EncryptionMethod {
+    None = 0,
+    Aes256Gcm = 1,
+}
+
+impl EncryptionMethod {
+    pub fn from_byte(b: u8) -> Self {
+        match b {
+            0 => EncryptionMethod::None,
+            1 => EncryptionMethod::Aes256Gcm,
+            _ => EncryptionMethod::None,
+        }
+    }
+}
+
+/// Chunk index entry for chunked compressed streams.
+/// Stored at the end of each CTFS internal file that uses chunked compression.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ChunkIndexEntry {
+    /// Byte offset of this chunk within the stream.
+    pub compressed_offset: u64,
+    /// Number of events in this chunk.
+    pub event_count: u32,
+    /// GEID of the first event in this chunk.
+    pub first_geid: u64,
+}
+
+/// Size of a serialized ChunkIndexEntry: 8 + 4 + 8 = 20 bytes.
+pub const CHUNK_INDEX_ENTRY_SIZE: usize = 20;
+
+/// Default number of events per chunk.
+pub const DEFAULT_CHUNK_SIZE: usize = 4096;
 
 /// The 8-byte root block header.
 #[derive(Debug, Clone, Copy)]
 pub struct Header {
     pub id: [u8; 5],
     pub version: u8,
-    pub reserved: [u8; 2],
+    pub compression: CompressionMethod,
+    pub encryption: EncryptionMethod,
 }
 
 impl Header {
@@ -19,14 +77,26 @@ impl Header {
         Header {
             id: MAGIC,
             version: VERSION,
-            reserved: [0; 2],
+            compression: CompressionMethod::None,
+            encryption: EncryptionMethod::None,
+        }
+    }
+
+    /// Create a new header with the specified compression method.
+    pub fn with_compression(compression: CompressionMethod) -> Self {
+        Header {
+            id: MAGIC,
+            version: VERSION,
+            compression,
+            encryption: EncryptionMethod::None,
         }
     }
 
     pub fn write_to<W: Write>(&self, w: &mut W) -> Result<(), CtfsError> {
         w.write_all(&self.id)?;
         w.write_all(&[self.version])?;
-        w.write_all(&self.reserved)?;
+        w.write_all(&[self.compression as u8])?;
+        w.write_all(&[self.encryption as u8])?;
         Ok(())
     }
 
@@ -38,12 +108,21 @@ impl Header {
         }
         let mut ver = [0u8; 1];
         r.read_exact(&mut ver)?;
-        if ver[0] != VERSION {
+        // Accept both v2 and v3
+        if ver[0] != VERSION && ver[0] != VERSION_V2 {
             return Err(CtfsError::InvalidVersion(ver[0]));
         }
-        let mut reserved = [0u8; 2];
-        r.read_exact(&mut reserved)?;
-        Ok(Header { id, version: ver[0], reserved })
+        let mut tag_bytes = [0u8; 2];
+        r.read_exact(&mut tag_bytes)?;
+        // For v2 files, bytes 6-7 were reserved (0x00), which maps to None/None
+        let compression = CompressionMethod::from_byte(tag_bytes[0]);
+        let encryption = EncryptionMethod::from_byte(tag_bytes[1]);
+        Ok(Header {
+            id,
+            version: ver[0],
+            compression,
+            encryption,
+        })
     }
 }
 

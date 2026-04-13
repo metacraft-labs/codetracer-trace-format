@@ -4,7 +4,7 @@ use std::path::Path;
 
 use crate::base40::base40_decode;
 use crate::file_entry::FileEntry;
-use crate::header::{ExtendedHeader, Header};
+use crate::header::{CompressionMethod, EncryptionMethod, ExtendedHeader, Header};
 use crate::CtfsError;
 
 /// Reader for CTFS containers.
@@ -12,6 +12,8 @@ pub struct CtfsReader {
     file: File,
     block_size: u32,
     entries: Vec<FileEntry>,
+    compression: CompressionMethod,
+    encryption: EncryptionMethod,
 }
 
 /// Compute the capacity of a single level in the chain.
@@ -24,10 +26,11 @@ fn level_capacity(usable: u64, level: u32) -> u64 {
 
 impl CtfsReader {
     /// Open an existing CTFS container.
+    /// Accepts both v2 and v3 files.
     pub fn open(path: &Path) -> Result<Self, CtfsError> {
         let mut file = File::open(path)?;
 
-        let _header = Header::read_from(&mut file)?;
+        let header = Header::read_from(&mut file)?;
         let ext_header = ExtendedHeader::read_from(&mut file)?;
 
         let mut entries = Vec::new();
@@ -40,7 +43,19 @@ impl CtfsReader {
             file,
             block_size: ext_header.block_size,
             entries,
+            compression: header.compression,
+            encryption: header.encryption,
         })
+    }
+
+    /// Get the compression method from the container header.
+    pub fn compression(&self) -> CompressionMethod {
+        self.compression
+    }
+
+    /// Get the encryption method from the container header.
+    pub fn encryption(&self) -> EncryptionMethod {
+        self.encryption
     }
 
     /// Get the block size of this container.

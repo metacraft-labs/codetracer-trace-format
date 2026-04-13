@@ -11,6 +11,10 @@ pub use base40::{base40_decode, base40_encode};
 pub use block_alloc::AtomicBlockAllocator;
 pub use concurrent_reader::ConcurrentCtfsReader;
 pub use concurrent_writer::{ConcurrentCtfsWriter, FileWriter};
+pub use header::{
+    ChunkIndexEntry, CompressionMethod, EncryptionMethod,
+    CHUNK_INDEX_ENTRY_SIZE, DEFAULT_CHUNK_SIZE,
+};
 pub use reader::CtfsReader;
 pub use writer::{CtfsWriter, FileHandle};
 
@@ -317,9 +321,9 @@ mod tests {
 
         // Magic bytes
         assert_eq!(&buf[0..5], &[0xC0, 0xDE, 0x72, 0xAC, 0xE2]);
-        // Version
-        assert_eq!(buf[5], 2);
-        // Reserved
+        // Version (v3)
+        assert_eq!(buf[5], 3);
+        // Compression = None, Encryption = None
         assert_eq!(&buf[6..8], &[0, 0]);
     }
 
@@ -549,6 +553,75 @@ mod tests {
                 name
             );
         }
+    }
+
+    #[test]
+    fn test_ctfs_v3_header_with_compression() {
+        let tmp = NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+
+        {
+            let w = CtfsWriter::create_with_compression(
+                &path, 4096, 31,
+                crate::header::CompressionMethod::Zstd,
+            ).unwrap();
+            w.close().unwrap();
+        }
+
+        // Read raw bytes to verify v3 header
+        let mut f = std::fs::File::open(&path).unwrap();
+        let mut buf = [0u8; 8];
+        f.read_exact(&mut buf).unwrap();
+
+        // Magic bytes
+        assert_eq!(&buf[0..5], &[0xC0, 0xDE, 0x72, 0xAC, 0xE2]);
+        // Version = 3
+        assert_eq!(buf[5], 3);
+        // Compression = 1 (Zstd)
+        assert_eq!(buf[6], 1);
+        // Encryption = 0 (None)
+        assert_eq!(buf[7], 0);
+
+        // Verify reader can open it and reports correct compression
+        let r = CtfsReader::open(&path).unwrap();
+        assert_eq!(r.compression(), crate::header::CompressionMethod::Zstd);
+        assert_eq!(r.encryption(), crate::header::EncryptionMethod::None);
+    }
+
+    #[test]
+    fn test_ctfs_v3_backward_compat_v2() {
+        // Create a v2 file by manually writing the header, then verify
+        // that the v3 reader can open it.
+        let tmp = NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+
+        {
+            use std::io::Write;
+            let mut f = std::fs::File::create(&path).unwrap();
+            // Magic
+            f.write_all(&[0xC0, 0xDE, 0x72, 0xAC, 0xE2]).unwrap();
+            // Version = 2
+            f.write_all(&[2]).unwrap();
+            // Reserved bytes (v2 had these as 0x00)
+            f.write_all(&[0, 0]).unwrap();
+            // Extended header: block_size=4096, max_root_entries=31
+            f.write_all(&4096u32.to_le_bytes()).unwrap();
+            f.write_all(&31u32.to_le_bytes()).unwrap();
+            // Empty file entries (24 bytes each * 31)
+            let empty_entries = vec![0u8; 24 * 31];
+            f.write_all(&empty_entries).unwrap();
+            // Pad to block_size
+            let header_and_entries = 8 + 8 + 24 * 31;
+            if header_and_entries < 4096 {
+                let padding = vec![0u8; 4096 - header_and_entries];
+                f.write_all(&padding).unwrap();
+            }
+        }
+
+        // v3 reader should accept v2 file
+        let r = CtfsReader::open(&path).unwrap();
+        assert_eq!(r.compression(), crate::header::CompressionMethod::None);
+        assert_eq!(r.encryption(), crate::header::EncryptionMethod::None);
     }
 
     #[test]

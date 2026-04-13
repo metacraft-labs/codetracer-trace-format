@@ -121,11 +121,12 @@ impl ConcurrentCtfsWriter {
         // Build the entire root block in memory and write with pwrite
         let mut root_block = vec![0u8; block_size as usize];
 
-        // Header: magic + version + reserved
+        // Header: magic + version + compression + encryption
         let header = Header::new();
         root_block[0..5].copy_from_slice(&header.id);
         root_block[5] = header.version;
-        // reserved bytes [6..8] already zero
+        root_block[6] = header.compression as u8;
+        root_block[7] = header.encryption as u8;
 
         // Extended header: block_size + max_root_entries
         root_block[8..12].copy_from_slice(&block_size.to_le_bytes());

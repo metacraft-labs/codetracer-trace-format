@@ -5,7 +5,7 @@ use std::path::Path;
 use crate::base40::base40_encode;
 use crate::block_alloc::BlockAllocator;
 use crate::file_entry::{FileEntry, FILE_ENTRY_SIZE};
-use crate::header::{ExtendedHeader, Header, EXTENDED_HEADER_SIZE, HEADER_SIZE};
+use crate::header::{CompressionMethod, ExtendedHeader, Header, EXTENDED_HEADER_SIZE, HEADER_SIZE};
 use crate::CtfsError;
 
 /// Opaque handle to an open file within a CTFS container.
@@ -57,6 +57,7 @@ pub struct CtfsWriter {
     allocator: BlockAllocator,
     files: Vec<OpenFile>,
     entries_offset: u64,
+    compression: CompressionMethod,
 }
 
 /// Compute the capacity of a single level in the chain.
@@ -104,6 +105,16 @@ fn write_zero_block(writer: &mut BufWriter<File>, block_num: u64, block_size: u3
 impl CtfsWriter {
     /// Create a new CTFS container at the given path.
     pub fn create(path: &Path, block_size: u32, max_root_entries: u32) -> Result<Self, CtfsError> {
+        Self::create_with_compression(path, block_size, max_root_entries, CompressionMethod::None)
+    }
+
+    /// Create a new CTFS container at the given path with the specified compression method.
+    pub fn create_with_compression(
+        path: &Path,
+        block_size: u32,
+        max_root_entries: u32,
+        compression: CompressionMethod,
+    ) -> Result<Self, CtfsError> {
         let ext_header = ExtendedHeader::new(block_size, max_root_entries)?;
         let file = OpenOptions::new()
             .read(true)
@@ -113,8 +124,8 @@ impl CtfsWriter {
             .open(path)?;
         let mut writer = BufWriter::new(file);
 
-        // Write header
-        let header = Header::new();
+        // Write header (v3 with compression/encryption tags)
+        let header = Header::with_compression(compression);
         header.write_to(&mut writer)?;
         ext_header.write_to(&mut writer)?;
 
@@ -142,14 +153,20 @@ impl CtfsWriter {
             allocator: BlockAllocator::new(),
             files: Vec::new(),
             entries_offset,
+            compression,
         })
+    }
+
+    /// Get the compression method for this container.
+    pub fn compression(&self) -> CompressionMethod {
+        self.compression
     }
 
     /// Open an existing CTFS container for appending.
     pub fn open_append(path: &Path) -> Result<Self, CtfsError> {
         let mut file = OpenOptions::new().read(true).write(true).open(path)?;
 
-        let _header = Header::read_from(&mut file)?;
+        let header = Header::read_from(&mut file)?;
         let ext_header = ExtendedHeader::read_from(&mut file)?;
 
         let entries_offset = (HEADER_SIZE + EXTENDED_HEADER_SIZE) as u64;
@@ -218,6 +235,7 @@ impl CtfsWriter {
             allocator,
             files,
             entries_offset,
+            compression: header.compression,
         })
     }
 

@@ -28,7 +28,13 @@ fn test_live_replay_during_recording() {
     let writer_handle = thread::spawn(move || {
         // Use a small flush threshold (1 KiB) to force frequent flushes
         // so the reader can observe partial progress.
-        let mut writer = CtfsTraceWriter::with_flush_threshold("test", &[], 1024);
+        let mut writer = CtfsTraceWriter::with_options(
+            "test",
+            &[],
+            codetracer_trace_writer::ctfs_writer::EventSerializationFormat::Cbor,
+            1024,
+            4096,
+        );
         TraceWriter::begin_writing_trace_events(&mut writer, &ct_path_writer).unwrap();
 
         let mut events_written = 0usize;

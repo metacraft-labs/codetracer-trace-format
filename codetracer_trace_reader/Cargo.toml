@@ -16,6 +16,7 @@ codetracer_ctfs = { path = "../codetracer_ctfs" }
 fscommon = "0.1.1"
 serde_json = "1.0"
 cbor4ii = { version = "1.0.0", features = ["serde1", "use_std"] }
+num-traits = "0.2"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 zeekstd = "0.6.0"
@@ -25,6 +26,8 @@ zstd-safe = "7.2"
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 ruzstd = "0.8.1"
 
+[dependencies.codetracer_trace_writer]
+workspace = true
+
 [dev-dependencies]
-codetracer_trace_writer.workspace = true
 tempfile = "3"

@@ -45,20 +45,21 @@ impl EncryptionMethod {
     }
 }
 
-/// Chunk index entry for chunked compressed streams.
-/// Stored at the end of each CTFS internal file that uses chunked compression.
+/// Inline chunk header for chunked compressed streams.
+/// Written before each compressed chunk in the stream:
+///   [ChunkHeader: 16 bytes][compressed data: compressed_size bytes]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ChunkIndexEntry {
-    /// Byte offset of this chunk within the stream.
-    pub compressed_offset: u64,
+    /// Size of the compressed data following this header.
+    pub compressed_size: u32,
     /// Number of events in this chunk.
     pub event_count: u32,
     /// GEID of the first event in this chunk.
     pub first_geid: u64,
 }
 
-/// Size of a serialized ChunkIndexEntry: 8 + 4 + 8 = 20 bytes.
-pub const CHUNK_INDEX_ENTRY_SIZE: usize = 20;
+/// Size of a serialized ChunkIndexEntry (inline header): 4 + 4 + 8 = 16 bytes.
+pub const CHUNK_INDEX_ENTRY_SIZE: usize = 16;
 
 /// Default number of events per chunk.
 pub const DEFAULT_CHUNK_SIZE: usize = 4096;

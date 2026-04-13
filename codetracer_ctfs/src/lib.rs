@@ -1,5 +1,6 @@
 pub mod base40;
 pub mod block_alloc;
+pub mod chunked;
 pub mod concurrent_reader;
 pub mod concurrent_writer;
 pub mod file_entry;
@@ -9,6 +10,7 @@ pub mod writer;
 
 pub use base40::{base40_decode, base40_encode};
 pub use block_alloc::AtomicBlockAllocator;
+pub use chunked::{ChunkedReader, ChunkedWriter};
 pub use concurrent_reader::ConcurrentCtfsReader;
 pub use concurrent_writer::{ConcurrentCtfsWriter, FileWriter};
 pub use header::{
@@ -586,6 +588,93 @@ mod tests {
         let r = CtfsReader::open(&path).unwrap();
         assert_eq!(r.compression(), crate::header::CompressionMethod::Zstd);
         assert_eq!(r.encryption(), crate::header::EncryptionMethod::None);
+    }
+
+    #[test]
+    fn test_ctfs_chunked_roundtrip() {
+        let tmp = NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+
+        let event_count = 100;
+        let event_size = 48;
+        let chunk_size = 10;
+
+        // Build fake events
+        let mut events = Vec::new();
+        let mut event_sizes = Vec::new();
+        let mut first_geids = Vec::new();
+        for i in 0..event_count {
+            let geid = 1000u64 + i as u64;
+            for j in 0..event_size {
+                events.push(((geid as usize + j) % 251) as u8);
+            }
+            event_sizes.push(event_size);
+            first_geids.push(geid);
+        }
+
+        // Write chunked file into CTFS container
+        {
+            let mut w = CtfsWriter::create_with_compression(
+                &path, 4096, 31,
+                crate::header::CompressionMethod::Zstd,
+            ).unwrap();
+            w.add_file_chunked("events.bin", &events, &event_sizes, &first_geids, chunk_size)
+                .unwrap();
+            w.close().unwrap();
+        }
+
+        // Read back: decompress all
+        {
+            let mut r = CtfsReader::open(&path).unwrap();
+            let decompressed = r.read_file_chunked("events.bin", None).unwrap();
+            assert_eq!(decompressed.len(), events.len());
+            assert_eq!(decompressed, events);
+        }
+    }
+
+    #[test]
+    fn test_ctfs_chunked_seek_by_geid() {
+        let tmp = NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+
+        let event_count = 100;
+        let event_size = 32;
+        let chunk_size = 10;
+
+        let mut events = Vec::new();
+        let mut event_sizes = Vec::new();
+        let mut first_geids = Vec::new();
+        for i in 0..event_count {
+            let geid = i as u64;
+            for j in 0..event_size {
+                events.push(((geid as usize + j) % 251) as u8);
+            }
+            event_sizes.push(event_size);
+            first_geids.push(geid);
+        }
+
+        {
+            let mut w = CtfsWriter::create_with_compression(
+                &path, 4096, 31,
+                crate::header::CompressionMethod::Zstd,
+            ).unwrap();
+            w.add_file_chunked("events.bin", &events, &event_sizes, &first_geids, chunk_size)
+                .unwrap();
+            w.close().unwrap();
+        }
+
+        // Seek to GEID 55
+        {
+            let mut r = CtfsReader::open(&path).unwrap();
+            let chunk_data = r.read_file_chunked("events.bin", Some(55)).unwrap();
+
+            // Should get events 50..59 (chunk starting at GEID 50)
+            let expected_start = 50 * event_size;
+            let expected_end = 60 * event_size;
+            let expected = &events[expected_start..expected_end];
+            assert_eq!(chunk_data.len(), expected.len());
+            assert_eq!(chunk_data, expected);
+        }
     }
 
     #[test]

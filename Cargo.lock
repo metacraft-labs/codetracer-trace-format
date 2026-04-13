@@ -221,6 +221,7 @@ name = "codetracer_ctfs"
 version = "0.1.0"
 dependencies = [
  "tempfile",
+ "zstd",
 ]
 
 [[package]]

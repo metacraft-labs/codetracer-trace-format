@@ -490,6 +490,33 @@ impl CtfsWriter {
         Ok(())
     }
 
+    /// Add a file containing chunked compressed event data.
+    ///
+    /// This is a convenience method that:
+    /// 1. Creates a `ChunkedWriter` to compress events into chunks with inline headers.
+    /// 2. Writes the chunked stream as a file in the CTFS container.
+    ///
+    /// `name`        -- the file name in the container.
+    /// `events`      -- concatenated raw serialized event bytes.
+    /// `event_sizes` -- byte size of each event.
+    /// `first_geids` -- GEID of each event (parallel to `event_sizes`).
+    /// `chunk_size`  -- number of events per chunk.
+    pub fn add_file_chunked(
+        &mut self,
+        name: &str,
+        events: &[u8],
+        event_sizes: &[usize],
+        first_geids: &[u64],
+        chunk_size: usize,
+    ) -> Result<FileHandle, CtfsError> {
+        let chunked_writer = crate::chunked::ChunkedWriter::new(self.compression, chunk_size);
+        let chunked_data = chunked_writer.write_chunked(events, event_sizes, first_geids)?;
+
+        let handle = self.add_file(name)?;
+        self.write(handle, &chunked_data)?;
+        Ok(handle)
+    }
+
     /// Close the container, flushing all buffered data and writing metadata.
     pub fn close(mut self) -> Result<(), CtfsError> {
         // Flush remaining buffered data for each file

@@ -237,6 +237,29 @@ impl CtfsReader {
         Ok(u64::from_le_bytes(buf))
     }
 
+    /// Read a chunked-compressed file, optionally seeking to a specific GEID.
+    ///
+    /// If `target_geid` is `None`, all chunks are decompressed and the full
+    /// event data is returned.
+    ///
+    /// If `target_geid` is `Some(geid)`, only the chunk containing that GEID
+    /// is decompressed and returned (along with the chunk header metadata).
+    pub fn read_file_chunked(
+        &mut self,
+        name: &str,
+        target_geid: Option<u64>,
+    ) -> Result<Vec<u8>, CtfsError> {
+        let raw = self.read_file(name)?;
+        match target_geid {
+            None => crate::chunked::ChunkedReader::decompress_all(&raw),
+            Some(geid) => {
+                let (data, _header) =
+                    crate::chunked::ChunkedReader::seek_to_geid(&raw, geid)?;
+                Ok(data)
+            }
+        }
+    }
+
     fn find_entry(&self, name: &str) -> Option<&FileEntry> {
         let encoded = crate::base40::base40_encode(name).ok()?;
         self.entries.iter().find(|e| e.name == encoded && !e.is_empty())

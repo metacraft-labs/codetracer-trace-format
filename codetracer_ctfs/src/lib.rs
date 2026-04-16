@@ -4,6 +4,7 @@ pub mod chunked;
 pub mod concurrent_reader;
 pub mod concurrent_writer;
 pub mod file_entry;
+pub mod filemap;
 pub mod header;
 pub mod reader;
 pub mod writer;

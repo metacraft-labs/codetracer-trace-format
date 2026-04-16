@@ -6,6 +6,8 @@ pub mod concurrent_writer;
 pub mod file_entry;
 pub mod filemap;
 pub mod header;
+pub mod mmap_info;
+pub mod platform_info;
 pub mod reader;
 pub mod writer;
 

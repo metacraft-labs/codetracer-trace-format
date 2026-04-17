@@ -1,6 +1,3 @@
-#[cfg(unix)]
-use std::os::unix::fs::FileExt;
-
 use std::fs::{File, OpenOptions};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -9,6 +6,7 @@ use crate::base40::base40_encode;
 use crate::block_alloc::AtomicBlockAllocator;
 use crate::file_entry::FILE_ENTRY_SIZE;
 use crate::header::{ExtendedHeader, Header, EXTENDED_HEADER_SIZE, HEADER_SIZE};
+use crate::pread_compat::{pread, pwrite};
 use crate::CtfsError;
 
 /// State for a file entry tracked in the root table.
@@ -66,46 +64,41 @@ fn level_capacity(usable: u64, level: u32) -> u64 {
     usable.saturating_pow(level)
 }
 
-/// Read a u64 pointer at a given index within a block using pread.
-#[cfg(unix)]
+/// Read a u64 pointer at a given index within a block using positional read.
 fn read_ptr_at(file: &File, block_num: u64, index: usize, block_size: u32) -> Result<u64, CtfsError> {
     let offset = block_num * block_size as u64 + (index * 8) as u64;
     let mut buf = [0u8; 8];
-    file.read_at(&mut buf, offset)?;
+    pread(file, &mut buf, offset)?;
     Ok(u64::from_le_bytes(buf))
 }
 
-/// Write a u64 pointer at a given index within a block using pwrite.
-#[cfg(unix)]
+/// Write a u64 pointer at a given index within a block using positional write.
 fn write_ptr_at(file: &File, block_num: u64, index: usize, value: u64, block_size: u32) -> Result<(), CtfsError> {
     let offset = block_num * block_size as u64 + (index * 8) as u64;
-    file.write_at(&value.to_le_bytes(), offset)?;
+    pwrite(file, &value.to_le_bytes(), offset)?;
     Ok(())
 }
 
-/// Write a zero-filled block using pwrite.
-#[cfg(unix)]
+/// Write a zero-filled block using positional write.
 fn write_zero_block_at(file: &File, block_num: u64, block_size: u32) -> Result<(), CtfsError> {
     let offset = block_num * block_size as u64;
     let zeros = vec![0u8; block_size as usize];
-    file.write_at(&zeros, offset)?;
+    pwrite(file, &zeros, offset)?;
     Ok(())
 }
 
-/// Write data to a block using pwrite.
-#[cfg(unix)]
+/// Write data to a block using positional write.
 fn write_block_data_at(file: &File, block_num: u64, data: &[u8], block_size: u32) -> Result<(), CtfsError> {
     let offset = block_num * block_size as u64;
     let mut padded = data.to_vec();
     padded.resize(block_size as usize, 0);
-    file.write_at(&padded, offset)?;
+    pwrite(file, &padded, offset)?;
     Ok(())
 }
 
 impl ConcurrentCtfsWriter {
     /// Create a new CTFS container at the given path.
     /// Returns an `Arc<Self>` for sharing across threads.
-    #[cfg(unix)]
     pub fn create(path: &Path, block_size: u32, max_root_entries: u32) -> Result<Arc<Self>, CtfsError> {
         let _ext_header = ExtendedHeader::new(block_size, max_root_entries)?;
 
@@ -134,7 +127,7 @@ impl ConcurrentCtfsWriter {
 
         // File entries are already zero (empty)
         // Write the entire root block at offset 0
-        file.write_at(&root_block, 0)?;
+        pwrite(&file, &root_block, 0)?;
 
         Ok(Arc::new(ConcurrentCtfsWriter {
             file,
@@ -149,7 +142,6 @@ impl ConcurrentCtfsWriter {
     /// Add a new named file to the container. Returns a `FileWriter` handle.
     ///
     /// This briefly locks the file entries mutex.
-    #[cfg(unix)]
     pub fn add_file(&self, name: &str) -> Result<FileWriter, CtfsError> {
         let name_encoded = base40_encode(name)?;
 
@@ -183,7 +175,6 @@ impl ConcurrentCtfsWriter {
 
     /// Close the container, writing all file entry metadata to disk.
     /// All `FileWriter` handles must have been flushed and dropped before calling this.
-    #[cfg(unix)]
     pub fn close(self) -> Result<(), CtfsError> {
         let entries = self.file_entries.lock().unwrap();
 
@@ -193,7 +184,7 @@ impl ConcurrentCtfsWriter {
             buf[0..8].copy_from_slice(&entry_state.size.to_le_bytes());
             buf[8..16].copy_from_slice(&entry_state.map_block.to_le_bytes());
             buf[16..24].copy_from_slice(&entry_state.name_encoded.to_le_bytes());
-            self.file.write_at(&buf, entry_offset)?;
+            pwrite(&self.file, &buf, entry_offset)?;
         }
 
         self.file.sync_all()?;
@@ -203,7 +194,6 @@ impl ConcurrentCtfsWriter {
 
 impl FileWriter {
     /// Write data to this file (appends to end).
-    #[cfg(unix)]
     pub fn write(&mut self, parent: &ConcurrentCtfsWriter, data: &[u8]) -> Result<usize, CtfsError> {
         let bs = self.block_size as usize;
         self.buffer.extend_from_slice(data);
@@ -219,7 +209,6 @@ impl FileWriter {
     }
 
     /// Flush any buffered data and update the file entry size in the parent.
-    #[cfg(unix)]
     pub fn flush(&mut self, parent: &ConcurrentCtfsWriter) -> Result<(), CtfsError> {
         // Flush any remaining partial block
         if !self.buffer.is_empty() {
@@ -239,13 +228,12 @@ impl FileWriter {
         buf[0..8].copy_from_slice(&self.size.to_le_bytes());
         buf[8..16].copy_from_slice(&self.root_block.to_le_bytes());
         buf[16..24].copy_from_slice(&self.name_encoded.to_le_bytes());
-        parent.file.write_at(&buf, entry_offset)?;
+        pwrite(&parent.file, &buf, entry_offset)?;
 
         Ok(())
     }
 
     /// Flush a single data block into the mapping chain.
-    #[cfg(unix)]
     fn flush_data_block(&mut self, parent: &ConcurrentCtfsWriter, block_data: &[u8]) -> Result<(), CtfsError> {
         let bs = self.block_size;
         let n = bs as u64 / 8;
@@ -266,7 +254,6 @@ impl FileWriter {
     }
 
     /// Insert a data block pointer at the given block_index using the bottom-up chain model.
-    #[cfg(unix)]
     fn insert_data_block_chain(
         &mut self,
         parent: &ConcurrentCtfsWriter,
@@ -312,7 +299,6 @@ impl FileWriter {
     }
 
     /// Navigate within a level-k block to insert a data block pointer.
-    #[cfg(unix)]
     fn navigate_and_insert(
         &self,
         parent: &ConcurrentCtfsWriter,

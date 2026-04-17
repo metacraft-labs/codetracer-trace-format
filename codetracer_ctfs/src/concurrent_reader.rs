@@ -1,17 +1,15 @@
-#[cfg(unix)]
-use std::os::unix::fs::FileExt;
-
 use std::fs::File;
 use std::path::Path;
 
 use crate::base40::base40_decode;
 use crate::file_entry::{FileEntry, FILE_ENTRY_SIZE};
 use crate::header::{EXTENDED_HEADER_SIZE, HEADER_SIZE};
+use crate::pread_compat::pread;
 use crate::CtfsError;
 
 /// Thread-safe reader for CTFS containers.
 ///
-/// Uses `pread` (positional read) for all I/O, so it is safe to share
+/// Uses positional read for all I/O, so it is safe to share
 /// across threads. The file entries are read at open time, but `refresh()`
 /// can re-read them to pick up updates from concurrent writers.
 pub struct ConcurrentCtfsReader {
@@ -31,18 +29,16 @@ fn level_capacity(usable: u64, level: u32) -> u64 {
     usable.saturating_pow(level)
 }
 
-/// Read a u64 pointer at a given index within a block using pread.
-#[cfg(unix)]
+/// Read a u64 pointer at a given index within a block using positional read.
 fn read_ptr_at(file: &File, block_num: u64, index: usize, block_size: u32) -> Result<u64, CtfsError> {
     let offset = block_num * block_size as u64 + (index * 8) as u64;
     let mut buf = [0u8; 8];
-    file.read_at(&mut buf, offset)?;
+    pread(file, &mut buf, offset)?;
     Ok(u64::from_le_bytes(buf))
 }
 
 impl ConcurrentCtfsReader {
     /// Open an existing CTFS container for concurrent reading.
-    #[cfg(unix)]
     pub fn open(path: &Path) -> Result<Self, CtfsError> {
         let file = File::open(path)?;
 
@@ -50,7 +46,7 @@ impl ConcurrentCtfsReader {
 
         // Read header
         let mut header_buf = [0u8; HEADER_SIZE];
-        file.read_at(&mut header_buf, 0)?;
+        pread(&file, &mut header_buf, 0)?;
         if header_buf[0..5] != crate::header::MAGIC {
             return Err(CtfsError::InvalidMagic);
         }
@@ -60,7 +56,7 @@ impl ConcurrentCtfsReader {
 
         // Read extended header
         let mut ext_buf = [0u8; EXTENDED_HEADER_SIZE];
-        file.read_at(&mut ext_buf, HEADER_SIZE as u64)?;
+        pread(&file, &mut ext_buf, HEADER_SIZE as u64)?;
         let block_size = u32::from_le_bytes(ext_buf[0..4].try_into().unwrap());
         let max_root_entries = u32::from_le_bytes(ext_buf[4..8].try_into().unwrap());
 
@@ -73,7 +69,7 @@ impl ConcurrentCtfsReader {
         for i in 0..max_root_entries {
             let offset = entries_offset + (i as u64) * FILE_ENTRY_SIZE as u64;
             let mut buf = [0u8; FILE_ENTRY_SIZE];
-            file.read_at(&mut buf, offset)?;
+            pread(&file, &mut buf, offset)?;
             let size = u64::from_le_bytes(buf[0..8].try_into().unwrap());
             let map_block = u64::from_le_bytes(buf[8..16].try_into().unwrap());
             let name = u64::from_le_bytes(buf[16..24].try_into().unwrap());
@@ -90,12 +86,11 @@ impl ConcurrentCtfsReader {
     }
 
     /// Re-read file entries from disk to pick up updates from concurrent writers.
-    #[cfg(unix)]
     pub fn refresh(&mut self) -> Result<(), CtfsError> {
         for i in 0..self.max_root_entries {
             let offset = self.entries_offset + (i as u64) * FILE_ENTRY_SIZE as u64;
             let mut buf = [0u8; FILE_ENTRY_SIZE];
-            self.file.read_at(&mut buf, offset)?;
+            pread(&self.file, &mut buf, offset)?;
             let size = u64::from_le_bytes(buf[0..8].try_into().unwrap());
             let map_block = u64::from_le_bytes(buf[8..16].try_into().unwrap());
             let name = u64::from_le_bytes(buf[16..24].try_into().unwrap());
@@ -118,8 +113,7 @@ impl ConcurrentCtfsReader {
         self.find_entry(name).map(|e| e.size)
     }
 
-    /// Read an entire file's contents using pread.
-    #[cfg(unix)]
+    /// Read an entire file's contents using positional read.
     pub fn read_file(&self, name: &str) -> Result<Vec<u8>, CtfsError> {
         let entry = *self
             .find_entry(name)
@@ -140,15 +134,14 @@ impl ConcurrentCtfsReader {
             let remaining = entry.size as usize - data.len();
             let to_read = remaining.min(bs as usize);
             let mut buf = vec![0u8; to_read];
-            self.file.read_at(&mut buf, block_offset)?;
+            pread(&self.file, &mut buf, block_offset)?;
             data.extend_from_slice(&buf);
         }
 
         Ok(data)
     }
 
-    /// Read from an arbitrary position within a file using pread.
-    #[cfg(unix)]
+    /// Read from an arbitrary position within a file using positional read.
     pub fn read_at(&self, name: &str, offset: u64, buf: &mut [u8]) -> Result<usize, CtfsError> {
         let entry = *self
             .find_entry(name)
@@ -172,7 +165,7 @@ impl ConcurrentCtfsReader {
             let block_offset = data_block * bs + offset_in_block as u64;
 
             let chunk = (bs as usize - offset_in_block).min(to_read - bytes_read);
-            self.file.read_at(&mut buf[bytes_read..bytes_read + chunk], block_offset)?;
+            pread(&self.file, &mut buf[bytes_read..bytes_read + chunk], block_offset)?;
             bytes_read += chunk;
         }
 
@@ -180,7 +173,6 @@ impl ConcurrentCtfsReader {
     }
 
     /// Resolve a data block index to its physical block number.
-    #[cfg(unix)]
     fn resolve_block(&self, entry: &FileEntry, block_index: u64) -> Result<u64, CtfsError> {
         let n = self.block_size as u64 / 8;
         let usable = n - 1;
@@ -218,7 +210,6 @@ impl ConcurrentCtfsReader {
         self.navigate_to_data_block(current_level_block, level, idx, usable)
     }
 
-    #[cfg(unix)]
     fn navigate_to_data_block(
         &self,
         mapping_block: u64,

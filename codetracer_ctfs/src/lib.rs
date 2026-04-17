@@ -8,6 +8,7 @@ pub mod filemap;
 pub mod header;
 pub mod mmap_info;
 pub mod platform_info;
+pub(crate) mod pread_compat;
 pub mod reader;
 pub mod writer;
 

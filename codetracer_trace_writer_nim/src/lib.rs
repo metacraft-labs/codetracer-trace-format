@@ -507,6 +507,199 @@ impl NimTraceWriter {
 }
 
 // ---------------------------------------------------------------------------
+// TraceWriter trait — drop-in replacement for `codetracer_trace_writer::trace_writer::TraceWriter`
+// ---------------------------------------------------------------------------
+
+/// Re-export module so consumers can write `use codetracer_trace_writer_nim::trace_writer::TraceWriter`.
+pub mod trace_writer {
+    pub use super::TraceWriter;
+}
+
+/// Trait matching the API surface of the original `codetracer_trace_writer::TraceWriter`.
+///
+/// The Nim-backed [`NimTraceWriter`] is the sole implementation shipped by this crate.
+/// Consumers that previously used `Box<dyn TraceWriter>` can continue to do so unchanged.
+#[allow(unused_variables)]
+pub trait TraceWriter: Send {
+    fn begin_writing_trace_metadata(&mut self, path: &Path) -> Result<(), Box<dyn Error>>;
+    fn finish_writing_trace_metadata(&mut self) -> Result<(), Box<dyn Error>>;
+    fn begin_writing_trace_events(&mut self, path: &Path) -> Result<(), Box<dyn Error>>;
+    fn finish_writing_trace_events(&mut self) -> Result<(), Box<dyn Error>>;
+    fn begin_writing_trace_paths(&mut self, path: &Path) -> Result<(), Box<dyn Error>>;
+    fn finish_writing_trace_paths(&mut self) -> Result<(), Box<dyn Error>>;
+
+    fn set_workdir(&mut self, workdir: &Path);
+    fn start(&mut self, path: &Path, line: Line);
+
+    fn ensure_path_id(&mut self, path: &Path) -> PathId;
+    fn ensure_function_id(&mut self, function_name: &str, path: &Path, line: Line) -> FunctionId;
+    fn ensure_type_id(&mut self, kind: TypeKind, lang_type: &str) -> TypeId;
+    fn ensure_raw_type_id(&mut self, typ: TypeRecord) -> TypeId;
+    fn ensure_variable_id(&mut self, variable_name: &str) -> VariableId;
+
+    fn register_path(&mut self, path: &Path);
+    fn register_function(&mut self, name: &str, path: &Path, line: Line);
+    fn register_step(&mut self, path: &Path, line: Line);
+    fn register_call(&mut self, function_id: FunctionId, args: Vec<FullValueRecord>);
+    fn arg(&mut self, name: &str, value: ValueRecord) -> FullValueRecord;
+    fn register_return(&mut self, return_value: ValueRecord);
+    fn register_special_event(&mut self, kind: EventLogKind, metadata: &str, content: &str);
+
+    fn to_raw_type(&self, kind: TypeKind, lang_type: &str) -> TypeRecord;
+    fn register_type(&mut self, kind: TypeKind, lang_type: &str);
+    fn register_raw_type(&mut self, typ: TypeRecord);
+    fn register_asm(&mut self, instructions: &[String]);
+    fn register_variable_with_full_value(&mut self, name: &str, value: ValueRecord);
+    fn register_variable_name(&mut self, variable_name: &str);
+    fn register_full_value(&mut self, variable_id: VariableId, value: ValueRecord);
+    fn register_compound_value(&mut self, place: Place, value: ValueRecord);
+    fn register_cell_value(&mut self, place: Place, value: ValueRecord);
+    fn assign_compound_item(&mut self, place: Place, index: usize, item_place: Place);
+    fn assign_cell(&mut self, place: Place, new_value: ValueRecord);
+    fn register_variable(&mut self, variable_name: &str, place: Place);
+    fn drop_variable(&mut self, variable_name: &str);
+    fn assign(&mut self, variable_name: &str, rvalue: RValue, pass_by: PassBy);
+    fn bind_variable(&mut self, variable_name: &str, place: Place);
+    fn drop_variables(&mut self, variable_names: &[String]);
+    fn simple_rvalue(&mut self, variable_name: &str) -> RValue;
+    fn compound_rvalue(&mut self, variable_dependencies: &[String]) -> RValue;
+    fn drop_last_step(&mut self);
+
+    fn add_event(&mut self, event: TraceLowLevelEvent);
+    fn append_events(&mut self, events: &mut Vec<TraceLowLevelEvent>);
+    fn events(&self) -> &[TraceLowLevelEvent];
+}
+
+impl TraceWriter for NimTraceWriter {
+    fn begin_writing_trace_metadata(&mut self, path: &Path) -> Result<(), Box<dyn Error>> {
+        NimTraceWriter::begin_writing_trace_metadata(self, path)
+    }
+    fn finish_writing_trace_metadata(&mut self) -> Result<(), Box<dyn Error>> {
+        NimTraceWriter::finish_writing_trace_metadata(self)
+    }
+    fn begin_writing_trace_events(&mut self, path: &Path) -> Result<(), Box<dyn Error>> {
+        NimTraceWriter::begin_writing_trace_events(self, path)
+    }
+    fn finish_writing_trace_events(&mut self) -> Result<(), Box<dyn Error>> {
+        NimTraceWriter::finish_writing_trace_events(self)
+    }
+    fn begin_writing_trace_paths(&mut self, path: &Path) -> Result<(), Box<dyn Error>> {
+        NimTraceWriter::begin_writing_trace_paths(self, path)
+    }
+    fn finish_writing_trace_paths(&mut self) -> Result<(), Box<dyn Error>> {
+        NimTraceWriter::finish_writing_trace_paths(self)
+    }
+    fn set_workdir(&mut self, workdir: &Path) {
+        NimTraceWriter::set_workdir(self, workdir)
+    }
+    fn start(&mut self, path: &Path, line: Line) {
+        NimTraceWriter::start(self, path, line)
+    }
+    fn ensure_path_id(&mut self, path: &Path) -> PathId {
+        NimTraceWriter::ensure_path_id(self, path)
+    }
+    fn ensure_function_id(&mut self, function_name: &str, path: &Path, line: Line) -> FunctionId {
+        NimTraceWriter::ensure_function_id(self, function_name, path, line)
+    }
+    fn ensure_type_id(&mut self, kind: TypeKind, lang_type: &str) -> TypeId {
+        NimTraceWriter::ensure_type_id(self, kind, lang_type)
+    }
+    fn ensure_raw_type_id(&mut self, typ: TypeRecord) -> TypeId {
+        NimTraceWriter::ensure_raw_type_id(self, typ)
+    }
+    fn ensure_variable_id(&mut self, variable_name: &str) -> VariableId {
+        NimTraceWriter::ensure_variable_id(self, variable_name)
+    }
+    fn register_path(&mut self, path: &Path) {
+        NimTraceWriter::register_path(self, path)
+    }
+    fn register_function(&mut self, name: &str, path: &Path, line: Line) {
+        NimTraceWriter::register_function(self, name, path, line)
+    }
+    fn register_step(&mut self, path: &Path, line: Line) {
+        NimTraceWriter::register_step(self, path, line)
+    }
+    fn register_call(&mut self, function_id: FunctionId, args: Vec<FullValueRecord>) {
+        NimTraceWriter::register_call(self, function_id, args)
+    }
+    fn arg(&mut self, name: &str, value: ValueRecord) -> FullValueRecord {
+        NimTraceWriter::arg(self, name, value)
+    }
+    fn register_return(&mut self, return_value: ValueRecord) {
+        NimTraceWriter::register_return(self, return_value)
+    }
+    fn register_special_event(&mut self, kind: EventLogKind, metadata: &str, content: &str) {
+        NimTraceWriter::register_special_event(self, kind, metadata, content)
+    }
+    fn to_raw_type(&self, kind: TypeKind, lang_type: &str) -> TypeRecord {
+        NimTraceWriter::to_raw_type(self, kind, lang_type)
+    }
+    fn register_type(&mut self, kind: TypeKind, lang_type: &str) {
+        NimTraceWriter::register_type(self, kind, lang_type)
+    }
+    fn register_raw_type(&mut self, typ: TypeRecord) {
+        NimTraceWriter::register_raw_type(self, typ)
+    }
+    fn register_asm(&mut self, instructions: &[String]) {
+        NimTraceWriter::register_asm(self, instructions)
+    }
+    fn register_variable_with_full_value(&mut self, name: &str, value: ValueRecord) {
+        NimTraceWriter::register_variable_with_full_value(self, name, value)
+    }
+    fn register_variable_name(&mut self, variable_name: &str) {
+        NimTraceWriter::register_variable_name(self, variable_name)
+    }
+    fn register_full_value(&mut self, variable_id: VariableId, value: ValueRecord) {
+        NimTraceWriter::register_full_value(self, variable_id, value)
+    }
+    fn register_compound_value(&mut self, place: Place, value: ValueRecord) {
+        NimTraceWriter::register_compound_value(self, place, value)
+    }
+    fn register_cell_value(&mut self, place: Place, value: ValueRecord) {
+        NimTraceWriter::register_cell_value(self, place, value)
+    }
+    fn assign_compound_item(&mut self, place: Place, index: usize, item_place: Place) {
+        NimTraceWriter::assign_compound_item(self, place, index, item_place)
+    }
+    fn assign_cell(&mut self, place: Place, new_value: ValueRecord) {
+        NimTraceWriter::assign_cell(self, place, new_value)
+    }
+    fn register_variable(&mut self, variable_name: &str, place: Place) {
+        NimTraceWriter::register_variable(self, variable_name, place)
+    }
+    fn drop_variable(&mut self, variable_name: &str) {
+        NimTraceWriter::drop_variable(self, variable_name)
+    }
+    fn assign(&mut self, variable_name: &str, rvalue: RValue, pass_by: PassBy) {
+        NimTraceWriter::assign(self, variable_name, rvalue, pass_by)
+    }
+    fn bind_variable(&mut self, variable_name: &str, place: Place) {
+        NimTraceWriter::bind_variable(self, variable_name, place)
+    }
+    fn drop_variables(&mut self, variable_names: &[String]) {
+        NimTraceWriter::drop_variables(self, variable_names)
+    }
+    fn simple_rvalue(&mut self, variable_name: &str) -> RValue {
+        NimTraceWriter::simple_rvalue(self, variable_name)
+    }
+    fn compound_rvalue(&mut self, variable_dependencies: &[String]) -> RValue {
+        NimTraceWriter::compound_rvalue(self, variable_dependencies)
+    }
+    fn drop_last_step(&mut self) {
+        NimTraceWriter::drop_last_step(self)
+    }
+    fn add_event(&mut self, event: TraceLowLevelEvent) {
+        NimTraceWriter::add_event(self, event)
+    }
+    fn append_events(&mut self, events: &mut Vec<TraceLowLevelEvent>) {
+        NimTraceWriter::append_events(self, events)
+    }
+    fn events(&self) -> &[TraceLowLevelEvent] {
+        NimTraceWriter::events(self)
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Public factory function — drop-in replacement for codetracer_trace_writer
 // ---------------------------------------------------------------------------
 
@@ -517,7 +710,7 @@ pub fn create_trace_writer(
     program: &str,
     _args: &[String],
     format: TraceEventsFileFormat,
-) -> Box<NimTraceWriter> {
+) -> Box<dyn TraceWriter> {
     Box::new(NimTraceWriter::new(program, format))
 }
 
@@ -562,6 +755,234 @@ fn value_record_to_raw(value: &ValueRecord) -> (String, TypeKind, String) {
         ValueRecord::BigInt { negative, type_id, .. } => {
             let sign = if *negative { "-" } else { "" };
             (format!("{}(bigint)", sign), TypeKind::Int, format!("type_{}", type_id.0))
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// NonStreamingTraceWriter — in-memory test double
+// ---------------------------------------------------------------------------
+
+/// A simple in-memory trace writer for use in unit tests.
+///
+/// This is a drop-in replacement for `codetracer_trace_writer::non_streaming_trace_writer::NonStreamingTraceWriter`.
+/// It buffers all events in memory and exposes them via the public `events` field.
+pub mod non_streaming_trace_writer {
+    use super::*;
+    use std::collections::HashMap;
+    use std::path::{Path, PathBuf};
+
+    /// In-memory trace writer that records events for inspection in tests.
+    pub struct NonStreamingTraceWriter {
+        /// Accumulated trace events — inspect this in tests.
+        pub events: Vec<TraceLowLevelEvent>,
+
+        format: TraceEventsFileFormat,
+        paths: HashMap<PathBuf, PathId>,
+        functions: HashMap<String, FunctionId>,
+        types: HashMap<String, TypeId>,
+        variables: HashMap<String, VariableId>,
+        next_function_id: usize,
+        next_type_id: usize,
+        next_variable_id: usize,
+        next_path_id: usize,
+        workdir: PathBuf,
+    }
+
+    impl NonStreamingTraceWriter {
+        /// Create a new in-memory writer for the given program.
+        pub fn new(program: &str, _args: &[String]) -> Self {
+            let _ = program;
+            NonStreamingTraceWriter {
+                events: Vec::new(),
+                format: TraceEventsFileFormat::Binary,
+                paths: HashMap::new(),
+                functions: HashMap::new(),
+                types: HashMap::new(),
+                variables: HashMap::new(),
+                next_function_id: 0,
+                next_type_id: 0,
+                next_variable_id: 0,
+                next_path_id: 0,
+                workdir: PathBuf::new(),
+            }
+        }
+
+        pub fn set_format(&mut self, format: TraceEventsFileFormat) {
+            self.format = format;
+        }
+    }
+
+    #[allow(unused_variables)]
+    impl TraceWriter for NonStreamingTraceWriter {
+        fn begin_writing_trace_metadata(&mut self, path: &Path) -> Result<(), Box<dyn Error>> {
+            Ok(())
+        }
+        fn finish_writing_trace_metadata(&mut self) -> Result<(), Box<dyn Error>> {
+            Ok(())
+        }
+        fn begin_writing_trace_events(&mut self, path: &Path) -> Result<(), Box<dyn Error>> {
+            Ok(())
+        }
+        fn finish_writing_trace_events(&mut self) -> Result<(), Box<dyn Error>> {
+            Ok(())
+        }
+        fn begin_writing_trace_paths(&mut self, path: &Path) -> Result<(), Box<dyn Error>> {
+            Ok(())
+        }
+        fn finish_writing_trace_paths(&mut self) -> Result<(), Box<dyn Error>> {
+            Ok(())
+        }
+        fn set_workdir(&mut self, workdir: &Path) {
+            self.workdir = workdir.to_path_buf();
+        }
+        fn start(&mut self, path: &Path, line: Line) {
+            // Mirrors AbstractTraceWriter::start — registers the toplevel function and calls it.
+            let function_id = self.ensure_function_id("<toplevel>", path, line);
+            self.register_call(function_id, vec![]);
+            self.ensure_type_id(TypeKind::None, "None");
+        }
+        fn ensure_path_id(&mut self, path: &Path) -> PathId {
+            if let Some(&id) = self.paths.get(path) {
+                return id;
+            }
+            let id = PathId(self.next_path_id);
+            self.next_path_id += 1;
+            self.paths.insert(path.to_path_buf(), id);
+            self.events.push(TraceLowLevelEvent::Path(path.to_path_buf()));
+            id
+        }
+        fn ensure_function_id(&mut self, function_name: &str, path: &Path, line: Line) -> FunctionId {
+            if let Some(&id) = self.functions.get(function_name) {
+                return id;
+            }
+            let id = FunctionId(self.next_function_id);
+            self.next_function_id += 1;
+            self.functions.insert(function_name.to_string(), id);
+            // register_function adds Path event + Function event
+            let path_id = self.ensure_path_id(path);
+            self.events.push(TraceLowLevelEvent::Function(FunctionRecord {
+                name: function_name.to_string(),
+                path_id,
+                line,
+            }));
+            id
+        }
+        fn ensure_type_id(&mut self, kind: TypeKind, lang_type: &str) -> TypeId {
+            let key = format!("{:?}:{}", kind, lang_type);
+            if let Some(&id) = self.types.get(&key) {
+                return id;
+            }
+            let id = TypeId(self.next_type_id);
+            self.next_type_id += 1;
+            self.types.insert(key, id);
+            id
+        }
+        fn ensure_raw_type_id(&mut self, typ: TypeRecord) -> TypeId {
+            self.ensure_type_id(typ.kind, &typ.lang_type)
+        }
+        fn ensure_variable_id(&mut self, variable_name: &str) -> VariableId {
+            if let Some(&id) = self.variables.get(variable_name) {
+                return id;
+            }
+            let id = VariableId(self.next_variable_id);
+            self.next_variable_id += 1;
+            self.variables.insert(variable_name.to_string(), id);
+            id
+        }
+        fn register_path(&mut self, path: &Path) {
+            self.events.push(TraceLowLevelEvent::Path(path.to_path_buf()));
+        }
+        fn register_function(&mut self, name: &str, path: &Path, line: Line) {
+            self.ensure_function_id(name, path, line);
+        }
+        fn register_step(&mut self, path: &Path, line: Line) {
+            let path_id = self.ensure_path_id(path);
+            self.events.push(TraceLowLevelEvent::Step(StepRecord {
+                path_id,
+                line,
+            }));
+        }
+        fn register_call(&mut self, function_id: FunctionId, args: Vec<FullValueRecord>) {
+            self.events.push(TraceLowLevelEvent::Call(CallRecord {
+                function_id,
+                args,
+            }));
+        }
+        fn arg(&mut self, name: &str, value: ValueRecord) -> FullValueRecord {
+            let variable_id = self.ensure_variable_id(name);
+            FullValueRecord { variable_id, value }
+        }
+        fn register_return(&mut self, return_value: ValueRecord) {
+            self.events.push(TraceLowLevelEvent::Return(ReturnRecord {
+                return_value,
+            }));
+        }
+        fn register_special_event(&mut self, kind: EventLogKind, metadata: &str, content: &str) {
+            self.events.push(TraceLowLevelEvent::Event(RecordEvent {
+                kind,
+                metadata: metadata.to_string(),
+                content: content.to_string(),
+            }));
+        }
+        fn to_raw_type(&self, kind: TypeKind, lang_type: &str) -> TypeRecord {
+            TypeRecord {
+                kind,
+                lang_type: lang_type.to_string(),
+                specific_info: TypeSpecificInfo::None,
+            }
+        }
+        fn register_type(&mut self, kind: TypeKind, lang_type: &str) {
+            self.ensure_type_id(kind, lang_type);
+        }
+        fn register_raw_type(&mut self, typ: TypeRecord) {
+            self.ensure_type_id(typ.kind, &typ.lang_type);
+        }
+        fn register_asm(&mut self, instructions: &[String]) {}
+        fn register_variable_with_full_value(&mut self, name: &str, value: ValueRecord) {
+            let variable_id = self.ensure_variable_id(name);
+            self.events.push(TraceLowLevelEvent::Value(FullValueRecord {
+                variable_id,
+                value,
+            }));
+        }
+        fn register_variable_name(&mut self, variable_name: &str) {
+            self.ensure_variable_id(variable_name);
+        }
+        fn register_full_value(&mut self, variable_id: VariableId, value: ValueRecord) {
+            self.events.push(TraceLowLevelEvent::Value(FullValueRecord {
+                variable_id,
+                value,
+            }));
+        }
+        fn register_compound_value(&mut self, place: Place, value: ValueRecord) {}
+        fn register_cell_value(&mut self, place: Place, value: ValueRecord) {}
+        fn assign_compound_item(&mut self, place: Place, index: usize, item_place: Place) {}
+        fn assign_cell(&mut self, place: Place, new_value: ValueRecord) {}
+        fn register_variable(&mut self, variable_name: &str, place: Place) {}
+        fn drop_variable(&mut self, variable_name: &str) {}
+        fn assign(&mut self, variable_name: &str, rvalue: RValue, pass_by: PassBy) {}
+        fn bind_variable(&mut self, variable_name: &str, place: Place) {}
+        fn drop_variables(&mut self, variable_names: &[String]) {}
+        fn simple_rvalue(&mut self, variable_name: &str) -> RValue {
+            RValue::Simple(VariableId(0))
+        }
+        fn compound_rvalue(&mut self, variable_dependencies: &[String]) -> RValue {
+            RValue::Compound(vec![])
+        }
+        fn drop_last_step(&mut self) {
+            if let Some(pos) = self.events.iter().rposition(|e| matches!(e, TraceLowLevelEvent::Step(_))) {
+                self.events.remove(pos);
+            }
+        }
+        fn add_event(&mut self, event: TraceLowLevelEvent) {
+            self.events.push(event);
+        }
+        fn append_events(&mut self, events: &mut Vec<TraceLowLevelEvent>) {
+            self.events.append(events);
+        }
+        fn events(&self) -> &[TraceLowLevelEvent] {
+            &self.events
         }
     }
 }

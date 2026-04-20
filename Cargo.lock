@@ -314,6 +314,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "codetracer_trace_writer_nim"
+version = "0.1.0"
+dependencies = [
+ "codetracer_trace_types",
+]
+
+[[package]]
 name = "colorchoice"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -1,0 +1,11 @@
+[package]
+name = "codetracer_trace_writer_nim"
+version = "0.1.0"
+edition = "2021"
+description = "TraceWriter implementation backed by the Nim codetracer-trace-format-nim library"
+
+[dependencies]
+codetracer_trace_types = { path = "../codetracer_trace_types" }
+
+[build-dependencies]
+# None needed — we use manual linking via build.rs

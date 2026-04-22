@@ -105,6 +105,24 @@ extern "C" {
         metadata: *const std::os::raw::c_char,
         content: *const std::os::raw::c_char,
     );
+
+    // ----- meta.dat -----
+
+    fn ct_write_meta_dat(
+        handle: *mut std::ffi::c_void,
+        recorder_id: *const u8,
+        recorder_id_len: usize,
+    ) -> i32;
+
+    fn ct_read_meta_dat(data: *const u8, len: usize) -> *mut std::ffi::c_void;
+    fn ct_meta_dat_program(h: *mut std::ffi::c_void, out_len: *mut usize) -> *const u8;
+    fn ct_meta_dat_workdir(h: *mut std::ffi::c_void, out_len: *mut usize) -> *const u8;
+    fn ct_meta_dat_args_count(h: *mut std::ffi::c_void) -> usize;
+    fn ct_meta_dat_arg(h: *mut std::ffi::c_void, idx: usize, out_len: *mut usize) -> *const u8;
+    fn ct_meta_dat_paths_count(h: *mut std::ffi::c_void) -> usize;
+    fn ct_meta_dat_path(h: *mut std::ffi::c_void, idx: usize, out_len: *mut usize) -> *const u8;
+    fn ct_meta_dat_recorder_id(h: *mut std::ffi::c_void, out_len: *mut usize) -> *const u8;
+    fn ct_meta_dat_free(h: *mut std::ffi::c_void);
 }
 
 // ---------------------------------------------------------------------------
@@ -211,6 +229,23 @@ impl NimTraceWriter {
         if !self.handle.is_null() {
             let rc = unsafe { trace_writer_close(self.handle) };
             check_result(rc)
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Write binary meta.dat to the trace container.
+    pub fn write_meta_dat(&mut self, recorder_id: &str) -> Result<(), Box<dyn Error>> {
+        ensure_nim_initialized();
+        let ret = unsafe {
+            ct_write_meta_dat(
+                self.handle,
+                recorder_id.as_ptr(),
+                recorder_id.len(),
+            )
+        };
+        if ret != 0 {
+            Err(last_error().into())
         } else {
             Ok(())
         }
@@ -696,6 +731,111 @@ impl TraceWriter for NimTraceWriter {
     }
     fn events(&self) -> &[TraceLowLevelEvent] {
         NimTraceWriter::events(self)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// MetaDatReader — read binary meta.dat blobs
+// ---------------------------------------------------------------------------
+
+/// Reader for binary meta.dat blobs produced by the Nim trace writer.
+///
+/// The underlying data is owned by the Nim heap and freed on [`Drop`].
+pub struct MetaDatReader {
+    handle: *mut std::ffi::c_void,
+}
+
+// Same rationale as NimTraceWriter — single-threaded Nim library, exclusive access.
+unsafe impl Send for MetaDatReader {}
+
+impl MetaDatReader {
+    /// Parse a binary meta.dat blob.
+    pub fn parse(data: &[u8]) -> Result<Self, Box<dyn Error>> {
+        ensure_nim_initialized();
+        let h = unsafe { ct_read_meta_dat(data.as_ptr(), data.len()) };
+        if h.is_null() {
+            Err(last_error().into())
+        } else {
+            Ok(MetaDatReader { handle: h })
+        }
+    }
+
+    /// The traced program path.
+    pub fn program(&self) -> &str {
+        unsafe {
+            let mut len: usize = 0;
+            let ptr = ct_meta_dat_program(self.handle, &mut len);
+            std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len))
+        }
+    }
+
+    /// The working directory at recording time.
+    pub fn workdir(&self) -> &str {
+        unsafe {
+            let mut len: usize = 0;
+            let ptr = ct_meta_dat_workdir(self.handle, &mut len);
+            std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len))
+        }
+    }
+
+    /// Number of command-line arguments.
+    pub fn args_count(&self) -> usize {
+        unsafe { ct_meta_dat_args_count(self.handle) }
+    }
+
+    /// Get the command-line argument at `idx`, or `None` if out of range.
+    pub fn arg(&self, idx: usize) -> Option<&str> {
+        if idx >= self.args_count() {
+            return None;
+        }
+        unsafe {
+            let mut len: usize = 0;
+            let ptr = ct_meta_dat_arg(self.handle, idx, &mut len);
+            if ptr.is_null() {
+                None
+            } else {
+                Some(std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len)))
+            }
+        }
+    }
+
+    /// Number of source paths recorded.
+    pub fn paths_count(&self) -> usize {
+        unsafe { ct_meta_dat_paths_count(self.handle) }
+    }
+
+    /// Get the source path at `idx`, or `None` if out of range.
+    pub fn path(&self, idx: usize) -> Option<&str> {
+        if idx >= self.paths_count() {
+            return None;
+        }
+        unsafe {
+            let mut len: usize = 0;
+            let ptr = ct_meta_dat_path(self.handle, idx, &mut len);
+            if ptr.is_null() {
+                None
+            } else {
+                Some(std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len)))
+            }
+        }
+    }
+
+    /// The recorder identifier string.
+    pub fn recorder_id(&self) -> &str {
+        unsafe {
+            let mut len: usize = 0;
+            let ptr = ct_meta_dat_recorder_id(self.handle, &mut len);
+            std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len))
+        }
+    }
+}
+
+impl Drop for MetaDatReader {
+    fn drop(&mut self) {
+        if !self.handle.is_null() {
+            unsafe { ct_meta_dat_free(self.handle) };
+            self.handle = std::ptr::null_mut();
+        }
     }
 }
 

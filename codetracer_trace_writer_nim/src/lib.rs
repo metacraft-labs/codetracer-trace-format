@@ -99,6 +99,54 @@ extern "C" {
         type_name: *const std::os::raw::c_char,
     );
 
+    fn trace_writer_register_variable_cbor(
+        handle: *mut std::ffi::c_void,
+        name: *const std::os::raw::c_char,
+        cbor_data: *const u8,
+        cbor_len: usize,
+    );
+
+    fn trace_writer_register_return_cbor(
+        handle: *mut std::ffi::c_void,
+        cbor_data: *const u8,
+        cbor_len: usize,
+    );
+
+    // ----- Streaming value encoder -----
+
+    fn ct_value_encoder_new() -> *mut std::ffi::c_void;
+    fn ct_value_encoder_free(h: *mut std::ffi::c_void);
+    fn ct_value_encoder_reset(h: *mut std::ffi::c_void);
+
+    fn ct_value_write_int(h: *mut std::ffi::c_void, value: i64, type_id: u64) -> i32;
+    fn ct_value_write_float(h: *mut std::ffi::c_void, value: f64, type_id: u64) -> i32;
+    fn ct_value_write_bool_typed(h: *mut std::ffi::c_void, value: i32, type_id: u64) -> i32;
+    fn ct_value_write_string(
+        h: *mut std::ffi::c_void,
+        data: *const u8,
+        len: usize,
+        type_id: u64,
+    ) -> i32;
+    fn ct_value_write_none_typed(h: *mut std::ffi::c_void, type_id: u64) -> i32;
+    fn ct_value_write_raw(
+        h: *mut std::ffi::c_void,
+        data: *const u8,
+        len: usize,
+        type_id: u64,
+    ) -> i32;
+    fn ct_value_write_error(
+        h: *mut std::ffi::c_void,
+        data: *const u8,
+        len: usize,
+        type_id: u64,
+    ) -> i32;
+
+    fn ct_value_begin_sequence(h: *mut std::ffi::c_void, type_id: u64, element_count: i32) -> i32;
+    fn ct_value_begin_tuple(h: *mut std::ffi::c_void, type_id: u64, element_count: i32) -> i32;
+    fn ct_value_end_compound(h: *mut std::ffi::c_void) -> i32;
+
+    fn ct_value_get_bytes(h: *mut std::ffi::c_void, out_len: *mut usize) -> *const u8;
+
     fn trace_writer_register_special_event(
         handle: *mut std::ffi::c_void,
         kind: i32,
@@ -197,6 +245,145 @@ impl TraceEventsFileFormat {
 }
 
 // ---------------------------------------------------------------------------
+// StreamingValueEncoder — Rust wrapper for the Nim C FFI
+// ---------------------------------------------------------------------------
+
+/// Zero-allocation CBOR value encoder backed by the Nim streaming encoder.
+///
+/// Encodes `ValueRecord` trees directly into CBOR bytes without building
+/// intermediate representations. The encoder is reusable: call `reset()`
+/// between values to clear the buffer without deallocating.
+pub struct StreamingValueEncoder {
+    handle: *mut std::ffi::c_void,
+}
+
+impl StreamingValueEncoder {
+    /// Create a new streaming value encoder.
+    pub fn new() -> Self {
+        ensure_nim_initialized();
+        let handle = unsafe { ct_value_encoder_new() };
+        assert!(!handle.is_null(), "ct_value_encoder_new returned null");
+        StreamingValueEncoder { handle }
+    }
+
+    /// Reset the encoder for reuse (clears buffer, resets nesting stack).
+    pub fn reset(&mut self) {
+        unsafe { ct_value_encoder_reset(self.handle) }
+    }
+
+    /// Encode a `ValueRecord` into the internal CBOR buffer.
+    /// Returns the CBOR bytes as a slice (valid until the next reset/encode/drop).
+    pub fn encode(&mut self, value: &ValueRecord) -> &[u8] {
+        self.reset();
+        self.encode_recursive(value);
+        self.get_bytes()
+    }
+
+    /// Get the encoded CBOR bytes. Valid until the next reset/encode/drop.
+    fn get_bytes(&self) -> &[u8] {
+        let mut len: usize = 0;
+        let ptr = unsafe { ct_value_get_bytes(self.handle, &mut len) };
+        if ptr.is_null() || len == 0 {
+            return &[];
+        }
+        unsafe { std::slice::from_raw_parts(ptr, len) }
+    }
+
+    /// Recursively encode a value record into CBOR.
+    fn encode_recursive(&mut self, value: &ValueRecord) {
+        match value {
+            ValueRecord::None { type_id } => {
+                unsafe { ct_value_write_none_typed(self.handle, type_id.0 as u64) };
+            }
+            ValueRecord::Int { i, type_id } => {
+                unsafe { ct_value_write_int(self.handle, *i, type_id.0 as u64) };
+            }
+            ValueRecord::Float { f, type_id } => {
+                unsafe { ct_value_write_float(self.handle, *f, type_id.0 as u64) };
+            }
+            ValueRecord::Bool { b, type_id } => {
+                unsafe {
+                    ct_value_write_bool_typed(
+                        self.handle,
+                        if *b { 1 } else { 0 },
+                        type_id.0 as u64,
+                    )
+                };
+            }
+            ValueRecord::String { text, type_id } => {
+                unsafe {
+                    ct_value_write_string(
+                        self.handle,
+                        text.as_ptr(),
+                        text.len(),
+                        type_id.0 as u64,
+                    )
+                };
+            }
+            ValueRecord::Raw { r, type_id } => {
+                unsafe {
+                    ct_value_write_raw(
+                        self.handle,
+                        r.as_ptr(),
+                        r.len(),
+                        type_id.0 as u64,
+                    )
+                };
+            }
+            ValueRecord::Error { msg, type_id } => {
+                unsafe {
+                    ct_value_write_error(
+                        self.handle,
+                        msg.as_ptr(),
+                        msg.len(),
+                        type_id.0 as u64,
+                    )
+                };
+            }
+            ValueRecord::Sequence { elements, is_slice: _, type_id } => {
+                unsafe {
+                    ct_value_begin_sequence(
+                        self.handle,
+                        type_id.0 as u64,
+                        elements.len() as i32,
+                    )
+                };
+                for elem in elements {
+                    self.encode_recursive(elem);
+                }
+                unsafe { ct_value_end_compound(self.handle) };
+            }
+            ValueRecord::Tuple { elements, type_id } => {
+                unsafe {
+                    ct_value_begin_tuple(
+                        self.handle,
+                        type_id.0 as u64,
+                        elements.len() as i32,
+                    )
+                };
+                for elem in elements {
+                    self.encode_recursive(elem);
+                }
+                unsafe { ct_value_end_compound(self.handle) };
+            }
+            // For types not yet supported by the streaming encoder, fall back to raw.
+            _ => {
+                let (repr, _kind, _type_name) = value_record_to_raw(value);
+                unsafe {
+                    ct_value_write_raw(self.handle, repr.as_ptr(), repr.len(), 0)
+                };
+            }
+        }
+    }
+}
+
+impl Drop for StreamingValueEncoder {
+    fn drop(&mut self) {
+        unsafe { ct_value_encoder_free(self.handle) }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // NimTraceWriter
 // ---------------------------------------------------------------------------
 
@@ -207,6 +394,9 @@ impl TraceEventsFileFormat {
 /// is required.
 pub struct NimTraceWriter {
     handle: *mut std::ffi::c_void,
+    /// Reusable streaming value encoder — avoids allocation per value for
+    /// compound types (sequences, tuples, dicts) by encoding directly to CBOR.
+    streaming_encoder: StreamingValueEncoder,
 }
 
 // The Nim library is single-threaded but callers hold exclusive &mut self,
@@ -220,7 +410,10 @@ impl NimTraceWriter {
         let c_program = str_to_cstring(program);
         let handle = unsafe { trace_writer_new(c_program.as_ptr(), format.to_ffi()) };
         assert!(!handle.is_null(), "trace_writer_new returned null: {}", last_error());
-        NimTraceWriter { handle }
+        NimTraceWriter {
+            handle,
+            streaming_encoder: StreamingValueEncoder::new(),
+        }
     }
 
     /// Close the writer and flush all data. Called automatically on drop,
@@ -340,13 +533,13 @@ impl NimTraceWriter {
     }
 
     pub fn register_return(&mut self, return_value: ValueRecord) {
-        match return_value {
+        match &return_value {
             ValueRecord::Int { i, type_id } => {
                 let type_name = str_to_cstring(&format!("type_{}", type_id.0));
                 unsafe {
                     trace_writer_register_return_int(
                         self.handle,
-                        i,
+                        *i,
                         TypeKind::Int as i32,
                         type_name.as_ptr(),
                     )
@@ -355,8 +548,23 @@ impl NimTraceWriter {
             ValueRecord::None { .. } => unsafe {
                 trace_writer_register_return(self.handle);
             },
+            // Compound types benefit from the streaming encoder: instead of
+            // flattening to a raw string like "[...]", we encode the full
+            // structure to CBOR so the reader can reconstruct it.
+            ValueRecord::Sequence { .. }
+            | ValueRecord::Tuple { .. }
+            | ValueRecord::Struct { .. } => {
+                let cbor = self.streaming_encoder.encode(&return_value);
+                unsafe {
+                    trace_writer_register_return_cbor(
+                        self.handle,
+                        cbor.as_ptr(),
+                        cbor.len(),
+                    )
+                }
+            }
             _ => {
-                // For all other value kinds, serialize to raw representation
+                // Leaf types: serialize to raw representation via the existing path
                 let (repr, kind, type_name) = value_record_to_raw(&return_value);
                 let c_repr = str_to_cstring(&repr);
                 let c_type = str_to_cstring(&type_name);
@@ -374,16 +582,31 @@ impl NimTraceWriter {
 
     pub fn register_variable_with_full_value(&mut self, name: &str, value: ValueRecord) {
         let c_name = str_to_cstring(name);
-        match value {
+        match &value {
             ValueRecord::Int { i, type_id } => {
                 let type_name = str_to_cstring(&format!("type_{}", type_id.0));
                 unsafe {
                     trace_writer_register_variable_int(
                         self.handle,
                         c_name.as_ptr(),
-                        i,
+                        *i,
                         TypeKind::Int as i32,
                         type_name.as_ptr(),
+                    )
+                }
+            }
+            // Compound types: use the streaming encoder for full structural
+            // CBOR encoding instead of flattening to "[...]" / "(...)".
+            ValueRecord::Sequence { .. }
+            | ValueRecord::Tuple { .. }
+            | ValueRecord::Struct { .. } => {
+                let cbor = self.streaming_encoder.encode(&value);
+                unsafe {
+                    trace_writer_register_variable_cbor(
+                        self.handle,
+                        c_name.as_ptr(),
+                        cbor.as_ptr(),
+                        cbor.len(),
                     )
                 }
             }

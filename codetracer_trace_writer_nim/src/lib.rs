@@ -563,6 +563,18 @@ pub trait TraceWriter: Send {
     fn begin_writing_trace_paths(&mut self, path: &Path) -> Result<(), Box<dyn Error>>;
     fn finish_writing_trace_paths(&mut self) -> Result<(), Box<dyn Error>>;
 
+    /// Close the writer and flush all remaining data to disk.
+    ///
+    /// For the Nim multi-stream (CTFS) backend this is the step that actually
+    /// writes the `.ct` container file. Callers should invoke this after all
+    /// `finish_writing_*` calls have completed.
+    ///
+    /// The default implementation is a no-op, which is appropriate for
+    /// in-memory test doubles that don't need an explicit close step.
+    fn close(&mut self) -> Result<(), Box<dyn Error>> {
+        Ok(())
+    }
+
     fn set_workdir(&mut self, workdir: &Path);
     fn start(&mut self, path: &Path, line: Line);
 
@@ -623,6 +635,9 @@ impl TraceWriter for NimTraceWriter {
     }
     fn finish_writing_trace_paths(&mut self) -> Result<(), Box<dyn Error>> {
         NimTraceWriter::finish_writing_trace_paths(self)
+    }
+    fn close(&mut self) -> Result<(), Box<dyn Error>> {
+        NimTraceWriter::close(self)
     }
     fn set_workdir(&mut self, workdir: &Path) {
         NimTraceWriter::set_workdir(self, workdir)

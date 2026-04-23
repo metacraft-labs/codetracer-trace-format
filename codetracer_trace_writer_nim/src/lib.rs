@@ -171,6 +171,36 @@ extern "C" {
     fn ct_meta_dat_path(h: *mut std::ffi::c_void, idx: usize, out_len: *mut usize) -> *const u8;
     fn ct_meta_dat_recorder_id(h: *mut std::ffi::c_void, out_len: *mut usize) -> *const u8;
     fn ct_meta_dat_free(h: *mut std::ffi::c_void);
+
+    // ----- Trace reader (NewTraceReader) -----
+
+    fn ct_reader_open(path: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
+    fn ct_reader_close(h: *mut std::ffi::c_void);
+
+    fn ct_reader_step_count(h: *mut std::ffi::c_void) -> u64;
+    fn ct_reader_call_count(h: *mut std::ffi::c_void) -> u64;
+    fn ct_reader_event_count(h: *mut std::ffi::c_void) -> u64;
+
+    fn ct_reader_path_count(h: *mut std::ffi::c_void) -> u64;
+    fn ct_reader_function_count(h: *mut std::ffi::c_void) -> u64;
+    fn ct_reader_type_count(h: *mut std::ffi::c_void) -> u64;
+    fn ct_reader_varname_count(h: *mut std::ffi::c_void) -> u64;
+
+    fn ct_reader_path(h: *mut std::ffi::c_void, id: u64, out_len: *mut usize) -> *mut u8;
+    fn ct_reader_function(h: *mut std::ffi::c_void, id: u64, out_len: *mut usize) -> *mut u8;
+    fn ct_reader_type_name(h: *mut std::ffi::c_void, id: u64, out_len: *mut usize) -> *mut u8;
+    fn ct_reader_varname(h: *mut std::ffi::c_void, id: u64, out_len: *mut usize) -> *mut u8;
+
+    fn ct_reader_step(h: *mut std::ffi::c_void, n: u64, out_len: *mut usize) -> *mut u8;
+    fn ct_reader_values(h: *mut std::ffi::c_void, n: u64, out_len: *mut usize) -> *mut u8;
+    fn ct_reader_call(h: *mut std::ffi::c_void, key: u64, out_len: *mut usize) -> *mut u8;
+    fn ct_reader_call_for_step(h: *mut std::ffi::c_void, step_id: u64, out_len: *mut usize) -> *mut u8;
+    fn ct_reader_event(h: *mut std::ffi::c_void, index: u64, out_len: *mut usize) -> *mut u8;
+
+    fn ct_reader_program(h: *mut std::ffi::c_void, out_len: *mut usize) -> *mut u8;
+    fn ct_reader_workdir(h: *mut std::ffi::c_void, out_len: *mut usize) -> *mut u8;
+
+    fn ct_free_buffer(buf: *mut u8);
 }
 
 // ---------------------------------------------------------------------------
@@ -1072,6 +1102,191 @@ impl Drop for MetaDatReader {
     fn drop(&mut self) {
         if !self.handle.is_null() {
             unsafe { ct_meta_dat_free(self.handle) };
+            self.handle = std::ptr::null_mut();
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// NimTraceReaderHandle — safe wrapper for the Nim ct_reader_* FFI
+// ---------------------------------------------------------------------------
+
+/// Read-only handle for a `.ct` trace file, backed by the Nim `NewTraceReader`.
+///
+/// All complex data (steps, values, calls, IO events) is returned as JSON
+/// strings. The caller is responsible for parsing them.
+pub struct NimTraceReaderHandle {
+    handle: *mut std::ffi::c_void,
+}
+
+// Single-threaded Nim library; exclusive &mut/& self gives safety.
+unsafe impl Send for NimTraceReaderHandle {}
+
+/// Helper: read a heap-allocated buffer from Nim into a Rust `String`, then free it.
+fn read_nim_buffer(ptr: *mut u8, len: usize) -> String {
+    if ptr.is_null() || len == 0 {
+        return String::new();
+    }
+    let s = unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len)) }
+        .to_string();
+    unsafe { ct_free_buffer(ptr) };
+    s
+}
+
+impl NimTraceReaderHandle {
+    /// Open a `.ct` trace file for reading.
+    pub fn open(path: &str) -> Result<Self, Box<dyn Error>> {
+        ensure_nim_initialized();
+        let c_path = CString::new(path)?;
+        let h = unsafe { ct_reader_open(c_path.as_ptr()) };
+        if h.is_null() {
+            Err(last_error().into())
+        } else {
+            Ok(Self { handle: h })
+        }
+    }
+
+    // --- Counts ---
+
+    pub fn step_count(&self) -> u64 {
+        unsafe { ct_reader_step_count(self.handle) }
+    }
+
+    pub fn call_count(&self) -> u64 {
+        unsafe { ct_reader_call_count(self.handle) }
+    }
+
+    pub fn event_count(&self) -> u64 {
+        unsafe { ct_reader_event_count(self.handle) }
+    }
+
+    pub fn path_count(&self) -> u64 {
+        unsafe { ct_reader_path_count(self.handle) }
+    }
+
+    pub fn function_count(&self) -> u64 {
+        unsafe { ct_reader_function_count(self.handle) }
+    }
+
+    pub fn type_count(&self) -> u64 {
+        unsafe { ct_reader_type_count(self.handle) }
+    }
+
+    pub fn varname_count(&self) -> u64 {
+        unsafe { ct_reader_varname_count(self.handle) }
+    }
+
+    // --- Interning lookups ---
+
+    pub fn path(&self, id: u64) -> Result<String, Box<dyn Error>> {
+        let mut len: usize = 0;
+        let ptr = unsafe { ct_reader_path(self.handle, id, &mut len) };
+        if ptr.is_null() {
+            return Err(last_error().into());
+        }
+        Ok(read_nim_buffer(ptr, len))
+    }
+
+    pub fn function(&self, id: u64) -> Result<String, Box<dyn Error>> {
+        let mut len: usize = 0;
+        let ptr = unsafe { ct_reader_function(self.handle, id, &mut len) };
+        if ptr.is_null() {
+            return Err(last_error().into());
+        }
+        Ok(read_nim_buffer(ptr, len))
+    }
+
+    pub fn type_name(&self, id: u64) -> Result<String, Box<dyn Error>> {
+        let mut len: usize = 0;
+        let ptr = unsafe { ct_reader_type_name(self.handle, id, &mut len) };
+        if ptr.is_null() {
+            return Err(last_error().into());
+        }
+        Ok(read_nim_buffer(ptr, len))
+    }
+
+    pub fn varname(&self, id: u64) -> Result<String, Box<dyn Error>> {
+        let mut len: usize = 0;
+        let ptr = unsafe { ct_reader_varname(self.handle, id, &mut len) };
+        if ptr.is_null() {
+            return Err(last_error().into());
+        }
+        Ok(read_nim_buffer(ptr, len))
+    }
+
+    // --- Data access (JSON) ---
+
+    /// Returns step event N as a JSON string.
+    pub fn step_json(&self, n: u64) -> Result<String, Box<dyn Error>> {
+        let mut len: usize = 0;
+        let ptr = unsafe { ct_reader_step(self.handle, n, &mut len) };
+        if ptr.is_null() {
+            return Err(last_error().into());
+        }
+        Ok(read_nim_buffer(ptr, len))
+    }
+
+    /// Returns variable values for step N as a JSON array string.
+    pub fn values_json(&self, n: u64) -> Result<String, Box<dyn Error>> {
+        let mut len: usize = 0;
+        let ptr = unsafe { ct_reader_values(self.handle, n, &mut len) };
+        if ptr.is_null() {
+            return Err(last_error().into());
+        }
+        Ok(read_nim_buffer(ptr, len))
+    }
+
+    /// Returns call record by key as a JSON string.
+    pub fn call_json(&self, key: u64) -> Result<String, Box<dyn Error>> {
+        let mut len: usize = 0;
+        let ptr = unsafe { ct_reader_call(self.handle, key, &mut len) };
+        if ptr.is_null() {
+            return Err(last_error().into());
+        }
+        Ok(read_nim_buffer(ptr, len))
+    }
+
+    /// Returns the innermost call record enclosing the given step as a JSON string.
+    pub fn call_for_step_json(&self, step_id: u64) -> Result<String, Box<dyn Error>> {
+        let mut len: usize = 0;
+        let ptr = unsafe { ct_reader_call_for_step(self.handle, step_id, &mut len) };
+        if ptr.is_null() {
+            return Err(last_error().into());
+        }
+        Ok(read_nim_buffer(ptr, len))
+    }
+
+    /// Returns IO event by index as a JSON string.
+    pub fn event_json(&self, index: u64) -> Result<String, Box<dyn Error>> {
+        let mut len: usize = 0;
+        let ptr = unsafe { ct_reader_event(self.handle, index, &mut len) };
+        if ptr.is_null() {
+            return Err(last_error().into());
+        }
+        Ok(read_nim_buffer(ptr, len))
+    }
+
+    // --- Metadata ---
+
+    /// Get the program name from trace metadata.
+    pub fn program(&self) -> String {
+        let mut len: usize = 0;
+        let ptr = unsafe { ct_reader_program(self.handle, &mut len) };
+        read_nim_buffer(ptr, len)
+    }
+
+    /// Get the working directory from trace metadata.
+    pub fn workdir(&self) -> String {
+        let mut len: usize = 0;
+        let ptr = unsafe { ct_reader_workdir(self.handle, &mut len) };
+        read_nim_buffer(ptr, len)
+    }
+}
+
+impl Drop for NimTraceReaderHandle {
+    fn drop(&mut self) {
+        if !self.handle.is_null() {
+            unsafe { ct_reader_close(self.handle) };
             self.handle = std::ptr::null_mut();
         }
     }

@@ -72,17 +72,12 @@ impl MmapTable {
             return Err("invalid mmap magic".to_string());
         }
 
-        let entry_count =
-            u32::from_le_bytes(data[4..8].try_into().unwrap()) as usize;
+        let entry_count = u32::from_le_bytes(data[4..8].try_into().unwrap()) as usize;
 
         // Validate data length
         let expected_size = 8 + entry_count * MMAP_ENTRY_SIZE;
         if data.len() < expected_size {
-            return Err(format!(
-                "truncated mmap: expected {} bytes, got {}",
-                expected_size,
-                data.len()
-            ));
+            return Err(format!("truncated mmap: expected {} bytes, got {}", expected_size, data.len()));
         }
 
         let mut entries = Vec::with_capacity(entry_count);
@@ -143,15 +138,9 @@ mod tests {
         for i in 0..5usize {
             assert_eq!(t2.entries[i].address, 0x400000 + i as u64 * 0x1000);
             assert_eq!(t2.entries[i].size, 0x1000);
-            assert_eq!(
-                t2.entries[i].binary_ref,
-                if i < 3 { 100 + i as u64 } else { 0 }
-            );
+            assert_eq!(t2.entries[i].binary_ref, if i < 3 { 100 + i as u64 } else { 0 });
             assert_eq!(t2.entries[i].file_offset, i as u64 * 0x1000);
-            assert_eq!(
-                t2.entries[i].permissions,
-                if i == 2 { 0x05 } else { 0x03 }
-            );
+            assert_eq!(t2.entries[i].permissions, if i == 2 { 0x05 } else { 0x03 });
         }
     }
 
@@ -186,9 +175,7 @@ mod tests {
 
     #[test]
     fn test_mmap_empty() {
-        let t = MmapTable {
-            entries: vec![],
-        };
+        let t = MmapTable { entries: vec![] };
         let data = t.serialize();
         assert_eq!(data.len(), 8, "empty mmap should be 8 bytes (header only)");
 

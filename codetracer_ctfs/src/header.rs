@@ -1,5 +1,5 @@
-use std::io::{Read, Write};
 use crate::CtfsError;
+use std::io::{Read, Write};
 
 pub const MAGIC: [u8; 5] = [0xC0, 0xDE, 0x72, 0xAC, 0xE2];
 pub const VERSION: u8 = 3;
@@ -139,7 +139,10 @@ impl ExtendedHeader {
         if block_size != 1024 && block_size != 2048 && block_size != 4096 {
             return Err(CtfsError::InvalidBlockSize(block_size));
         }
-        Ok(ExtendedHeader { block_size, max_root_entries })
+        Ok(ExtendedHeader {
+            block_size,
+            max_root_entries,
+        })
     }
 
     pub fn write_to<W: Write>(&self, w: &mut W) -> Result<(), CtfsError> {
@@ -157,6 +160,9 @@ impl ExtendedHeader {
         }
         r.read_exact(&mut buf)?;
         let max_root_entries = u32::from_le_bytes(buf);
-        Ok(ExtendedHeader { block_size, max_root_entries })
+        Ok(ExtendedHeader {
+            block_size,
+            max_root_entries,
+        })
     }
 }

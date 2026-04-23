@@ -156,9 +156,7 @@ impl Filemap {
                     buf.extend_from_slice(&entry.binary_ref.to_le_bytes());
                 }
                 FilemapEntryType::SourceFile => {
-                    buf.extend_from_slice(
-                        &encode_leb128(entry.compilation_dir.len() as u64),
-                    );
+                    buf.extend_from_slice(&encode_leb128(entry.compilation_dir.len() as u64));
                     buf.extend_from_slice(entry.compilation_dir.as_bytes());
                 }
                 FilemapEntryType::Binary => {}
@@ -194,13 +192,9 @@ impl Filemap {
 
             // ctfs_name (u64 LE)
             if pos + 8 > data.len() {
-                return Err(format!(
-                    "truncated filemap: expected ctfs_name at offset {}",
-                    pos
-                ));
+                return Err(format!("truncated filemap: expected ctfs_name at offset {}", pos));
             }
-            entry.ctfs_name =
-                u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap());
+            entry.ctfs_name = u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap());
             pos += 8;
 
             // entry_type (u8)
@@ -230,49 +224,34 @@ impl Filemap {
             pos += bid_len;
 
             // path_len (varint) + path
-            let (path_len, var_bytes) = decode_leb128(data, pos)
-                .map_err(|e| format!("truncated filemap: invalid path_len varint: {}", e))?;
+            let (path_len, var_bytes) = decode_leb128(data, pos).map_err(|e| format!("truncated filemap: invalid path_len varint: {}", e))?;
             pos += var_bytes;
             let path_len = path_len as usize;
             if pos + path_len > data.len() {
                 return Err("truncated filemap: expected path bytes".to_string());
             }
-            entry.real_path = String::from_utf8(data[pos..pos + path_len].to_vec())
-                .map_err(|e| format!("invalid UTF-8 in path: {}", e))?;
+            entry.real_path = String::from_utf8(data[pos..pos + path_len].to_vec()).map_err(|e| format!("invalid UTF-8 in path: {}", e))?;
             pos += path_len;
 
             // Type-specific fields
             match entry.entry_type {
                 FilemapEntryType::DebugSymbol => {
                     if pos + 8 > data.len() {
-                        return Err(
-                            "truncated filemap: expected binary_ref".to_string(),
-                        );
+                        return Err("truncated filemap: expected binary_ref".to_string());
                     }
-                    entry.binary_ref =
-                        u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap());
+                    entry.binary_ref = u64::from_le_bytes(data[pos..pos + 8].try_into().unwrap());
                     pos += 8;
                 }
                 FilemapEntryType::SourceFile => {
-                    let (cd_len, cd_var_bytes) = decode_leb128(data, pos)
-                        .map_err(|e| {
-                            format!(
-                                "truncated filemap: invalid comp_dir_len varint: {}",
-                                e
-                            )
-                        })?;
+                    let (cd_len, cd_var_bytes) =
+                        decode_leb128(data, pos).map_err(|e| format!("truncated filemap: invalid comp_dir_len varint: {}", e))?;
                     pos += cd_var_bytes;
                     let cd_len = cd_len as usize;
                     if pos + cd_len > data.len() {
-                        return Err(
-                            "truncated filemap: expected comp_dir bytes".to_string(),
-                        );
+                        return Err("truncated filemap: expected comp_dir bytes".to_string());
                     }
                     entry.compilation_dir =
-                        String::from_utf8(data[pos..pos + cd_len].to_vec())
-                            .map_err(|e| {
-                                format!("invalid UTF-8 in compilation_dir: {}", e)
-                            })?;
+                        String::from_utf8(data[pos..pos + cd_len].to_vec()).map_err(|e| format!("invalid UTF-8 in compilation_dir: {}", e))?;
                     pos += cd_len;
                 }
                 FilemapEntryType::Binary => {}
@@ -322,10 +301,7 @@ mod tests {
 
     #[test]
     fn test_filemap_empty_roundtrip() {
-        let fm = Filemap {
-            version: 1,
-            entries: vec![],
-        };
+        let fm = Filemap { version: 1, entries: vec![] };
         let data = fm.serialize();
         assert_eq!(data.len(), 8, "empty filemap should be 8 bytes (header only)");
 
@@ -407,10 +383,7 @@ mod tests {
             });
         }
 
-        let fm = Filemap {
-            version: 1,
-            entries,
-        };
+        let fm = Filemap { version: 1, entries };
         let data = fm.serialize();
 
         let fm2 = Filemap::deserialize(&data).unwrap();
@@ -427,10 +400,7 @@ mod tests {
         for i in 0..2 {
             let e = &fm2.entries[3 + i];
             assert_eq!(e.entry_type, FilemapEntryType::DebugSymbol);
-            assert_eq!(
-                e.binary_ref,
-                base40_encode(&format!("bin{}", i)).unwrap()
-            );
+            assert_eq!(e.binary_ref, base40_encode(&format!("bin{}", i)).unwrap());
         }
 
         // Verify source entries
@@ -444,9 +414,7 @@ mod tests {
 
     #[test]
     fn test_filemap_long_path() {
-        let long_path: String = (0..4096)
-            .map(|i| (b'a' + (i % 26) as u8) as char)
-            .collect();
+        let long_path: String = (0..4096).map(|i| (b'a' + (i % 26) as u8) as char).collect();
 
         let entry = FilemapEntry {
             ctfs_name: base40_encode("longfile").unwrap(),
@@ -510,10 +478,7 @@ mod tests {
             let nim_data = std::fs::read(&path).unwrap_or_else(|e| {
                 panic!("failed to read Nim compat file {}: {}", path, e);
             });
-            assert_eq!(
-                data, nim_data,
-                "Rust and Nim serialization produce different bytes"
-            );
+            assert_eq!(data, nim_data, "Rust and Nim serialization produce different bytes");
             // Also verify Rust can deserialize the Nim bytes
             let fm_from_nim = Filemap::deserialize(&nim_data).unwrap();
             assert_eq!(fm, fm_from_nim, "Nim bytes deserialized differently in Rust");
@@ -558,9 +523,6 @@ mod tests {
             ..Default::default()
         });
 
-        Filemap {
-            version: 1,
-            entries,
-        }
+        Filemap { version: 1, entries }
     }
 }

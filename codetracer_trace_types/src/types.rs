@@ -8,10 +8,10 @@ use std::path::PathBuf;
 
 use crate::base64;
 use num_derive::FromPrimitive;
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_repr::*;
-use schemars::JsonSchema;
-use serde_with::{serde_as, DisplayFromStr};
+use serde_with::{DisplayFromStr, serde_as};
 
 // currently, we do assume that we record the whole program
 // so, we try to include minimal amount of data,

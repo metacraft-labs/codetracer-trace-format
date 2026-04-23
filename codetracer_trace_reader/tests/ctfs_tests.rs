@@ -8,10 +8,7 @@ use codetracer_trace_writer::trace_writer::TraceWriter;
 
 /// Helper: create a CtfsTraceWriter with default (SplitBinary) format,
 /// write some events, and return the .ct path.
-fn write_ctfs_trace(
-    dir: &tempfile::TempDir,
-    events_fn: impl FnOnce(&mut dyn TraceWriter),
-) -> std::path::PathBuf {
+fn write_ctfs_trace(dir: &tempfile::TempDir, events_fn: impl FnOnce(&mut dyn TraceWriter)) -> std::path::PathBuf {
     write_ctfs_trace_with_format(dir, EventSerializationFormat::SplitBinary, events_fn)
 }
 
@@ -23,18 +20,8 @@ fn write_ctfs_trace_with_format(
 ) -> std::path::PathBuf {
     let path = dir.path().join("trace");
     let mut writer: Box<dyn TraceWriter + Send> = match format {
-        EventSerializationFormat::Cbor => {
-            Box::new(codetracer_trace_writer::ctfs_writer::CtfsTraceWriter::new_cbor(
-                "test_program",
-                &[],
-            ))
-        }
-        EventSerializationFormat::SplitBinary => {
-            Box::new(codetracer_trace_writer::ctfs_writer::CtfsTraceWriter::new(
-                "test_program",
-                &[],
-            ))
-        }
+        EventSerializationFormat::Cbor => Box::new(codetracer_trace_writer::ctfs_writer::CtfsTraceWriter::new_cbor("test_program", &[])),
+        EventSerializationFormat::SplitBinary => Box::new(codetracer_trace_writer::ctfs_writer::CtfsTraceWriter::new("test_program", &[])),
     };
     TraceWriter::begin_writing_trace_events(writer.as_mut(), &path).unwrap();
     events_fn(writer.as_mut());
@@ -65,9 +52,7 @@ fn test_ctfs_roundtrip_step_events() {
     });
 
     // Read back via CtfsTraceReader
-    let mut reader = codetracer_trace_reader::create_trace_reader(
-        codetracer_trace_reader::TraceEventsFileFormat::Ctfs,
-    );
+    let mut reader = codetracer_trace_reader::create_trace_reader(codetracer_trace_reader::TraceEventsFileFormat::Ctfs);
     let events = reader.load_trace_events(&ct_path).unwrap();
 
     // The first events should be Path and Function registrations from start(),
@@ -98,9 +83,7 @@ fn test_ctfs_roundtrip_special_events() {
         TraceWriter::register_special_event(writer, EventLogKind::Error, "meta", "something broke");
     });
 
-    let mut reader = codetracer_trace_reader::create_trace_reader(
-        codetracer_trace_reader::TraceEventsFileFormat::Ctfs,
-    );
+    let mut reader = codetracer_trace_reader::create_trace_reader(codetracer_trace_reader::TraceEventsFileFormat::Ctfs);
     let events = reader.load_trace_events(&ct_path).unwrap();
 
     let special_events: Vec<_> = events
@@ -131,9 +114,7 @@ fn test_ctfs_roundtrip_variables() {
         TraceWriter::register_variable_with_full_value(writer, "x", value);
     });
 
-    let mut reader = codetracer_trace_reader::create_trace_reader(
-        codetracer_trace_reader::TraceEventsFileFormat::Ctfs,
-    );
+    let mut reader = codetracer_trace_reader::create_trace_reader(codetracer_trace_reader::TraceEventsFileFormat::Ctfs);
     let events = reader.load_trace_events(&ct_path).unwrap();
 
     // Find the Value event for variable "x"
@@ -166,9 +147,7 @@ fn test_ctfs_roundtrip_many_events() {
         }
     });
 
-    let mut reader = codetracer_trace_reader::create_trace_reader(
-        codetracer_trace_reader::TraceEventsFileFormat::Ctfs,
-    );
+    let mut reader = codetracer_trace_reader::create_trace_reader(codetracer_trace_reader::TraceEventsFileFormat::Ctfs);
     let events = reader.load_trace_events(&ct_path).unwrap();
 
     let step_events: Vec<_> = events
@@ -179,13 +158,7 @@ fn test_ctfs_roundtrip_many_events() {
         })
         .collect();
 
-    assert_eq!(
-        step_events.len(),
-        n - 1,
-        "Expected {} step events, got {}",
-        n - 1,
-        step_events.len()
-    );
+    assert_eq!(step_events.len(), n - 1, "Expected {} step events, got {}", n - 1, step_events.len());
 }
 
 #[test]
@@ -205,8 +178,7 @@ fn test_ctfs_container_has_expected_files() {
 
     // Verify meta.json content
     let meta_data = r.read_file("meta.json").unwrap();
-    let meta: codetracer_trace_types::TraceMetadata =
-        serde_json::from_slice(&meta_data).unwrap();
+    let meta: codetracer_trace_types::TraceMetadata = serde_json::from_slice(&meta_data).unwrap();
     assert_eq!(meta.program, "test_program");
 
     // Verify paths.json content
@@ -220,19 +192,15 @@ fn test_ctfs_container_has_expected_files() {
 #[test]
 fn test_ctfs_split_binary_roundtrip() {
     let dir = tempfile::tempdir().unwrap();
-    let ct_path = write_ctfs_trace_with_format(
-        &dir,
-        EventSerializationFormat::SplitBinary,
-        |writer| {
-            let path = Path::new("/test/split.rs");
-            TraceWriter::start(writer, path, Line(1));
-            for i in 2..=20 {
-                TraceWriter::register_step(writer, path, Line(i));
-            }
-            TraceWriter::register_special_event(writer, EventLogKind::Write, "", "hello");
-            TraceWriter::register_asm(writer, &["nop".to_string(), "ret".to_string()]);
-        },
-    );
+    let ct_path = write_ctfs_trace_with_format(&dir, EventSerializationFormat::SplitBinary, |writer| {
+        let path = Path::new("/test/split.rs");
+        TraceWriter::start(writer, path, Line(1));
+        for i in 2..=20 {
+            TraceWriter::register_step(writer, path, Line(i));
+        }
+        TraceWriter::register_special_event(writer, EventLogKind::Write, "", "hello");
+        TraceWriter::register_asm(writer, &["nop".to_string(), "ret".to_string()]);
+    });
 
     // Verify the format marker file exists.
     let mut r = codetracer_ctfs::CtfsReader::open(&ct_path).unwrap();
@@ -240,9 +208,7 @@ fn test_ctfs_split_binary_roundtrip() {
     assert_eq!(format_data, b"split-binary");
 
     // Read back via the standard reader.
-    let mut reader = codetracer_trace_reader::create_trace_reader(
-        codetracer_trace_reader::TraceEventsFileFormat::Ctfs,
-    );
+    let mut reader = codetracer_trace_reader::create_trace_reader(codetracer_trace_reader::TraceEventsFileFormat::Ctfs);
     let events = reader.load_trace_events(&ct_path).unwrap();
 
     let step_events: Vec<_> = events
@@ -279,53 +245,34 @@ fn test_ctfs_split_binary_roundtrip() {
 fn test_ctfs_split_binary_seek() {
     let dir = tempfile::tempdir().unwrap();
     let n = 10000;
-    let ct_path = write_ctfs_trace_with_format(
-        &dir,
-        EventSerializationFormat::SplitBinary,
-        |writer| {
-            let path = Path::new("/test/seek.rs");
-            TraceWriter::start(writer, path, Line(1));
-            for i in 1..n {
-                TraceWriter::register_step(writer, path, Line(i as i64 + 1));
-            }
-        },
-    );
+    let ct_path = write_ctfs_trace_with_format(&dir, EventSerializationFormat::SplitBinary, |writer| {
+        let path = Path::new("/test/seek.rs");
+        TraceWriter::start(writer, path, Line(1));
+        for i in 1..n {
+            TraceWriter::register_step(writer, path, Line(i as i64 + 1));
+        }
+    });
 
     // Seek to the middle of the trace and read 100 events.
     let target = 5000;
     let count = 100;
-    let events =
-        codetracer_trace_reader::ctfs_reader::seek_events_in_ctfs(&ct_path, target, count)
-            .unwrap();
+    let events = codetracer_trace_reader::ctfs_reader::seek_events_in_ctfs(&ct_path, target, count).unwrap();
 
-    assert!(
-        !events.is_empty(),
-        "Expected events from seek at {}",
-        target
-    );
-    assert!(
-        events.len() <= count,
-        "Expected at most {} events, got {}",
-        count,
-        events.len()
-    );
+    assert!(!events.is_empty(), "Expected events from seek at {}", target);
+    assert!(events.len() <= count, "Expected at most {} events, got {}", count, events.len());
 }
 
 #[test]
 fn test_ctfs_backward_compat_cbor() {
     // Write a trace using CBOR format and verify it can still be read.
     let dir = tempfile::tempdir().unwrap();
-    let ct_path = write_ctfs_trace_with_format(
-        &dir,
-        EventSerializationFormat::Cbor,
-        |writer| {
-            let path = Path::new("/test/cbor.rs");
-            TraceWriter::start(writer, path, Line(1));
-            for i in 2..=10 {
-                TraceWriter::register_step(writer, path, Line(i));
-            }
-        },
-    );
+    let ct_path = write_ctfs_trace_with_format(&dir, EventSerializationFormat::Cbor, |writer| {
+        let path = Path::new("/test/cbor.rs");
+        TraceWriter::start(writer, path, Line(1));
+        for i in 2..=10 {
+            TraceWriter::register_step(writer, path, Line(i));
+        }
+    });
 
     // Verify the format marker says "cbor".
     let mut r = codetracer_ctfs::CtfsReader::open(&ct_path).unwrap();
@@ -333,9 +280,7 @@ fn test_ctfs_backward_compat_cbor() {
     assert_eq!(format_data, b"cbor");
 
     // Read back via the standard reader.
-    let mut reader = codetracer_trace_reader::create_trace_reader(
-        codetracer_trace_reader::TraceEventsFileFormat::Ctfs,
-    );
+    let mut reader = codetracer_trace_reader::create_trace_reader(codetracer_trace_reader::TraceEventsFileFormat::Ctfs);
     let events = reader.load_trace_events(&ct_path).unwrap();
 
     let step_events: Vec<_> = events
@@ -354,23 +299,17 @@ fn test_ctfs_backward_compat_cbor() {
 #[test]
 fn test_ctfs_split_binary_variables_roundtrip() {
     let dir = tempfile::tempdir().unwrap();
-    let ct_path = write_ctfs_trace_with_format(
-        &dir,
-        EventSerializationFormat::SplitBinary,
-        |writer| {
-            let path = Path::new("/test/vars.rs");
-            TraceWriter::start(writer, path, Line(1));
-            TraceWriter::register_step(writer, path, Line(2));
+    let ct_path = write_ctfs_trace_with_format(&dir, EventSerializationFormat::SplitBinary, |writer| {
+        let path = Path::new("/test/vars.rs");
+        TraceWriter::start(writer, path, Line(1));
+        TraceWriter::register_step(writer, path, Line(2));
 
-            let type_id = TraceWriter::ensure_type_id(writer, TypeKind::Int, "Int");
-            let value = ValueRecord::Int { i: 42, type_id };
-            TraceWriter::register_variable_with_full_value(writer, "x", value);
-        },
-    );
+        let type_id = TraceWriter::ensure_type_id(writer, TypeKind::Int, "Int");
+        let value = ValueRecord::Int { i: 42, type_id };
+        TraceWriter::register_variable_with_full_value(writer, "x", value);
+    });
 
-    let mut reader = codetracer_trace_reader::create_trace_reader(
-        codetracer_trace_reader::TraceEventsFileFormat::Ctfs,
-    );
+    let mut reader = codetracer_trace_reader::create_trace_reader(codetracer_trace_reader::TraceEventsFileFormat::Ctfs);
     let events = reader.load_trace_events(&ct_path).unwrap();
 
     let value_events: Vec<_> = events
@@ -399,11 +338,7 @@ fn test_ctfs_container_has_format_file() {
 
     let mut r = codetracer_ctfs::CtfsReader::open(&ct_path).unwrap();
     let files = r.list_files();
-    assert!(
-        files.contains(&"events.fmt".to_string()),
-        "Missing events.fmt, got: {:?}",
-        files
-    );
+    assert!(files.contains(&"events.fmt".to_string()), "Missing events.fmt, got: {:?}", files);
     assert!(files.contains(&"events.log".to_string()), "Missing events.log");
     assert!(files.contains(&"meta.json".to_string()), "Missing meta.json");
     assert!(files.contains(&"paths.json".to_string()), "Missing paths.json");

@@ -6,7 +6,6 @@
 ///    filemap and verify all fields match.
 /// 3. The test writes its own serialized output to FILEMAP_COMPAT_RUST_FILE
 ///    (if set) so the Nim side can read and verify it.
-
 use codetracer_ctfs::base40_encode;
 use codetracer_ctfs::filemap::*;
 
@@ -47,10 +46,7 @@ fn build_compat_filemap() -> Filemap {
         ..Default::default()
     });
 
-    Filemap {
-        version: 1,
-        entries,
-    }
+    Filemap { version: 1, entries }
 }
 
 fn verify_compat_filemap(fm: &Filemap) {
@@ -122,7 +118,8 @@ fn test_filemap_compat_read_nim() {
     // Also verify byte-level compatibility
     let rust_data = build_compat_filemap().serialize();
     assert_eq!(
-        rust_data, nim_data,
+        rust_data,
+        nim_data,
         "Rust and Nim serialization produce different bytes ({} vs {} bytes)",
         rust_data.len(),
         nim_data.len()

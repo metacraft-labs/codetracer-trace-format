@@ -68,7 +68,6 @@ fn level_capacity(usable: u64, level: u32) -> u64 {
     usable.saturating_pow(level)
 }
 
-
 /// Read a full block from the writer's underlying file.
 fn read_block(writer: &mut BufWriter<File>, block_num: u64, block_size: u32) -> Result<Vec<u8>, CtfsError> {
     writer.flush()?;
@@ -109,19 +108,9 @@ impl CtfsWriter {
     }
 
     /// Create a new CTFS container at the given path with the specified compression method.
-    pub fn create_with_compression(
-        path: &Path,
-        block_size: u32,
-        max_root_entries: u32,
-        compression: CompressionMethod,
-    ) -> Result<Self, CtfsError> {
+    pub fn create_with_compression(path: &Path, block_size: u32, max_root_entries: u32, compression: CompressionMethod) -> Result<Self, CtfsError> {
         let ext_header = ExtendedHeader::new(block_size, max_root_entries)?;
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(path)?;
+        let file = OpenOptions::new().read(true).write(true).create(true).truncate(true).open(path)?;
         let mut writer = BufWriter::new(file);
 
         // Write header (v3 with compression/encryption tags)
@@ -203,8 +192,11 @@ impl CtfsWriter {
 
                     // Read the partial block data from the file using bottom-up chain navigation
                     let partial_data = read_last_data_block_chain(
-                        &mut file, entry.map_block, total_blocks - 1,
-                        ext_header.block_size, partial_bytes as usize,
+                        &mut file,
+                        entry.map_block,
+                        total_blocks - 1,
+                        ext_header.block_size,
+                        partial_bytes as usize,
                     )?;
 
                     (full_blocks, partial_data, entry.size)
@@ -332,14 +324,7 @@ impl CtfsWriter {
     /// - entries[usable] (= entries[N-1]) points to level-2 block
     /// - Level 2: entries[0..usable-1] each point to a level-1 sub-block (each holds usable data ptrs)
     /// - entries[usable] points to level-3, etc.
-    fn insert_data_block_chain(
-        &mut self,
-        root_block: u64,
-        block_index: u64,
-        data_block: u64,
-        usable: u64,
-        bs: u32,
-    ) -> Result<(), CtfsError> {
+    fn insert_data_block_chain(&mut self, root_block: u64, block_index: u64, data_block: u64, usable: u64, bs: u32) -> Result<(), CtfsError> {
         // Determine which level this block_index falls into and the remaining offset.
         // Level 1: indices 0..usable-1 (capacity = usable)
         // Level 2: indices usable..usable+usable^2-1 (capacity = usable^2)
@@ -402,8 +387,7 @@ impl CtfsWriter {
     ) -> Result<(), CtfsError> {
         if level == 1 {
             // Direct data block pointer
-            debug_assert!(idx_within_level < usable,
-                "idx {} >= usable {} at level 1", idx_within_level, usable);
+            debug_assert!(idx_within_level < usable, "idx {} >= usable {} at level 1", idx_within_level, usable);
             write_ptr(&mut self.writer, mapping_block, idx_within_level as usize, data_block, bs)?;
             return Ok(());
         }
@@ -413,8 +397,7 @@ impl CtfsWriter {
         let entry_idx = idx_within_level / sub_cap;
         let sub_idx = idx_within_level % sub_cap;
 
-        debug_assert!(entry_idx < usable,
-            "entry_idx {} >= usable {} at level {}", entry_idx, usable, level);
+        debug_assert!(entry_idx < usable, "entry_idx {} >= usable {} at level {}", entry_idx, usable, level);
 
         // Read or allocate the sub-block
         let block_data = read_block(&mut self.writer, mapping_block, bs)?;
@@ -459,9 +442,7 @@ impl CtfsWriter {
                 let root_block = self.files[file_idx].mapping.root_block;
 
                 let data_block = self.allocator.alloc();
-                self.insert_data_block_chain(
-                    root_block, block_index, data_block, usable, self.block_size,
-                )?;
+                self.insert_data_block_chain(root_block, block_index, data_block, usable, self.block_size)?;
                 self.files[file_idx].pending_block = Some(data_block);
             }
 
@@ -482,8 +463,7 @@ impl CtfsWriter {
             map_block: file.mapping.root_block,
             name: file.name_encoded,
         };
-        let entry_offset =
-            self.entries_offset + (file.entry_index as u64) * FILE_ENTRY_SIZE as u64;
+        let entry_offset = self.entries_offset + (file.entry_index as u64) * FILE_ENTRY_SIZE as u64;
         self.writer.seek(SeekFrom::Start(entry_offset))?;
         entry.write_to(&mut self.writer)?;
         self.writer.flush()?;
@@ -572,12 +552,7 @@ fn read_last_data_block_chain(
 
 /// Resolve a block index to a physical data block number using the bottom-up chain model.
 /// This is a standalone function that works on a raw File (used by open_append).
-fn resolve_block_chain(
-    file: &mut File,
-    root_block: u64,
-    block_index: u64,
-    block_size: u32,
-) -> Result<u64, CtfsError> {
+fn resolve_block_chain(file: &mut File, root_block: u64, block_index: u64, block_size: u32) -> Result<u64, CtfsError> {
     let n = block_size as u64 / 8;
     let usable = n - 1;
 

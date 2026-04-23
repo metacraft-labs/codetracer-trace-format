@@ -10,8 +10,8 @@ use crate::{
     abstract_trace_writer::{AbstractTraceWriter, AbstractTraceWriterData},
     trace_writer::TraceWriter,
 };
-use codetracer_trace_types::TraceLowLevelEvent;
 use codetracer_trace_format_cbor_zstd::HEADERV1;
+use codetracer_trace_types::TraceLowLevelEvent;
 
 pub struct CborZstdTraceWriter {
     base: AbstractTraceWriterData,

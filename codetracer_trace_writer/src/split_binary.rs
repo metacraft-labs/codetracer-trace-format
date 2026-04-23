@@ -63,8 +63,7 @@ fn read_cbor<T: serde::de::DeserializeOwned>(cursor: &mut Cursor<&[u8]>) -> io::
     let len = read_u32(cursor)? as usize;
     let mut buf = vec![0u8; len];
     cursor.read_exact(&mut buf)?;
-    cbor4ii::serde::from_slice(&buf)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))
+    cbor4ii::serde::from_slice(&buf).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e.to_string()))
 }
 
 /// Encode a single `TraceLowLevelEvent` using split binary+CBOR encoding.
@@ -209,28 +208,18 @@ pub fn decode_event(cursor: &mut Cursor<&[u8]>) -> io::Result<TraceLowLevelEvent
         5 => {
             let variable_id = VariableId(read_u64(cursor)? as usize);
             let value: ValueRecord = read_cbor(cursor)?;
-            Ok(TraceLowLevelEvent::Value(FullValueRecord {
-                variable_id,
-                value,
-            }))
+            Ok(TraceLowLevelEvent::Value(FullValueRecord { variable_id, value }))
         }
         6 => {
             let path_id = PathId(read_u64(cursor)? as usize);
             let line = Line(read_i64(cursor)?);
             let name = read_str(cursor)?;
-            Ok(TraceLowLevelEvent::Function(FunctionRecord {
-                path_id,
-                line,
-                name,
-            }))
+            Ok(TraceLowLevelEvent::Function(FunctionRecord { path_id, line, name }))
         }
         7 => {
             let function_id = FunctionId(read_u64(cursor)? as usize);
             let args: Vec<FullValueRecord> = read_cbor(cursor)?;
-            Ok(TraceLowLevelEvent::Call(CallRecord {
-                function_id,
-                args,
-            }))
+            Ok(TraceLowLevelEvent::Call(CallRecord { function_id, args }))
         }
         8 => {
             let return_value: ValueRecord = read_cbor(cursor)?;
@@ -238,20 +227,11 @@ pub fn decode_event(cursor: &mut Cursor<&[u8]>) -> io::Result<TraceLowLevelEvent
         }
         9 => {
             let kind_byte = read_u8(cursor)?;
-            let kind: EventLogKind =
-                num_traits::FromPrimitive::from_u8(kind_byte).ok_or_else(|| {
-                    io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        format!("unknown EventLogKind: {}", kind_byte),
-                    )
-                })?;
+            let kind: EventLogKind = num_traits::FromPrimitive::from_u8(kind_byte)
+                .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, format!("unknown EventLogKind: {}", kind_byte)))?;
             let metadata = read_str(cursor)?;
             let content = read_str(cursor)?;
-            Ok(TraceLowLevelEvent::Event(RecordEvent {
-                kind,
-                metadata,
-                content,
-            }))
+            Ok(TraceLowLevelEvent::Event(RecordEvent { kind, metadata, content }))
         }
         10 => {
             let count = read_u32(cursor)? as usize;
@@ -264,10 +244,7 @@ pub fn decode_event(cursor: &mut Cursor<&[u8]>) -> io::Result<TraceLowLevelEvent
         11 => {
             let variable_id = VariableId(read_u64(cursor)? as usize);
             let place = Place(read_i64(cursor)?);
-            Ok(TraceLowLevelEvent::BindVariable(BindVariableRecord {
-                variable_id,
-                place,
-            }))
+            Ok(TraceLowLevelEvent::BindVariable(BindVariableRecord { variable_id, place }))
         }
         12 => Ok(TraceLowLevelEvent::Assignment(read_cbor(cursor)?)),
         13 => {
@@ -281,62 +258,39 @@ pub fn decode_event(cursor: &mut Cursor<&[u8]>) -> io::Result<TraceLowLevelEvent
         14 => {
             let place = Place(read_i64(cursor)?);
             let value: ValueRecord = read_cbor(cursor)?;
-            Ok(TraceLowLevelEvent::CompoundValue(CompoundValueRecord {
-                place,
-                value,
-            }))
+            Ok(TraceLowLevelEvent::CompoundValue(CompoundValueRecord { place, value }))
         }
         15 => {
             let place = Place(read_i64(cursor)?);
             let value: ValueRecord = read_cbor(cursor)?;
-            Ok(TraceLowLevelEvent::CellValue(CellValueRecord {
-                place,
-                value,
-            }))
+            Ok(TraceLowLevelEvent::CellValue(CellValueRecord { place, value }))
         }
         16 => {
             let place = Place(read_i64(cursor)?);
             let index = read_u64(cursor)? as usize;
             let item_place = Place(read_i64(cursor)?);
-            Ok(TraceLowLevelEvent::AssignCompoundItem(
-                AssignCompoundItemRecord {
-                    place,
-                    index,
-                    item_place,
-                },
-            ))
+            Ok(TraceLowLevelEvent::AssignCompoundItem(AssignCompoundItemRecord {
+                place,
+                index,
+                item_place,
+            }))
         }
         17 => {
             let place = Place(read_i64(cursor)?);
             let new_value: ValueRecord = read_cbor(cursor)?;
-            Ok(TraceLowLevelEvent::AssignCell(AssignCellRecord {
-                place,
-                new_value,
-            }))
+            Ok(TraceLowLevelEvent::AssignCell(AssignCellRecord { place, new_value }))
         }
         18 => {
             let variable_id = VariableId(read_u64(cursor)? as usize);
             let place = Place(read_i64(cursor)?);
-            Ok(TraceLowLevelEvent::VariableCell(VariableCellRecord {
-                variable_id,
-                place,
-            }))
+            Ok(TraceLowLevelEvent::VariableCell(VariableCellRecord { variable_id, place }))
         }
-        19 => Ok(TraceLowLevelEvent::DropVariable(VariableId(
-            read_u64(cursor)? as usize,
-        ))),
-        20 => Ok(TraceLowLevelEvent::ThreadStart(ThreadId(read_u64(
-            cursor,
-        )?))),
+        19 => Ok(TraceLowLevelEvent::DropVariable(VariableId(read_u64(cursor)? as usize))),
+        20 => Ok(TraceLowLevelEvent::ThreadStart(ThreadId(read_u64(cursor)?))),
         21 => Ok(TraceLowLevelEvent::ThreadExit(ThreadId(read_u64(cursor)?))),
-        22 => Ok(TraceLowLevelEvent::ThreadSwitch(ThreadId(read_u64(
-            cursor,
-        )?))),
+        22 => Ok(TraceLowLevelEvent::ThreadSwitch(ThreadId(read_u64(cursor)?))),
         23 => Ok(TraceLowLevelEvent::DropLastStep),
-        _ => Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("unknown event tag: {}", tag),
-        )),
+        _ => Err(io::Error::new(io::ErrorKind::InvalidData, format!("unknown event tag: {}", tag))),
     }
 }
 
@@ -386,68 +340,46 @@ fn event_byte_size(data: &[u8], offset: usize) -> usize {
         0 => 17, // Step: tag(1) + path_id(8) + line(8)
         1 | 2 | 3 => {
             // Path, VariableName, Variable: tag(1) + str_len(4) + string
-            let str_len = u32::from_le_bytes(
-                data[offset + 1..offset + 5].try_into().unwrap(),
-            ) as usize;
+            let str_len = u32::from_le_bytes(data[offset + 1..offset + 5].try_into().unwrap()) as usize;
             5 + str_len
         }
         4 => {
             // Type: tag(1) + cbor_len(4) + cbor
-            let cbor_len = u32::from_le_bytes(
-                data[offset + 1..offset + 5].try_into().unwrap(),
-            ) as usize;
+            let cbor_len = u32::from_le_bytes(data[offset + 1..offset + 5].try_into().unwrap()) as usize;
             5 + cbor_len
         }
         5 => {
             // Value: tag(1) + var_id(8) + cbor_len(4) + cbor
-            let cbor_len = u32::from_le_bytes(
-                data[offset + 9..offset + 13].try_into().unwrap(),
-            ) as usize;
+            let cbor_len = u32::from_le_bytes(data[offset + 9..offset + 13].try_into().unwrap()) as usize;
             13 + cbor_len
         }
         6 => {
             // Function: tag(1) + path_id(8) + line(8) + name_len(4) + name
-            let name_len = u32::from_le_bytes(
-                data[offset + 17..offset + 21].try_into().unwrap(),
-            ) as usize;
+            let name_len = u32::from_le_bytes(data[offset + 17..offset + 21].try_into().unwrap()) as usize;
             21 + name_len
         }
         7 => {
             // Call: tag(1) + func_id(8) + cbor_len(4) + cbor
-            let cbor_len = u32::from_le_bytes(
-                data[offset + 9..offset + 13].try_into().unwrap(),
-            ) as usize;
+            let cbor_len = u32::from_le_bytes(data[offset + 9..offset + 13].try_into().unwrap()) as usize;
             13 + cbor_len
         }
         8 => {
             // Return: tag(1) + cbor_len(4) + cbor
-            let cbor_len = u32::from_le_bytes(
-                data[offset + 1..offset + 5].try_into().unwrap(),
-            ) as usize;
+            let cbor_len = u32::from_le_bytes(data[offset + 1..offset + 5].try_into().unwrap()) as usize;
             5 + cbor_len
         }
         9 => {
             // Event: tag(1) + kind(1) + meta_len(4) + meta + content_len(4) + content
-            let meta_len = u32::from_le_bytes(
-                data[offset + 2..offset + 6].try_into().unwrap(),
-            ) as usize;
-            let content_len = u32::from_le_bytes(
-                data[offset + 6 + meta_len..offset + 10 + meta_len]
-                    .try_into()
-                    .unwrap(),
-            ) as usize;
+            let meta_len = u32::from_le_bytes(data[offset + 2..offset + 6].try_into().unwrap()) as usize;
+            let content_len = u32::from_le_bytes(data[offset + 6 + meta_len..offset + 10 + meta_len].try_into().unwrap()) as usize;
             10 + meta_len + content_len
         }
         10 => {
             // Asm: tag(1) + count(4) + [str_len(4) + str]...
-            let count = u32::from_le_bytes(
-                data[offset + 1..offset + 5].try_into().unwrap(),
-            ) as usize;
+            let count = u32::from_le_bytes(data[offset + 1..offset + 5].try_into().unwrap()) as usize;
             let mut pos = offset + 5;
             for _ in 0..count {
-                let len = u32::from_le_bytes(
-                    data[pos..pos + 4].try_into().unwrap(),
-                ) as usize;
+                let len = u32::from_le_bytes(data[pos..pos + 4].try_into().unwrap()) as usize;
                 pos += 4 + len;
             }
             pos - offset
@@ -455,37 +387,29 @@ fn event_byte_size(data: &[u8], offset: usize) -> usize {
         11 => 17, // BindVariable: tag(1) + var_id(8) + place(8)
         12 => {
             // Assignment: tag(1) + cbor_len(4) + cbor
-            let cbor_len = u32::from_le_bytes(
-                data[offset + 1..offset + 5].try_into().unwrap(),
-            ) as usize;
+            let cbor_len = u32::from_le_bytes(data[offset + 1..offset + 5].try_into().unwrap()) as usize;
             5 + cbor_len
         }
         13 => {
             // DropVariables: tag(1) + count(4) + [u64]...
-            let count = u32::from_le_bytes(
-                data[offset + 1..offset + 5].try_into().unwrap(),
-            ) as usize;
+            let count = u32::from_le_bytes(data[offset + 1..offset + 5].try_into().unwrap()) as usize;
             5 + count * 8
         }
         14 | 15 => {
             // CompoundValue, CellValue: tag(1) + place(8) + cbor_len(4) + cbor
-            let cbor_len = u32::from_le_bytes(
-                data[offset + 9..offset + 13].try_into().unwrap(),
-            ) as usize;
+            let cbor_len = u32::from_le_bytes(data[offset + 9..offset + 13].try_into().unwrap()) as usize;
             13 + cbor_len
         }
         16 => 25, // AssignCompoundItem: tag(1) + place(8) + index(8) + item_place(8)
         17 => {
             // AssignCell: tag(1) + place(8) + cbor_len(4) + cbor
-            let cbor_len = u32::from_le_bytes(
-                data[offset + 9..offset + 13].try_into().unwrap(),
-            ) as usize;
+            let cbor_len = u32::from_le_bytes(data[offset + 9..offset + 13].try_into().unwrap()) as usize;
             13 + cbor_len
         }
-        18 => 17, // VariableCell: tag(1) + var_id(8) + place(8)
-        19 => 9,  // DropVariable: tag(1) + var_id(8)
+        18 => 17,          // VariableCell: tag(1) + var_id(8) + place(8)
+        19 => 9,           // DropVariable: tag(1) + var_id(8)
         20 | 21 | 22 => 9, // ThreadStart/Exit/Switch: tag(1) + thread_id(8)
-        23 => 1,  // DropLastStep: tag(1)
+        23 => 1,           // DropLastStep: tag(1)
         _ => panic!("unknown split-binary event tag: {}", tag),
     }
 }

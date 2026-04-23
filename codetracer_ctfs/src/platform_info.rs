@@ -5,7 +5,6 @@
 ///
 /// Wire format uses LEB128 varints for string lengths and little-endian
 /// fixed-width integers, consistent with the rest of the CTFS format.
-
 use crate::filemap::{decode_leb128, encode_leb128};
 
 // ---------------------------------------------------------------------------
@@ -181,30 +180,26 @@ impl PlatformInfo {
         if pos >= data.len() {
             return Err("truncated platform: expected libcName_len".to_string());
         }
-        let (libc_len, libc_var_bytes) = decode_leb128(data, pos)
-            .map_err(|e| format!("truncated platform: invalid libcName_len varint: {}", e))?;
+        let (libc_len, libc_var_bytes) = decode_leb128(data, pos).map_err(|e| format!("truncated platform: invalid libcName_len varint: {}", e))?;
         pos += libc_var_bytes;
         let libc_len = libc_len as usize;
         if pos + libc_len > data.len() {
             return Err("truncated platform: expected libcName bytes".to_string());
         }
-        let libc_name = String::from_utf8(data[pos..pos + libc_len].to_vec())
-            .map_err(|e| format!("invalid UTF-8 in libcName: {}", e))?;
+        let libc_name = String::from_utf8(data[pos..pos + libc_len].to_vec()).map_err(|e| format!("invalid UTF-8 in libcName: {}", e))?;
         pos += libc_len;
 
         // kernelVersion
         if pos >= data.len() {
             return Err("truncated platform: expected kernelVersion_len".to_string());
         }
-        let (kv_len, kv_var_bytes) = decode_leb128(data, pos)
-            .map_err(|e| format!("truncated platform: invalid kernelVersion_len varint: {}", e))?;
+        let (kv_len, kv_var_bytes) = decode_leb128(data, pos).map_err(|e| format!("truncated platform: invalid kernelVersion_len varint: {}", e))?;
         pos += kv_var_bytes;
         let kv_len = kv_len as usize;
         if pos + kv_len > data.len() {
             return Err("truncated platform: expected kernelVersion bytes".to_string());
         }
-        let kernel_version = String::from_utf8(data[pos..pos + kv_len].to_vec())
-            .map_err(|e| format!("invalid UTF-8 in kernelVersion: {}", e))?;
+        let kernel_version = String::from_utf8(data[pos..pos + kv_len].to_vec()).map_err(|e| format!("invalid UTF-8 in kernelVersion: {}", e))?;
 
         Ok(PlatformInfo {
             os,

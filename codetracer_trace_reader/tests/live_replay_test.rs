@@ -1,8 +1,8 @@
 //! Integration test: read trace events while recording is still in progress.
 
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc,
+    atomic::{AtomicBool, Ordering},
 };
 use std::thread;
 use std::time::Duration;
@@ -115,8 +115,5 @@ fn test_live_replay_during_recording() {
         "Reader should see all {} events, but saw {}",
         events_written, events_read
     );
-    assert!(
-        saw_early,
-        "Reader should have seen events BEFORE recording finished"
-    );
+    assert!(saw_early, "Reader should have seen events BEFORE recording finished");
 }

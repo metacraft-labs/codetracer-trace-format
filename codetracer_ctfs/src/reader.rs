@@ -70,11 +70,7 @@ impl CtfsReader {
 
     /// List all file names in the container.
     pub fn list_files(&self) -> Vec<String> {
-        self.entries
-            .iter()
-            .filter(|e| !e.is_empty())
-            .map(|e| base40_decode(e.name))
-            .collect()
+        self.entries.iter().filter(|e| !e.is_empty()).map(|e| base40_decode(e.name)).collect()
     }
 
     /// Get the size of a named file, or None if not found.
@@ -84,8 +80,7 @@ impl CtfsReader {
 
     /// Read an entire file's contents.
     pub fn read_file(&mut self, name: &str) -> Result<Vec<u8>, CtfsError> {
-        let entry = *self.find_entry(name)
-            .ok_or_else(|| CtfsError::FileNotFound(name.to_string()))?;
+        let entry = *self.find_entry(name).ok_or_else(|| CtfsError::FileNotFound(name.to_string()))?;
 
         if entry.size == 0 {
             return Ok(Vec::new());
@@ -115,8 +110,7 @@ impl CtfsReader {
     /// Returns the number of bytes actually read (may be less than buf.len()
     /// if the read extends past the end of the file).
     pub fn read_at(&mut self, name: &str, offset: u64, buf: &mut [u8]) -> Result<usize, CtfsError> {
-        let entry = *self.find_entry(name)
-            .ok_or_else(|| CtfsError::FileNotFound(name.to_string()))?;
+        let entry = *self.find_entry(name).ok_or_else(|| CtfsError::FileNotFound(name.to_string()))?;
 
         if offset >= entry.size {
             return Ok(0);
@@ -195,13 +189,7 @@ impl CtfsReader {
     /// Navigate within a level-k block to find the data block pointer.
     /// For level 1: return entries[idx].
     /// For level k>1: compute which sub-entry, follow to child, recurse.
-    fn navigate_to_data_block(
-        &mut self,
-        mapping_block: u64,
-        level: u32,
-        idx_within_level: u64,
-        usable: u64,
-    ) -> Result<u64, CtfsError> {
+    fn navigate_to_data_block(&mut self, mapping_block: u64, level: u32, idx_within_level: u64, usable: u64) -> Result<u64, CtfsError> {
         if level == 1 {
             let ptr = self.read_block_ptr(mapping_block, idx_within_level as usize)?;
             if ptr == 0 {
@@ -244,17 +232,12 @@ impl CtfsReader {
     ///
     /// If `target_geid` is `Some(geid)`, only the chunk containing that GEID
     /// is decompressed and returned (along with the chunk header metadata).
-    pub fn read_file_chunked(
-        &mut self,
-        name: &str,
-        target_geid: Option<u64>,
-    ) -> Result<Vec<u8>, CtfsError> {
+    pub fn read_file_chunked(&mut self, name: &str, target_geid: Option<u64>) -> Result<Vec<u8>, CtfsError> {
         let raw = self.read_file(name)?;
         match target_geid {
             None => crate::chunked::ChunkedReader::decompress_all(&raw),
             Some(geid) => {
-                let (data, _header) =
-                    crate::chunked::ChunkedReader::seek_to_geid(&raw, geid)?;
+                let (data, _header) = crate::chunked::ChunkedReader::seek_to_geid(&raw, geid)?;
                 Ok(data)
             }
         }

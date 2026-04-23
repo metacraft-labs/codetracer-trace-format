@@ -19,41 +19,20 @@ extern "C" {
 
     fn trace_writer_last_error() -> *const std::os::raw::c_char;
 
-    fn trace_writer_new(program: *const std::os::raw::c_char, format: i32)
-        -> *mut std::ffi::c_void;
+    fn trace_writer_new(program: *const std::os::raw::c_char, format: i32) -> *mut std::ffi::c_void;
     fn trace_writer_free(handle: *mut std::ffi::c_void);
     fn trace_writer_close(handle: *mut std::ffi::c_void) -> i32;
 
-    fn trace_writer_begin_metadata(
-        handle: *mut std::ffi::c_void,
-        path: *const std::os::raw::c_char,
-    ) -> i32;
+    fn trace_writer_begin_metadata(handle: *mut std::ffi::c_void, path: *const std::os::raw::c_char) -> i32;
     fn trace_writer_finish_metadata(handle: *mut std::ffi::c_void) -> i32;
-    fn trace_writer_begin_events(
-        handle: *mut std::ffi::c_void,
-        path: *const std::os::raw::c_char,
-    ) -> i32;
+    fn trace_writer_begin_events(handle: *mut std::ffi::c_void, path: *const std::os::raw::c_char) -> i32;
     fn trace_writer_finish_events(handle: *mut std::ffi::c_void) -> i32;
-    fn trace_writer_begin_paths(
-        handle: *mut std::ffi::c_void,
-        path: *const std::os::raw::c_char,
-    ) -> i32;
+    fn trace_writer_begin_paths(handle: *mut std::ffi::c_void, path: *const std::os::raw::c_char) -> i32;
     fn trace_writer_finish_paths(handle: *mut std::ffi::c_void) -> i32;
 
-    fn trace_writer_start(
-        handle: *mut std::ffi::c_void,
-        path: *const std::os::raw::c_char,
-        line: i64,
-    );
-    fn trace_writer_set_workdir(
-        handle: *mut std::ffi::c_void,
-        workdir: *const std::os::raw::c_char,
-    );
-    fn trace_writer_register_step(
-        handle: *mut std::ffi::c_void,
-        path: *const std::os::raw::c_char,
-        line: i64,
-    );
+    fn trace_writer_start(handle: *mut std::ffi::c_void, path: *const std::os::raw::c_char, line: i64);
+    fn trace_writer_set_workdir(handle: *mut std::ffi::c_void, workdir: *const std::os::raw::c_char);
+    fn trace_writer_register_step(handle: *mut std::ffi::c_void, path: *const std::os::raw::c_char, line: i64);
 
     fn trace_writer_ensure_function_id(
         handle: *mut std::ffi::c_void,
@@ -62,21 +41,12 @@ extern "C" {
         line: i64,
     ) -> usize;
 
-    fn trace_writer_ensure_type_id(
-        handle: *mut std::ffi::c_void,
-        kind: i32,
-        lang_type: *const std::os::raw::c_char,
-    ) -> usize;
+    fn trace_writer_ensure_type_id(handle: *mut std::ffi::c_void, kind: i32, lang_type: *const std::os::raw::c_char) -> usize;
 
     fn trace_writer_register_call(handle: *mut std::ffi::c_void, function_id: usize);
     fn trace_writer_register_return(handle: *mut std::ffi::c_void);
 
-    fn trace_writer_register_return_int(
-        handle: *mut std::ffi::c_void,
-        value: i64,
-        type_kind: i32,
-        type_name: *const std::os::raw::c_char,
-    );
+    fn trace_writer_register_return_int(handle: *mut std::ffi::c_void, value: i64, type_kind: i32, type_name: *const std::os::raw::c_char);
     fn trace_writer_register_return_raw(
         handle: *mut std::ffi::c_void,
         value_repr: *const std::os::raw::c_char,
@@ -531,23 +501,16 @@ impl NimTraceWriter {
         unsafe { trace_writer_start(self.handle, c_path.as_ptr(), line.0 as i64) }
     }
 
-    pub fn ensure_function_id(
-        &mut self,
-        function_name: &str,
-        path: &Path,
-        line: Line,
-    ) -> FunctionId {
+    pub fn ensure_function_id(&mut self, function_name: &str, path: &Path, line: Line) -> FunctionId {
         let c_name = str_to_cstring(function_name);
         let c_path = path_to_cstring(path);
-        let id =
-            unsafe { trace_writer_ensure_function_id(self.handle, c_name.as_ptr(), c_path.as_ptr(), line.0 as i64) };
+        let id = unsafe { trace_writer_ensure_function_id(self.handle, c_name.as_ptr(), c_path.as_ptr(), line.0 as i64) };
         FunctionId(id)
     }
 
     pub fn ensure_type_id(&mut self, kind: TypeKind, lang_type: &str) -> TypeId {
         let c_lang = str_to_cstring(lang_type);
-        let id =
-            unsafe { trace_writer_ensure_type_id(self.handle, kind as i32, c_lang.as_ptr()) };
+        let id = unsafe { trace_writer_ensure_type_id(self.handle, kind as i32, c_lang.as_ptr()) };
         TypeId(id)
     }
 
@@ -598,14 +561,7 @@ impl NimTraceWriter {
                 let (repr, kind, type_name) = value_record_to_raw(&return_value);
                 let c_repr = str_to_cstring(&repr);
                 let c_type = str_to_cstring(&type_name);
-                unsafe {
-                    trace_writer_register_return_raw(
-                        self.handle,
-                        c_repr.as_ptr(),
-                        kind as i32,
-                        c_type.as_ptr(),
-                    )
-                }
+                unsafe { trace_writer_register_return_raw(self.handle, c_repr.as_ptr(), kind as i32, c_type.as_ptr()) }
             }
         }
     }
@@ -644,15 +600,7 @@ impl NimTraceWriter {
                 let (repr, kind, type_name) = value_record_to_raw(&value);
                 let c_repr = str_to_cstring(&repr);
                 let c_type = str_to_cstring(&type_name);
-                unsafe {
-                    trace_writer_register_variable_raw(
-                        self.handle,
-                        c_name.as_ptr(),
-                        c_repr.as_ptr(),
-                        kind as i32,
-                        c_type.as_ptr(),
-                    )
-                }
+                unsafe { trace_writer_register_variable_raw(self.handle, c_name.as_ptr(), c_repr.as_ptr(), kind as i32, c_type.as_ptr()) }
             }
         }
     }
@@ -660,14 +608,7 @@ impl NimTraceWriter {
     pub fn register_special_event(&mut self, kind: EventLogKind, metadata: &str, content: &str) {
         let c_metadata = str_to_cstring(metadata);
         let c_content = str_to_cstring(content);
-        unsafe {
-            trace_writer_register_special_event(
-                self.handle,
-                kind as i32,
-                c_metadata.as_ptr(),
-                c_content.as_ptr(),
-            )
-        }
+        unsafe { trace_writer_register_special_event(self.handle, kind as i32, c_metadata.as_ptr(), c_content.as_ptr()) }
     }
 
     // --- Methods that are no-ops in the Nim backend ---
@@ -1299,11 +1240,7 @@ impl Drop for NimTraceReaderHandle {
 /// Create a trace writer backed by the Nim library.
 ///
 /// This is a drop-in replacement for `codetracer_trace_writer::create_trace_writer`.
-pub fn create_trace_writer(
-    program: &str,
-    _args: &[String],
-    format: TraceEventsFileFormat,
-) -> Box<dyn TraceWriter> {
+pub fn create_trace_writer(program: &str, _args: &[String], format: TraceEventsFileFormat) -> Box<dyn TraceWriter> {
     Box::new(NimTraceWriter::new(program, format))
 }
 
@@ -1318,33 +1255,17 @@ fn value_record_to_raw(value: &ValueRecord) -> (String, TypeKind, String) {
         ValueRecord::Int { i, type_id } => (i.to_string(), TypeKind::Int, format!("type_{}", type_id.0)),
         ValueRecord::Float { f, type_id } => (f.to_string(), TypeKind::Float, format!("type_{}", type_id.0)),
         ValueRecord::Bool { b, type_id } => (b.to_string(), TypeKind::Bool, format!("type_{}", type_id.0)),
-        ValueRecord::String { text, type_id } => {
-            (text.clone(), TypeKind::String, format!("type_{}", type_id.0))
-        }
+        ValueRecord::String { text, type_id } => (text.clone(), TypeKind::String, format!("type_{}", type_id.0)),
         ValueRecord::Raw { r, type_id } => (r.clone(), TypeKind::Raw, format!("type_{}", type_id.0)),
-        ValueRecord::Error { msg, type_id } => {
-            (msg.clone(), TypeKind::Error, format!("type_{}", type_id.0))
-        }
+        ValueRecord::Error { msg, type_id } => (msg.clone(), TypeKind::Error, format!("type_{}", type_id.0)),
         ValueRecord::None { type_id } => ("None".to_string(), TypeKind::None, format!("type_{}", type_id.0)),
         ValueRecord::Char { c, type_id } => (c.to_string(), TypeKind::Char, format!("type_{}", type_id.0)),
-        ValueRecord::Sequence { type_id, .. } => {
-            ("[...]".to_string(), TypeKind::Seq, format!("type_{}", type_id.0))
-        }
-        ValueRecord::Tuple { type_id, .. } => {
-            ("(...)".to_string(), TypeKind::Tuple, format!("type_{}", type_id.0))
-        }
-        ValueRecord::Struct { type_id, .. } => {
-            ("{...}".to_string(), TypeKind::Struct, format!("type_{}", type_id.0))
-        }
-        ValueRecord::Variant { discriminator, type_id, .. } => {
-            (discriminator.clone(), TypeKind::Variant, format!("type_{}", type_id.0))
-        }
-        ValueRecord::Reference { address, type_id, .. } => {
-            (format!("0x{:x}", address), TypeKind::Pointer, format!("type_{}", type_id.0))
-        }
-        ValueRecord::Cell { place } => {
-            (format!("place_{}", place.0), TypeKind::Raw, "Cell".to_string())
-        }
+        ValueRecord::Sequence { type_id, .. } => ("[...]".to_string(), TypeKind::Seq, format!("type_{}", type_id.0)),
+        ValueRecord::Tuple { type_id, .. } => ("(...)".to_string(), TypeKind::Tuple, format!("type_{}", type_id.0)),
+        ValueRecord::Struct { type_id, .. } => ("{...}".to_string(), TypeKind::Struct, format!("type_{}", type_id.0)),
+        ValueRecord::Variant { discriminator, type_id, .. } => (discriminator.clone(), TypeKind::Variant, format!("type_{}", type_id.0)),
+        ValueRecord::Reference { address, type_id, .. } => (format!("0x{:x}", address), TypeKind::Pointer, format!("type_{}", type_id.0)),
+        ValueRecord::Cell { place } => (format!("place_{}", place.0), TypeKind::Raw, "Cell".to_string()),
         ValueRecord::BigInt { negative, type_id, .. } => {
             let sign = if *negative { "-" } else { "" };
             (format!("{}(bigint)", sign), TypeKind::Int, format!("type_{}", type_id.0))
@@ -1491,25 +1412,17 @@ pub mod non_streaming_trace_writer {
         }
         fn register_step(&mut self, path: &Path, line: Line) {
             let path_id = self.ensure_path_id(path);
-            self.events.push(TraceLowLevelEvent::Step(StepRecord {
-                path_id,
-                line,
-            }));
+            self.events.push(TraceLowLevelEvent::Step(StepRecord { path_id, line }));
         }
         fn register_call(&mut self, function_id: FunctionId, args: Vec<FullValueRecord>) {
-            self.events.push(TraceLowLevelEvent::Call(CallRecord {
-                function_id,
-                args,
-            }));
+            self.events.push(TraceLowLevelEvent::Call(CallRecord { function_id, args }));
         }
         fn arg(&mut self, name: &str, value: ValueRecord) -> FullValueRecord {
             let variable_id = self.ensure_variable_id(name);
             FullValueRecord { variable_id, value }
         }
         fn register_return(&mut self, return_value: ValueRecord) {
-            self.events.push(TraceLowLevelEvent::Return(ReturnRecord {
-                return_value,
-            }));
+            self.events.push(TraceLowLevelEvent::Return(ReturnRecord { return_value }));
         }
         fn register_special_event(&mut self, kind: EventLogKind, metadata: &str, content: &str) {
             self.events.push(TraceLowLevelEvent::Event(RecordEvent {
@@ -1534,19 +1447,13 @@ pub mod non_streaming_trace_writer {
         fn register_asm(&mut self, instructions: &[String]) {}
         fn register_variable_with_full_value(&mut self, name: &str, value: ValueRecord) {
             let variable_id = self.ensure_variable_id(name);
-            self.events.push(TraceLowLevelEvent::Value(FullValueRecord {
-                variable_id,
-                value,
-            }));
+            self.events.push(TraceLowLevelEvent::Value(FullValueRecord { variable_id, value }));
         }
         fn register_variable_name(&mut self, variable_name: &str) {
             self.ensure_variable_id(variable_name);
         }
         fn register_full_value(&mut self, variable_id: VariableId, value: ValueRecord) {
-            self.events.push(TraceLowLevelEvent::Value(FullValueRecord {
-                variable_id,
-                value,
-            }));
+            self.events.push(TraceLowLevelEvent::Value(FullValueRecord { variable_id, value }));
         }
         fn register_compound_value(&mut self, place: Place, value: ValueRecord) {}
         fn register_cell_value(&mut self, place: Place, value: ValueRecord) {}

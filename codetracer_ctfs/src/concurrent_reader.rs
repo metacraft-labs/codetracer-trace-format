@@ -101,11 +101,7 @@ impl ConcurrentCtfsReader {
 
     /// List all file names in the container.
     pub fn list_files(&self) -> Vec<String> {
-        self.entries
-            .iter()
-            .filter(|e| !e.is_empty())
-            .map(|e| base40_decode(e.name))
-            .collect()
+        self.entries.iter().filter(|e| !e.is_empty()).map(|e| base40_decode(e.name)).collect()
     }
 
     /// Get the size of a named file, or None if not found.
@@ -115,9 +111,7 @@ impl ConcurrentCtfsReader {
 
     /// Read an entire file's contents using positional read.
     pub fn read_file(&self, name: &str) -> Result<Vec<u8>, CtfsError> {
-        let entry = *self
-            .find_entry(name)
-            .ok_or_else(|| CtfsError::FileNotFound(name.to_string()))?;
+        let entry = *self.find_entry(name).ok_or_else(|| CtfsError::FileNotFound(name.to_string()))?;
 
         if entry.size == 0 {
             return Ok(Vec::new());
@@ -143,9 +137,7 @@ impl ConcurrentCtfsReader {
 
     /// Read from an arbitrary position within a file using positional read.
     pub fn read_at(&self, name: &str, offset: u64, buf: &mut [u8]) -> Result<usize, CtfsError> {
-        let entry = *self
-            .find_entry(name)
-            .ok_or_else(|| CtfsError::FileNotFound(name.to_string()))?;
+        let entry = *self.find_entry(name).ok_or_else(|| CtfsError::FileNotFound(name.to_string()))?;
 
         if offset >= entry.size {
             return Ok(0);
@@ -198,10 +190,7 @@ impl ConcurrentCtfsReader {
             if chain_ptr == 0 {
                 return Err(CtfsError::Io(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
-                    format!(
-                        "null chain pointer at block {} following to level {}",
-                        current_level_block, level
-                    ),
+                    format!("null chain pointer at block {} following to level {}", current_level_block, level),
                 )));
             }
             current_level_block = chain_ptr;
@@ -210,22 +199,13 @@ impl ConcurrentCtfsReader {
         self.navigate_to_data_block(current_level_block, level, idx, usable)
     }
 
-    fn navigate_to_data_block(
-        &self,
-        mapping_block: u64,
-        level: u32,
-        idx_within_level: u64,
-        usable: u64,
-    ) -> Result<u64, CtfsError> {
+    fn navigate_to_data_block(&self, mapping_block: u64, level: u32, idx_within_level: u64, usable: u64) -> Result<u64, CtfsError> {
         if level == 1 {
             let ptr = read_ptr_at(&self.file, mapping_block, idx_within_level as usize, self.block_size)?;
             if ptr == 0 {
                 return Err(CtfsError::Io(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
-                    format!(
-                        "null data block pointer at block {} index {}",
-                        mapping_block, idx_within_level
-                    ),
+                    format!("null data block pointer at block {} index {}", mapping_block, idx_within_level),
                 )));
             }
             return Ok(ptr);
@@ -235,15 +215,11 @@ impl ConcurrentCtfsReader {
         let entry_idx = idx_within_level / sub_cap;
         let sub_idx = idx_within_level % sub_cap;
 
-        let child_block =
-            read_ptr_at(&self.file, mapping_block, entry_idx as usize, self.block_size)?;
+        let child_block = read_ptr_at(&self.file, mapping_block, entry_idx as usize, self.block_size)?;
         if child_block == 0 {
             return Err(CtfsError::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
-                format!(
-                    "null mapping pointer at block {} index {}",
-                    mapping_block, entry_idx
-                ),
+                format!("null mapping pointer at block {} index {}", mapping_block, entry_idx),
             )));
         }
 

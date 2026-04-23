@@ -1,6 +1,6 @@
 use std::io::Cursor;
 
-use crate::header::{ChunkIndexEntry, CHUNK_INDEX_ENTRY_SIZE, CompressionMethod};
+use crate::header::{ChunkIndexEntry, CompressionMethod, CHUNK_INDEX_ENTRY_SIZE};
 use crate::CtfsError;
 
 /// Default zstd compression level.
@@ -47,12 +47,7 @@ impl ChunkedWriter {
     /// `first_geids` -- GEID of each event (parallel to `event_sizes`).
     ///
     /// Returns the chunked byte stream ready to be stored in a CTFS file.
-    pub fn write_chunked(
-        &self,
-        events: &[u8],
-        event_sizes: &[usize],
-        first_geids: &[u64],
-    ) -> Result<Vec<u8>, CtfsError> {
+    pub fn write_chunked(&self, events: &[u8], event_sizes: &[usize], first_geids: &[u64]) -> Result<Vec<u8>, CtfsError> {
         assert_eq!(
             event_sizes.len(),
             first_geids.len(),
@@ -77,10 +72,7 @@ impl ChunkedWriter {
 
             // Compress
             let compressed = match self.compression {
-                CompressionMethod::Zstd => {
-                    zstd::encode_all(Cursor::new(chunk_raw), self.level)
-                        .map_err(|e| CtfsError::Io(e))?
-                }
+                CompressionMethod::Zstd => zstd::encode_all(Cursor::new(chunk_raw), self.level).map_err(|e| CtfsError::Io(e))?,
                 _ => chunk_raw.to_vec(),
             };
 
@@ -120,14 +112,15 @@ impl ChunkedReader {
                     std::io::ErrorKind::UnexpectedEof,
                     format!(
                         "chunk compressed data extends past end of stream: need {} bytes at offset {}, have {}",
-                        header.compressed_size, offset, data.len() - offset
+                        header.compressed_size,
+                        offset,
+                        data.len() - offset
                     ),
                 )));
             }
 
             let compressed = &data[offset..end];
-            let decompressed = zstd::decode_all(Cursor::new(compressed))
-                .map_err(|e| CtfsError::Io(e))?;
+            let decompressed = zstd::decode_all(Cursor::new(compressed)).map_err(|e| CtfsError::Io(e))?;
             output.extend_from_slice(&decompressed);
 
             offset = end;
@@ -140,10 +133,7 @@ impl ChunkedReader {
     ///
     /// Returns the decompressed data of the single chunk that contains the
     /// target GEID, along with the chunk's header metadata.
-    pub fn seek_to_geid(
-        data: &[u8],
-        target_geid: u64,
-    ) -> Result<(Vec<u8>, ChunkIndexEntry), CtfsError> {
+    pub fn seek_to_geid(data: &[u8], target_geid: u64) -> Result<(Vec<u8>, ChunkIndexEntry), CtfsError> {
         let mut offset = 0usize;
         let mut best_header: Option<(ChunkIndexEntry, usize)> = None;
 
@@ -180,8 +170,7 @@ impl ChunkedReader {
         }
 
         let compressed = &data[data_offset..end];
-        let decompressed = zstd::decode_all(Cursor::new(compressed))
-            .map_err(|e| CtfsError::Io(e))?;
+        let decompressed = zstd::decode_all(Cursor::new(compressed)).map_err(|e| CtfsError::Io(e))?;
 
         Ok((decompressed, header))
     }
@@ -216,12 +205,9 @@ impl ChunkedReader {
             )));
         }
 
-        let compressed_size =
-            u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap());
-        let event_count =
-            u32::from_le_bytes(data[offset + 4..offset + 8].try_into().unwrap());
-        let first_geid =
-            u64::from_le_bytes(data[offset + 8..offset + 16].try_into().unwrap());
+        let compressed_size = u32::from_le_bytes(data[offset..offset + 4].try_into().unwrap());
+        let event_count = u32::from_le_bytes(data[offset + 4..offset + 8].try_into().unwrap());
+        let first_geid = u64::from_le_bytes(data[offset + 8..offset + 16].try_into().unwrap());
 
         Ok(ChunkIndexEntry {
             compressed_size,
@@ -235,11 +221,7 @@ impl ChunkedReader {
 mod tests {
     use super::*;
     /// Create fake events: each event is `event_size` bytes with a recognizable pattern.
-    fn make_events(
-        count: usize,
-        event_size: usize,
-        start_geid: u64,
-    ) -> (Vec<u8>, Vec<usize>, Vec<u64>) {
+    fn make_events(count: usize, event_size: usize, start_geid: u64) -> (Vec<u8>, Vec<usize>, Vec<u64>) {
         let mut data = Vec::with_capacity(count * event_size);
         let mut sizes = Vec::with_capacity(count);
         let mut geids = Vec::with_capacity(count);
@@ -263,13 +245,10 @@ mod tests {
         let event_size = 48; // 24-byte header + 24-byte payload
         let chunk_size = 10;
 
-        let (raw_events, event_sizes, first_geids) =
-            make_events(event_count, event_size, 1000);
+        let (raw_events, event_sizes, first_geids) = make_events(event_count, event_size, 1000);
 
         let writer = ChunkedWriter::new(CompressionMethod::Zstd, chunk_size);
-        let chunked = writer
-            .write_chunked(&raw_events, &event_sizes, &first_geids)
-            .unwrap();
+        let chunked = writer.write_chunked(&raw_events, &event_sizes, &first_geids).unwrap();
 
         // Verify we have the expected number of chunks
         let headers = ChunkedReader::scan_headers(&chunked);
@@ -288,18 +267,14 @@ mod tests {
         let chunk_size = 10;
         let start_geid = 0u64;
 
-        let (raw_events, event_sizes, first_geids) =
-            make_events(event_count, event_size, start_geid);
+        let (raw_events, event_sizes, first_geids) = make_events(event_count, event_size, start_geid);
 
         let writer = ChunkedWriter::new(CompressionMethod::Zstd, chunk_size);
-        let chunked = writer
-            .write_chunked(&raw_events, &event_sizes, &first_geids)
-            .unwrap();
+        let chunked = writer.write_chunked(&raw_events, &event_sizes, &first_geids).unwrap();
 
         // Seek to GEID 55 -- should be in chunk 5 (GEIDs 50..59)
         let target_geid = 55u64;
-        let (chunk_data, header) =
-            ChunkedReader::seek_to_geid(&chunked, target_geid).unwrap();
+        let (chunk_data, header) = ChunkedReader::seek_to_geid(&chunked, target_geid).unwrap();
 
         // Verify the header metadata
         assert_eq!(header.first_geid, 50); // chunk 5 starts at GEID 50
@@ -320,23 +295,18 @@ mod tests {
         let chunk_size = 10;
         let start_geid = 100u64;
 
-        let (raw_events, event_sizes, first_geids) =
-            make_events(event_count, event_size, start_geid);
+        let (raw_events, event_sizes, first_geids) = make_events(event_count, event_size, start_geid);
 
         let writer = ChunkedWriter::new(CompressionMethod::Zstd, chunk_size);
-        let chunked = writer
-            .write_chunked(&raw_events, &event_sizes, &first_geids)
-            .unwrap();
+        let chunked = writer.write_chunked(&raw_events, &event_sizes, &first_geids).unwrap();
 
         // Seek to the very first GEID
-        let (_chunk_data, header) =
-            ChunkedReader::seek_to_geid(&chunked, 100).unwrap();
+        let (_chunk_data, header) = ChunkedReader::seek_to_geid(&chunked, 100).unwrap();
         assert_eq!(header.first_geid, 100);
         assert_eq!(header.event_count, 10);
 
         // Seek to the very last GEID
-        let (_chunk_data, header) =
-            ChunkedReader::seek_to_geid(&chunked, 129).unwrap();
+        let (_chunk_data, header) = ChunkedReader::seek_to_geid(&chunked, 129).unwrap();
         assert_eq!(header.first_geid, 120);
         assert_eq!(header.event_count, 10);
     }
@@ -346,23 +316,17 @@ mod tests {
         // Verify the inline header matches the Nim layout:
         // compressed_size:u32 LE, event_count:u32 LE, first_geid:u64 LE
         let event_size = 24;
-        let (raw_events, event_sizes, first_geids) =
-            make_events(5, event_size, 42);
+        let (raw_events, event_sizes, first_geids) = make_events(5, event_size, 42);
 
         let writer = ChunkedWriter::new(CompressionMethod::Zstd, 5);
-        let chunked = writer
-            .write_chunked(&raw_events, &event_sizes, &first_geids)
-            .unwrap();
+        let chunked = writer.write_chunked(&raw_events, &event_sizes, &first_geids).unwrap();
 
         // Read header fields directly from bytes
         assert!(chunked.len() >= CHUNK_INDEX_ENTRY_SIZE);
 
-        let compressed_size =
-            u32::from_le_bytes(chunked[0..4].try_into().unwrap());
-        let event_count =
-            u32::from_le_bytes(chunked[4..8].try_into().unwrap());
-        let first_geid =
-            u64::from_le_bytes(chunked[8..16].try_into().unwrap());
+        let compressed_size = u32::from_le_bytes(chunked[0..4].try_into().unwrap());
+        let event_count = u32::from_le_bytes(chunked[4..8].try_into().unwrap());
+        let first_geid = u64::from_le_bytes(chunked[8..16].try_into().unwrap());
 
         assert_eq!(event_count, 5);
         assert_eq!(first_geid, 42);
@@ -383,13 +347,10 @@ mod tests {
         let event_size = 32;
         let chunk_size = 10;
 
-        let (raw_events, event_sizes, first_geids) =
-            make_events(event_count, event_size, 0);
+        let (raw_events, event_sizes, first_geids) = make_events(event_count, event_size, 0);
 
         let writer = ChunkedWriter::new(CompressionMethod::Zstd, chunk_size);
-        let chunked = writer
-            .write_chunked(&raw_events, &event_sizes, &first_geids)
-            .unwrap();
+        let chunked = writer.write_chunked(&raw_events, &event_sizes, &first_geids).unwrap();
 
         let headers = ChunkedReader::scan_headers(&chunked);
         assert_eq!(headers.len(), 3);
@@ -422,9 +383,7 @@ mod tests {
         }
 
         let writer = ChunkedWriter::new(CompressionMethod::Zstd, 7);
-        let chunked = writer
-            .write_chunked(&data, &sizes, &geids)
-            .unwrap();
+        let chunked = writer.write_chunked(&data, &sizes, &geids).unwrap();
 
         let headers = ChunkedReader::scan_headers(&chunked);
         // 20 events / 7 per chunk = 3 chunks (7, 7, 6)
@@ -442,13 +401,10 @@ mod tests {
         let event_count = 10;
         let event_size = 24;
 
-        let (raw_events, event_sizes, first_geids) =
-            make_events(event_count, event_size, 0);
+        let (raw_events, event_sizes, first_geids) = make_events(event_count, event_size, 0);
 
         let writer = ChunkedWriter::new(CompressionMethod::None, 5);
-        let chunked = writer
-            .write_chunked(&raw_events, &event_sizes, &first_geids)
-            .unwrap();
+        let chunked = writer.write_chunked(&raw_events, &event_sizes, &first_geids).unwrap();
 
         // With no compression, compressed data == raw data
         let headers = ChunkedReader::scan_headers(&chunked);

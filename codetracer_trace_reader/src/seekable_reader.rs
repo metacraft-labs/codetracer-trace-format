@@ -48,10 +48,7 @@ pub fn read_events_at_offset(
     input.seek(SeekFrom::Start(0))?;
     let input2 = StreamSlice::new(input, 8, stream_len)?;
 
-    let decoder = DecodeOptions::new(input2)
-        .offset(offset)
-        .offset_limit(limit)
-        .into_decoder()?;
+    let decoder = DecodeOptions::new(input2).offset(offset).offset_limit(limit).into_decoder()?;
 
     let mut buf_reader = BufReader::new(decoder);
     let mut result = vec![];
@@ -66,9 +63,7 @@ pub fn read_events_at_offset(
 ///
 /// Functionally equivalent to [`crate::cbor_zstd_reader::read_trace`] but goes through
 /// the `DecodeOptions` path so seekable features are available.
-pub fn read_all_events(
-    input: &mut (impl Read + Write + Seek),
-) -> Result<Vec<TraceLowLevelEvent>, Box<dyn std::error::Error>> {
+pub fn read_all_events(input: &mut (impl Read + Write + Seek)) -> Result<Vec<TraceLowLevelEvent>, Box<dyn std::error::Error>> {
     let stream_len = input.seek(SeekFrom::End(0))?;
     input.seek(SeekFrom::Start(0))?;
 
@@ -124,15 +119,13 @@ impl<R: Read> Iterator for EventIterator<R> {
                 self.done = true;
                 None
             }
-            Ok(false) => {
-                match cbor4ii::serde::from_reader::<TraceLowLevelEvent, _>(&mut self.reader) {
-                    Ok(event) => Some(Ok(event)),
-                    Err(e) => {
-                        self.done = true;
-                        Some(Err(Box::new(e) as Box<dyn std::error::Error>))
-                    }
+            Ok(false) => match cbor4ii::serde::from_reader::<TraceLowLevelEvent, _>(&mut self.reader) {
+                Ok(event) => Some(Ok(event)),
+                Err(e) => {
+                    self.done = true;
+                    Some(Err(Box::new(e) as Box<dyn std::error::Error>))
                 }
-            }
+            },
             Err(e) => {
                 self.done = true;
                 Some(Err(Box::new(e) as Box<dyn std::error::Error>))
@@ -149,10 +142,7 @@ impl<R: Read> Iterator for EventIterator<R> {
 /// Returns an error if the file header is invalid or the decoder cannot be created.
 pub fn into_event_iter(
     input: &mut (impl Read + Write + Seek),
-) -> Result<
-    EventIterator<Decoder<'_, StreamSlice<&mut (impl Read + Write + Seek)>>>,
-    Box<dyn std::error::Error>,
-> {
+) -> Result<EventIterator<Decoder<'_, StreamSlice<&mut (impl Read + Write + Seek)>>>, Box<dyn std::error::Error>> {
     let stream_len = input.seek(SeekFrom::End(0))?;
     input.seek(SeekFrom::Start(0))?;
 
@@ -177,10 +167,7 @@ pub fn into_event_iter_at_offset(
     input: &mut (impl Read + Write + Seek),
     offset: u64,
     limit: u64,
-) -> Result<
-    EventIterator<Decoder<'_, StreamSlice<&mut (impl Read + Write + Seek)>>>,
-    Box<dyn std::error::Error>,
-> {
+) -> Result<EventIterator<Decoder<'_, StreamSlice<&mut (impl Read + Write + Seek)>>>, Box<dyn std::error::Error>> {
     let stream_len = input.seek(SeekFrom::End(0))?;
     input.seek(SeekFrom::Start(0))?;
 
@@ -192,10 +179,7 @@ pub fn into_event_iter_at_offset(
 
     input.seek(SeekFrom::Start(0))?;
     let input2 = StreamSlice::new(input, 8, stream_len)?;
-    let decoder = DecodeOptions::new(input2)
-        .offset(offset)
-        .offset_limit(limit)
-        .into_decoder()?;
+    let decoder = DecodeOptions::new(input2).offset(offset).offset_limit(limit).into_decoder()?;
 
     Ok(EventIterator::new(decoder))
 }

@@ -319,6 +319,117 @@ impl StreamingValueEncoder {
         unsafe { std::slice::from_raw_parts(ptr, len) }
     }
 
+    /// Get a copy of the encoded CBOR bytes.
+    ///
+    /// Unlike [`get_bytes`](Self::get_bytes), the returned `Vec` owns its
+    /// memory and remains valid after reset/encode/drop. Use this when the
+    /// caller needs to hold the CBOR bytes beyond the encoder's lifetime
+    /// (e.g. to pass to `register_variable_cbor`).
+    pub fn get_bytes_copy(&self) -> Vec<u8> {
+        self.get_bytes().to_vec()
+    }
+
+    // ----- Direct write methods for streaming encoding (M58) -----
+    //
+    // These methods let callers walk an object graph and call encoder
+    // methods directly, without building an intermediate `ValueRecord` tree.
+    // Each method maps to a single C FFI call.
+
+    /// Write an integer value.
+    pub fn write_int(&mut self, value: i64, type_id: TypeId) {
+        unsafe { ct_value_write_int(self.handle, value, type_id.0 as u64) };
+    }
+
+    /// Write a floating-point value.
+    pub fn write_float(&mut self, value: f64, type_id: TypeId) {
+        unsafe { ct_value_write_float(self.handle, value, type_id.0 as u64) };
+    }
+
+    /// Write a boolean value.
+    pub fn write_bool(&mut self, value: bool, type_id: TypeId) {
+        unsafe {
+            ct_value_write_bool_typed(
+                self.handle,
+                if value { 1 } else { 0 },
+                type_id.0 as u64,
+            )
+        };
+    }
+
+    /// Write a string value.
+    pub fn write_string(&mut self, text: &str, type_id: TypeId) {
+        unsafe {
+            ct_value_write_string(
+                self.handle,
+                text.as_ptr(),
+                text.len(),
+                type_id.0 as u64,
+            )
+        };
+    }
+
+    /// Write a None/null value.
+    pub fn write_none(&mut self, type_id: TypeId) {
+        unsafe { ct_value_write_none_typed(self.handle, type_id.0 as u64) };
+    }
+
+    /// Write a raw string representation (for types without structured encoding).
+    pub fn write_raw(&mut self, repr: &str, type_id: TypeId) {
+        unsafe {
+            ct_value_write_raw(
+                self.handle,
+                repr.as_ptr(),
+                repr.len(),
+                type_id.0 as u64,
+            )
+        };
+    }
+
+    /// Write an error sentinel value.
+    pub fn write_error(&mut self, msg: &str, type_id: TypeId) {
+        unsafe {
+            ct_value_write_error(
+                self.handle,
+                msg.as_ptr(),
+                msg.len(),
+                type_id.0 as u64,
+            )
+        };
+    }
+
+    /// Begin a sequence (list/array) with a known element count.
+    /// Must be followed by exactly `count` element encodings and one
+    /// [`end_compound`](Self::end_compound) call.
+    pub fn begin_sequence(&mut self, type_id: TypeId, count: usize) {
+        unsafe {
+            ct_value_begin_sequence(
+                self.handle,
+                type_id.0 as u64,
+                count as i32,
+            )
+        };
+    }
+
+    /// Begin a tuple with a known element count.
+    /// Must be followed by exactly `count` element encodings and one
+    /// [`end_compound`](Self::end_compound) call.
+    pub fn begin_tuple(&mut self, type_id: TypeId, count: usize) {
+        unsafe {
+            ct_value_begin_tuple(
+                self.handle,
+                type_id.0 as u64,
+                count as i32,
+            )
+        };
+    }
+
+    /// End a compound value (sequence or tuple) started by
+    /// [`begin_sequence`](Self::begin_sequence) or
+    /// [`begin_tuple`](Self::begin_tuple).
+    pub fn end_compound(&mut self) {
+        unsafe { ct_value_end_compound(self.handle) };
+    }
+
     /// Recursively encode a value record into CBOR.
     fn encode_recursive(&mut self, value: &ValueRecord) {
         match value {
@@ -412,6 +523,13 @@ impl Drop for StreamingValueEncoder {
         unsafe { ct_value_encoder_free(self.handle) }
     }
 }
+
+// Safety: StreamingValueEncoder wraps a Nim-allocated opaque handle that is
+// never shared across threads. The handle is only accessed through &mut self,
+// so concurrent access is prevented by Rust's borrow checker. As long as each
+// encoder instance is used from a single thread at a time (which &mut self
+// guarantees), sending it to another thread is safe.
+unsafe impl Send for StreamingValueEncoder {}
 
 // ---------------------------------------------------------------------------
 // NimTraceWriter
@@ -657,6 +775,36 @@ impl NimTraceWriter {
         }
     }
 
+    /// Register a variable whose value is already encoded as CBOR bytes.
+    ///
+    /// This bypasses the `ValueRecord` tree entirely, passing pre-encoded CBOR
+    /// directly to the Nim backend. Used by recorders that call the streaming
+    /// value encoder C FFI during their object walk (M58+).
+    pub fn register_variable_cbor(&mut self, name: &str, cbor: &[u8]) {
+        let c_name = str_to_cstring(name);
+        unsafe {
+            trace_writer_register_variable_cbor(
+                self.handle,
+                c_name.as_ptr(),
+                cbor.as_ptr(),
+                cbor.len(),
+            )
+        }
+    }
+
+    /// Register a return value that is already encoded as CBOR bytes.
+    ///
+    /// See [`register_variable_cbor`](Self::register_variable_cbor) for rationale.
+    pub fn register_return_cbor(&mut self, cbor: &[u8]) {
+        unsafe {
+            trace_writer_register_return_cbor(
+                self.handle,
+                cbor.as_ptr(),
+                cbor.len(),
+            )
+        }
+    }
+
     pub fn register_special_event(&mut self, kind: EventLogKind, metadata: &str, content: &str) {
         let c_metadata = str_to_cstring(metadata);
         let c_content = str_to_cstring(content);
@@ -850,6 +998,30 @@ pub trait TraceWriter: Send {
     fn register_raw_type(&mut self, typ: TypeRecord);
     fn register_asm(&mut self, instructions: &[String]);
     fn register_variable_with_full_value(&mut self, name: &str, value: ValueRecord);
+
+    /// Register a variable whose value is already encoded as CBOR bytes.
+    ///
+    /// This bypasses the `ValueRecord` tree entirely, passing pre-encoded CBOR
+    /// directly to the backend. Used by recorders that call the streaming
+    /// value encoder during their object walk (M58+).
+    ///
+    /// The default implementation wraps the CBOR bytes as a hex-encoded
+    /// `ValueRecord::Raw` and delegates to `register_variable_with_full_value`.
+    /// Writers that support native CBOR (e.g. `NimTraceWriter`) override this
+    /// for zero-copy passthrough.
+    fn register_variable_cbor(&mut self, name: &str, cbor: &[u8]) {
+        let hex = cbor.iter().map(|b| format!("{b:02x}")).collect::<String>();
+        self.register_variable_with_full_value(name, ValueRecord::Raw { r: hex, type_id: TypeId(0) });
+    }
+
+    /// Register a return value that is already encoded as CBOR bytes.
+    ///
+    /// See [`register_variable_cbor`](Self::register_variable_cbor) for rationale.
+    fn register_return_cbor(&mut self, cbor: &[u8]) {
+        let hex = cbor.iter().map(|b| format!("{b:02x}")).collect::<String>();
+        self.register_return(ValueRecord::Raw { r: hex, type_id: TypeId(0) });
+    }
+
     fn register_variable_name(&mut self, variable_name: &str);
     fn register_full_value(&mut self, variable_id: VariableId, value: ValueRecord);
     fn register_compound_value(&mut self, place: Place, value: ValueRecord);
@@ -948,6 +1120,12 @@ impl TraceWriter for NimTraceWriter {
     }
     fn register_variable_with_full_value(&mut self, name: &str, value: ValueRecord) {
         NimTraceWriter::register_variable_with_full_value(self, name, value)
+    }
+    fn register_variable_cbor(&mut self, name: &str, cbor: &[u8]) {
+        NimTraceWriter::register_variable_cbor(self, name, cbor)
+    }
+    fn register_return_cbor(&mut self, cbor: &[u8]) {
+        NimTraceWriter::register_return_cbor(self, cbor)
     }
     fn register_variable_name(&mut self, variable_name: &str) {
         NimTraceWriter::register_variable_name(self, variable_name)
@@ -1538,6 +1716,20 @@ pub mod non_streaming_trace_writer {
                 variable_id,
                 value,
             }));
+        }
+        fn register_variable_cbor(&mut self, name: &str, cbor: &[u8]) {
+            // Test double: store CBOR as a Raw value with hex representation.
+            let hex = cbor.iter().map(|b| format!("{b:02x}")).collect::<String>();
+            let variable_id = self.ensure_variable_id(name);
+            self.events.push(TraceLowLevelEvent::Value(FullValueRecord {
+                variable_id,
+                value: ValueRecord::Raw { r: hex, type_id: TypeId(0) },
+            }));
+        }
+        fn register_return_cbor(&mut self, cbor: &[u8]) {
+            // Test double: store CBOR as a Raw return value with hex representation.
+            let hex = cbor.iter().map(|b| format!("{b:02x}")).collect::<String>();
+            self.events.push(TraceLowLevelEvent::Return(ReturnRecord { return_value: ValueRecord::Raw { r: hex, type_id: TypeId(0) } }));
         }
         fn register_variable_name(&mut self, variable_name: &str) {
             self.ensure_variable_id(variable_name);

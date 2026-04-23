@@ -131,6 +131,34 @@ pub trait TraceWriter: AbstractTraceWriter {
         AbstractTraceWriter::finish_writing_trace_paths(self)
     }
 
+    /// Register a variable whose value is already encoded as CBOR bytes.
+    ///
+    /// Writers that support pre-encoded CBOR (e.g. the Nim-backed writer) can
+    /// pass the bytes directly to the backend, avoiding an intermediate
+    /// `ValueRecord` tree allocation. The default implementation wraps the
+    /// CBOR bytes as a `ValueRecord::Raw` hex string and delegates to
+    /// [`register_variable_with_full_value`](Self::register_variable_with_full_value).
+    ///
+    /// Production recorders using the Nim writer should override this for
+    /// zero-copy CBOR passthrough.
+    fn register_variable_cbor(&mut self, name: &str, cbor: &[u8]) {
+        // Fallback: encode as hex-encoded Raw value. This is lossy but ensures
+        // non-Nim writers don't break. In practice, recorders that call this
+        // method always use NimTraceWriter which overrides with direct CBOR.
+        let hex = cbor.iter().map(|b| format!("{b:02x}")).collect::<String>();
+        let type_id = AbstractTraceWriter::ensure_type_id(self, TypeKind::Raw, "CborEncoded");
+        AbstractTraceWriter::register_variable_with_full_value(self, name, ValueRecord::Raw { r: hex, type_id });
+    }
+
+    /// Register a return value that is already encoded as CBOR bytes.
+    ///
+    /// See [`register_variable_cbor`](Self::register_variable_cbor) for rationale.
+    fn register_return_cbor(&mut self, cbor: &[u8]) {
+        let hex = cbor.iter().map(|b| format!("{b:02x}")).collect::<String>();
+        let type_id = AbstractTraceWriter::ensure_type_id(self, TypeKind::Raw, "CborEncoded");
+        AbstractTraceWriter::register_return(self, ValueRecord::Raw { r: hex, type_id });
+    }
+
     /// Access the in-memory event buffer.
     ///
     /// Returns the accumulated events for writers that buffer in memory

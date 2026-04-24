@@ -2,6 +2,14 @@
 
 A format and helper library for [CodeTracer](https://github.com/metacraft-labs/CodeTracer.git) traces
 
+### Specification
+
+The authoritative specification for the binary format lives in
+[codetracer-trace-format-spec](https://github.com/metacraft-labs/codetracer-trace-format-spec).
+That repository documents the CTFS container layout, split-binary event encoding,
+seekable Zstd compression, and internal file conventions. It also contains binary
+test fixtures that both the Rust and Nim implementations validate against.
+
 ### format
 
 A CodeTracer trace for its db backend consists of record data, metadata for the recorded program and copy of the relevant source/repository files. 

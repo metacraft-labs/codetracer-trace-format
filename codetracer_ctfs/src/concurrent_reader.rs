@@ -50,7 +50,7 @@ impl ConcurrentCtfsReader {
         if header_buf[0..5] != crate::header::MAGIC {
             return Err(CtfsError::InvalidMagic);
         }
-        if header_buf[5] != crate::header::VERSION && header_buf[5] != crate::header::VERSION_V2 {
+        if header_buf[5] != crate::header::VERSION && header_buf[5] != crate::header::VERSION_V2 && header_buf[5] != crate::header::VERSION_V4 {
             return Err(CtfsError::InvalidVersion(header_buf[5]));
         }
 

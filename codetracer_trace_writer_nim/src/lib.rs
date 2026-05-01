@@ -69,6 +69,14 @@ extern "C" {
     ) -> usize;
 
     fn trace_writer_register_call(handle: *mut std::ffi::c_void, function_id: usize);
+    /// Stage one (name, CBOR-encoded value) argument for the next
+    /// `trace_writer_register_call`.
+    fn trace_writer_register_call_arg(
+        handle: *mut std::ffi::c_void,
+        name: *const std::os::raw::c_char,
+        cbor_data: *const u8,
+        cbor_len: usize,
+    );
     fn trace_writer_register_return(handle: *mut std::ffi::c_void);
 
     fn trace_writer_register_return_int(
@@ -675,8 +683,12 @@ impl NimTraceWriter {
     }
 
     pub fn register_call(&mut self, function_id: FunctionId, _args: Vec<FullValueRecord>) {
-        // The Nim library handles args internally via register_variable calls
-        // before the call. We only signal the call itself.
+        // The recorder calls `NimTraceWriter::arg(name, value)` for every
+        // call argument before reaching `register_call`.  `arg()` stages
+        // each (name, CBOR-encoded value) pair via
+        // `trace_writer_register_call_arg`, so the writer's pending-args
+        // buffer is already populated.  `trace_writer_register_call`
+        // consumes that buffer and clears it for the next call.
         unsafe { trace_writer_register_call(self.handle, function_id.0) }
     }
 
@@ -792,6 +804,21 @@ impl NimTraceWriter {
         }
     }
 
+    /// Stage one (name, CBOR-encoded value) argument for the next
+    /// [`register_call`](Self::register_call).  See the trait method
+    /// [`TraceWriter::register_call_arg`] for the rationale.
+    pub fn register_call_arg(&mut self, name: &str, cbor: &[u8]) {
+        let c_name = str_to_cstring(name);
+        unsafe {
+            trace_writer_register_call_arg(
+                self.handle,
+                c_name.as_ptr(),
+                cbor.as_ptr(),
+                cbor.len(),
+            )
+        }
+    }
+
     /// Register a return value that is already encoded as CBOR bytes.
     ///
     /// See [`register_variable_cbor`](Self::register_variable_cbor) for rationale.
@@ -844,8 +871,26 @@ impl NimTraceWriter {
     }
 
     pub fn arg(&mut self, name: &str, value: ValueRecord) -> FullValueRecord {
-        // Register the variable and return a record
+        // Two effects:
+        //   1. Register the argument as a step variable on the *current*
+        //      step so it appears in `ct/load-locals` for the caller.
+        //   2. Stage it on the writer's pending-args buffer so the next
+        //      `register_call` attaches it to the call record (the
+        //      frontend uses this to render call arg names + values in
+        //      the calltrace pane).
         self.register_variable_with_full_value(name, value.clone());
+
+        let cbor = self.streaming_encoder.encode(&value).to_vec();
+        let c_name = str_to_cstring(name);
+        unsafe {
+            trace_writer_register_call_arg(
+                self.handle,
+                c_name.as_ptr(),
+                cbor.as_ptr(),
+                cbor.len(),
+            );
+        }
+
         FullValueRecord {
             variable_id: VariableId(0),
             value,
@@ -1022,6 +1067,19 @@ pub trait TraceWriter: Send {
         self.register_return(ValueRecord::Raw { r: hex, type_id: TypeId(0) });
     }
 
+    /// Stage one (name, CBOR-encoded value) argument for the next
+    /// `register_call`.  The Nim multi-stream backend accumulates these
+    /// into the call record's `args` field; without them the frontend
+    /// renders the call as `f()` instead of `f(name=value)`.  Recorders
+    /// that build call args via [`register_variable_cbor`] should call
+    /// this *in addition* for each parameter immediately before
+    /// `register_call`.
+    ///
+    /// Default implementation is a no-op (legacy single-stream writers
+    /// store args inside the abstract `Call` event already).  Override
+    /// in writers that need explicit per-call argument staging.
+    fn register_call_arg(&mut self, _name: &str, _cbor: &[u8]) {}
+
     fn register_variable_name(&mut self, variable_name: &str);
     fn register_full_value(&mut self, variable_id: VariableId, value: ValueRecord);
     fn register_compound_value(&mut self, place: Place, value: ValueRecord);
@@ -1123,6 +1181,9 @@ impl TraceWriter for NimTraceWriter {
     }
     fn register_variable_cbor(&mut self, name: &str, cbor: &[u8]) {
         NimTraceWriter::register_variable_cbor(self, name, cbor)
+    }
+    fn register_call_arg(&mut self, name: &str, cbor: &[u8]) {
+        NimTraceWriter::register_call_arg(self, name, cbor)
     }
     fn register_return_cbor(&mut self, cbor: &[u8]) {
         NimTraceWriter::register_return_cbor(self, cbor)

@@ -44,6 +44,15 @@ extern "C" {
     fn trace_writer_ensure_type_id(handle: *mut std::ffi::c_void, kind: i32, lang_type: *const std::os::raw::c_char) -> usize;
 
     fn trace_writer_register_call(handle: *mut std::ffi::c_void, function_id: usize);
+    /// Stage one (name, CBOR-encoded value) argument for the next
+    /// `trace_writer_register_call`.  Multiple calls accumulate; the buffer
+    /// is consumed and cleared by the next `trace_writer_register_call`.
+    fn trace_writer_register_call_arg(
+        handle: *mut std::ffi::c_void,
+        name: *const std::os::raw::c_char,
+        cbor_data: *const u8,
+        cbor_len: usize,
+    );
     fn trace_writer_register_return(handle: *mut std::ffi::c_void);
 
     fn trace_writer_register_return_int(handle: *mut std::ffi::c_void, value: i64, type_kind: i32, type_name: *const std::os::raw::c_char);
@@ -170,6 +179,71 @@ extern "C" {
     fn ct_reader_program(h: *mut std::ffi::c_void, out_len: *mut usize) -> *mut u8;
     fn ct_reader_workdir(h: *mut std::ffi::c_void, out_len: *mut usize) -> *mut u8;
 
+    // ----- Structured reader accessors (no JSON parsing) -----
+
+    /// Resolve step N to (path_id, line). Returns 0 on success.
+    fn ct_reader_step_location(
+        h: *mut std::ffi::c_void,
+        n: u64,
+        out_path_id: *mut u64,
+        out_line: *mut u64,
+    ) -> i32;
+
+    /// Number of variable values at step N.
+    fn ct_reader_step_value_count(h: *mut std::ffi::c_void, n: u64) -> u64;
+
+    /// Get value at (step N, value index). Data must be freed with ct_free_buffer.
+    fn ct_reader_step_value(
+        h: *mut std::ffi::c_void,
+        n: u64,
+        value_idx: u64,
+        out_varname_id: *mut u64,
+        out_type_id: *mut u64,
+        out_data: *mut *mut u8,
+        out_data_len: *mut usize,
+    ) -> i32;
+
+    /// Get scalar fields of call record. Returns 0 on success.
+    fn ct_reader_call_fields(
+        h: *mut std::ffi::c_void,
+        key: u64,
+        out_function_id: *mut u64,
+        out_parent_key: *mut i64,
+        out_entry_step: *mut u64,
+        out_exit_step: *mut u64,
+        out_depth: *mut u32,
+        out_children_count: *mut u64,
+    ) -> i32;
+
+    /// Get child call_key at index within a call record.
+    fn ct_reader_call_child(h: *mut std::ffi::c_void, key: u64, child_idx: u64) -> u64;
+
+    /// Number of arguments captured for call ``key``. Returns 0 when the
+    /// call has no captured arguments or on lookup failure.
+    fn ct_reader_call_arg_count(h: *mut std::ffi::c_void, key: u64) -> u64;
+
+    /// Get the (varname_id, CBOR-encoded value) pair for argument
+    /// ``arg_idx`` of call ``key``.  The data pointer is heap-allocated;
+    /// caller must free with ``ct_free_buffer``.  Returns 0 on success.
+    fn ct_reader_call_arg(
+        h: *mut std::ffi::c_void,
+        key: u64,
+        arg_idx: u64,
+        out_varname_id: *mut u64,
+        out_data: *mut *mut u8,
+        out_data_len: *mut usize,
+    ) -> i32;
+
+    /// Get IO event fields. Data must be freed with ct_free_buffer.
+    fn ct_reader_event_fields(
+        h: *mut std::ffi::c_void,
+        index: u64,
+        out_kind: *mut u8,
+        out_step_id: *mut u64,
+        out_data: *mut *mut u8,
+        out_data_len: *mut usize,
+    ) -> i32;
+
     fn ct_free_buffer(buf: *mut u8);
 }
 
@@ -289,6 +363,117 @@ impl StreamingValueEncoder {
         unsafe { std::slice::from_raw_parts(ptr, len) }
     }
 
+    /// Get a copy of the encoded CBOR bytes.
+    ///
+    /// Unlike [`get_bytes`](Self::get_bytes), the returned `Vec` owns its
+    /// memory and remains valid after reset/encode/drop. Use this when the
+    /// caller needs to hold the CBOR bytes beyond the encoder's lifetime
+    /// (e.g. to pass to `register_variable_cbor`).
+    pub fn get_bytes_copy(&self) -> Vec<u8> {
+        self.get_bytes().to_vec()
+    }
+
+    // ----- Direct write methods for streaming encoding (M58) -----
+    //
+    // These methods let callers walk an object graph and call encoder
+    // methods directly, without building an intermediate `ValueRecord` tree.
+    // Each method maps to a single C FFI call.
+
+    /// Write an integer value.
+    pub fn write_int(&mut self, value: i64, type_id: TypeId) {
+        unsafe { ct_value_write_int(self.handle, value, type_id.0 as u64) };
+    }
+
+    /// Write a floating-point value.
+    pub fn write_float(&mut self, value: f64, type_id: TypeId) {
+        unsafe { ct_value_write_float(self.handle, value, type_id.0 as u64) };
+    }
+
+    /// Write a boolean value.
+    pub fn write_bool(&mut self, value: bool, type_id: TypeId) {
+        unsafe {
+            ct_value_write_bool_typed(
+                self.handle,
+                if value { 1 } else { 0 },
+                type_id.0 as u64,
+            )
+        };
+    }
+
+    /// Write a string value.
+    pub fn write_string(&mut self, text: &str, type_id: TypeId) {
+        unsafe {
+            ct_value_write_string(
+                self.handle,
+                text.as_ptr(),
+                text.len(),
+                type_id.0 as u64,
+            )
+        };
+    }
+
+    /// Write a None/null value.
+    pub fn write_none(&mut self, type_id: TypeId) {
+        unsafe { ct_value_write_none_typed(self.handle, type_id.0 as u64) };
+    }
+
+    /// Write a raw string representation (for types without structured encoding).
+    pub fn write_raw(&mut self, repr: &str, type_id: TypeId) {
+        unsafe {
+            ct_value_write_raw(
+                self.handle,
+                repr.as_ptr(),
+                repr.len(),
+                type_id.0 as u64,
+            )
+        };
+    }
+
+    /// Write an error sentinel value.
+    pub fn write_error(&mut self, msg: &str, type_id: TypeId) {
+        unsafe {
+            ct_value_write_error(
+                self.handle,
+                msg.as_ptr(),
+                msg.len(),
+                type_id.0 as u64,
+            )
+        };
+    }
+
+    /// Begin a sequence (list/array) with a known element count.
+    /// Must be followed by exactly `count` element encodings and one
+    /// [`end_compound`](Self::end_compound) call.
+    pub fn begin_sequence(&mut self, type_id: TypeId, count: usize) {
+        unsafe {
+            ct_value_begin_sequence(
+                self.handle,
+                type_id.0 as u64,
+                count as i32,
+            )
+        };
+    }
+
+    /// Begin a tuple with a known element count.
+    /// Must be followed by exactly `count` element encodings and one
+    /// [`end_compound`](Self::end_compound) call.
+    pub fn begin_tuple(&mut self, type_id: TypeId, count: usize) {
+        unsafe {
+            ct_value_begin_tuple(
+                self.handle,
+                type_id.0 as u64,
+                count as i32,
+            )
+        };
+    }
+
+    /// End a compound value (sequence or tuple) started by
+    /// [`begin_sequence`](Self::begin_sequence) or
+    /// [`begin_tuple`](Self::begin_tuple).
+    pub fn end_compound(&mut self) {
+        unsafe { ct_value_end_compound(self.handle) };
+    }
+
     /// Recursively encode a value record into CBOR.
     fn encode_recursive(&mut self, value: &ValueRecord) {
         match value {
@@ -382,6 +567,13 @@ impl Drop for StreamingValueEncoder {
         unsafe { ct_value_encoder_free(self.handle) }
     }
 }
+
+// Safety: StreamingValueEncoder wraps a Nim-allocated opaque handle that is
+// never shared across threads. The handle is only accessed through &mut self,
+// so concurrent access is prevented by Rust's borrow checker. As long as each
+// encoder instance is used from a single thread at a time (which &mut self
+// guarantees), sending it to another thread is safe.
+unsafe impl Send for StreamingValueEncoder {}
 
 // ---------------------------------------------------------------------------
 // NimTraceWriter
@@ -520,8 +712,18 @@ impl NimTraceWriter {
     }
 
     pub fn register_call(&mut self, function_id: FunctionId, _args: Vec<FullValueRecord>) {
-        // The Nim library handles args internally via register_variable calls
-        // before the call. We only signal the call itself.
+        // The recorder calls `NimTraceWriter::arg(name, value)` for every
+        // call argument before reaching `register_call`.  `arg()` stages
+        // the (name, CBOR-encoded value) pair on the Nim handle via
+        // `trace_writer_register_call_arg`, so the writer's pending-args
+        // buffer is already populated by the time we get here.
+        // `trace_writer_register_call` consumes that buffer and clears
+        // it for the next call.
+        //
+        // The `_args` Vec parameter is unused: each FullValueRecord in
+        // it carries `VariableId(0)` (the Nim backend manages IDs
+        // internally) and the values are already staged via `arg()`.
+        // We keep the parameter to preserve the abstract trait signature.
         unsafe { trace_writer_register_call(self.handle, function_id.0) }
     }
 
@@ -605,6 +807,59 @@ impl NimTraceWriter {
         }
     }
 
+    /// Register a variable whose value is already encoded as CBOR bytes.
+    ///
+    /// This bypasses the `ValueRecord` tree entirely, passing pre-encoded CBOR
+    /// directly to the Nim backend. Used by recorders that call the streaming
+    /// value encoder C FFI during their object walk (M58+).
+    pub fn register_variable_cbor(&mut self, name: &str, cbor: &[u8]) {
+        let c_name = str_to_cstring(name);
+        unsafe {
+            trace_writer_register_variable_cbor(
+                self.handle,
+                c_name.as_ptr(),
+                cbor.as_ptr(),
+                cbor.len(),
+            )
+        }
+    }
+
+    /// Stage one (name, CBOR-encoded value) argument for the next
+    /// `register_call`.  The Nim writer accumulates these into a pending
+    /// buffer that `register_call` consumes to build the call record's
+    /// `args` field.  Without this, the call record's args stay empty and
+    /// the frontend renders calls as `f()` instead of `f(arg=value)`.
+    ///
+    /// Recorders that already call [`register_variable_cbor`] for each
+    /// argument should call `register_call_arg` *in addition* with the
+    /// same name and CBOR bytes — the variable goes onto the current
+    /// step (for `ct/load-locals`) and the arg goes onto the call record
+    /// (for the calltrace pane).
+    pub fn register_call_arg(&mut self, name: &str, cbor: &[u8]) {
+        let c_name = str_to_cstring(name);
+        unsafe {
+            trace_writer_register_call_arg(
+                self.handle,
+                c_name.as_ptr(),
+                cbor.as_ptr(),
+                cbor.len(),
+            )
+        }
+    }
+
+    /// Register a return value that is already encoded as CBOR bytes.
+    ///
+    /// See [`register_variable_cbor`](Self::register_variable_cbor) for rationale.
+    pub fn register_return_cbor(&mut self, cbor: &[u8]) {
+        unsafe {
+            trace_writer_register_return_cbor(
+                self.handle,
+                cbor.as_ptr(),
+                cbor.len(),
+            )
+        }
+    }
+
     pub fn register_special_event(&mut self, kind: EventLogKind, metadata: &str, content: &str) {
         let c_metadata = str_to_cstring(metadata);
         let c_content = str_to_cstring(content);
@@ -637,8 +892,30 @@ impl NimTraceWriter {
     }
 
     pub fn arg(&mut self, name: &str, value: ValueRecord) -> FullValueRecord {
-        // Register the variable and return a record
+        // Two effects:
+        //   1. The argument is registered as a step variable on the
+        //      *current* step so it appears in `ct/load-locals` for the
+        //      caller.  This matches the historical behaviour of the
+        //      single-stream writer.
+        //   2. The argument is also staged on the writer's pending-args
+        //      buffer so the next `register_call` attaches it to the
+        //      call record.  Without this the call record would have
+        //      empty `args`, and the frontend's calltrace pane would
+        //      render the call as `format_board()` instead of
+        //      `format_board(board=[[5,3,4,...]])`.
         self.register_variable_with_full_value(name, value.clone());
+
+        let cbor = self.streaming_encoder.encode(&value).to_vec();
+        let c_name = str_to_cstring(name);
+        unsafe {
+            trace_writer_register_call_arg(
+                self.handle,
+                c_name.as_ptr(),
+                cbor.as_ptr(),
+                cbor.len(),
+            );
+        }
+
         FullValueRecord {
             variable_id: VariableId(0),
             value,
@@ -791,6 +1068,31 @@ pub trait TraceWriter: Send {
     fn register_raw_type(&mut self, typ: TypeRecord);
     fn register_asm(&mut self, instructions: &[String]);
     fn register_variable_with_full_value(&mut self, name: &str, value: ValueRecord);
+
+    /// Register a variable whose value is already encoded as CBOR bytes.
+    ///
+    /// Writers that support pre-encoded CBOR (e.g. the Nim-backed writer) can
+    /// pass the bytes directly to the backend, avoiding an intermediate
+    /// `ValueRecord` tree allocation. The default implementation is a no-op;
+    /// override in writers that support direct CBOR passthrough.
+    fn register_variable_cbor(&mut self, _name: &str, _cbor: &[u8]) {}
+
+    /// Stage one (name, CBOR-encoded value) argument for the next
+    /// `register_call`.  The Nim-backed writer accumulates these into
+    /// the call record's `args` field; without them the frontend renders
+    /// the call as `f()` instead of `f(name=value)`.  Recorders that
+    /// build call args via `register_variable_cbor` should call this
+    /// for each parameter immediately before `register_call`.
+    ///
+    /// The default implementation is a no-op; override in writers that
+    /// support per-call argument staging.
+    fn register_call_arg(&mut self, _name: &str, _cbor: &[u8]) {}
+
+    /// Register a return value that is already encoded as CBOR bytes.
+    ///
+    /// See [`register_variable_cbor`](Self::register_variable_cbor) for rationale.
+    fn register_return_cbor(&mut self, _cbor: &[u8]) {}
+
     fn register_variable_name(&mut self, variable_name: &str);
     fn register_full_value(&mut self, variable_id: VariableId, value: ValueRecord);
     fn register_compound_value(&mut self, place: Place, value: ValueRecord);
@@ -889,6 +1191,15 @@ impl TraceWriter for NimTraceWriter {
     }
     fn register_variable_with_full_value(&mut self, name: &str, value: ValueRecord) {
         NimTraceWriter::register_variable_with_full_value(self, name, value)
+    }
+    fn register_variable_cbor(&mut self, name: &str, cbor: &[u8]) {
+        NimTraceWriter::register_variable_cbor(self, name, cbor)
+    }
+    fn register_call_arg(&mut self, name: &str, cbor: &[u8]) {
+        NimTraceWriter::register_call_arg(self, name, cbor)
+    }
+    fn register_return_cbor(&mut self, cbor: &[u8]) {
+        NimTraceWriter::register_return_cbor(self, cbor)
     }
     fn register_variable_name(&mut self, variable_name: &str) {
         NimTraceWriter::register_variable_name(self, variable_name)
@@ -1205,6 +1516,150 @@ impl NimTraceReaderHandle {
             return Err(last_error().into());
         }
         Ok(read_nim_buffer(ptr, len))
+    }
+
+    // --- Structured data access (no JSON) ---
+
+    /// Resolve step N to (path_id, line).
+    pub fn step_location(&self, n: u64) -> Result<(u64, u64), Box<dyn Error>> {
+        let mut path_id: u64 = 0;
+        let mut line: u64 = 0;
+        let rc = unsafe {
+            ct_reader_step_location(self.handle, n, &mut path_id, &mut line)
+        };
+        if rc != 0 {
+            Err(last_error().into())
+        } else {
+            Ok((path_id, line))
+        }
+    }
+
+    /// Number of variable values at step N.
+    pub fn step_value_count(&self, n: u64) -> u64 {
+        unsafe { ct_reader_step_value_count(self.handle, n) }
+    }
+
+    /// Get the variable value at (step N, value index).
+    /// Returns (varname_id, type_id, cbor_data).
+    pub fn step_value(&self, n: u64, value_idx: u64) -> Result<(u64, u64, Vec<u8>), Box<dyn Error>> {
+        let mut varname_id: u64 = 0;
+        let mut type_id: u64 = 0;
+        let mut data_ptr: *mut u8 = std::ptr::null_mut();
+        let mut data_len: usize = 0;
+        let rc = unsafe {
+            ct_reader_step_value(
+                self.handle, n, value_idx,
+                &mut varname_id, &mut type_id,
+                &mut data_ptr, &mut data_len,
+            )
+        };
+        if rc != 0 {
+            return Err(last_error().into());
+        }
+        let data = if data_ptr.is_null() || data_len == 0 {
+            Vec::new()
+        } else {
+            let v = unsafe { std::slice::from_raw_parts(data_ptr, data_len) }.to_vec();
+            unsafe { ct_free_buffer(data_ptr) };
+            v
+        };
+        Ok((varname_id, type_id, data))
+    }
+
+    /// Get the scalar fields of a call record.
+    /// Returns (function_id, parent_key, entry_step, exit_step, depth, children_count).
+    pub fn call_fields(&self, key: u64) -> Result<(u64, i64, u64, u64, u32, u64), Box<dyn Error>> {
+        let mut function_id: u64 = 0;
+        let mut parent_key: i64 = 0;
+        let mut entry_step: u64 = 0;
+        let mut exit_step: u64 = 0;
+        let mut depth: u32 = 0;
+        let mut children_count: u64 = 0;
+        let rc = unsafe {
+            ct_reader_call_fields(
+                self.handle, key,
+                &mut function_id, &mut parent_key,
+                &mut entry_step, &mut exit_step,
+                &mut depth, &mut children_count,
+            )
+        };
+        if rc != 0 {
+            Err(last_error().into())
+        } else {
+            Ok((function_id, parent_key, entry_step, exit_step, depth, children_count))
+        }
+    }
+
+    /// Get the call_key of child at index within a call record.
+    pub fn call_child(&self, key: u64, child_idx: u64) -> Result<u64, Box<dyn Error>> {
+        let result = unsafe { ct_reader_call_child(self.handle, key, child_idx) };
+        if result == u64::MAX {
+            Err(last_error().into())
+        } else {
+            Ok(result)
+        }
+    }
+
+    /// Number of arguments captured for the call at ``key``.
+    pub fn call_arg_count(&self, key: u64) -> u64 {
+        unsafe { ct_reader_call_arg_count(self.handle, key) }
+    }
+
+    /// Get the argument at ``arg_idx`` of call ``key`` as
+    /// `(varname_id, cbor_value_bytes)`.  The CBOR bytes use the same
+    /// `serde(tag = "kind")` layout as `step_value`.
+    pub fn call_arg(&self, key: u64, arg_idx: u64) -> Result<(u64, Vec<u8>), Box<dyn Error>> {
+        let mut varname_id: u64 = 0;
+        let mut data_ptr: *mut u8 = std::ptr::null_mut();
+        let mut data_len: usize = 0;
+        let rc = unsafe {
+            ct_reader_call_arg(
+                self.handle,
+                key,
+                arg_idx,
+                &mut varname_id,
+                &mut data_ptr,
+                &mut data_len,
+            )
+        };
+        if rc != 0 {
+            return Err(last_error().into());
+        }
+        let data = if data_ptr.is_null() || data_len == 0 {
+            Vec::new()
+        } else {
+            let v = unsafe { std::slice::from_raw_parts(data_ptr, data_len) }.to_vec();
+            unsafe { ct_free_buffer(data_ptr) };
+            v
+        };
+        Ok((varname_id, data))
+    }
+
+    /// Get the fields of an IO event.
+    /// Returns (kind, step_id, data). kind: 0=stdout, 1=stderr, 2=file_op, 3=error.
+    pub fn event_fields(&self, index: u64) -> Result<(u8, u64, Vec<u8>), Box<dyn Error>> {
+        let mut kind: u8 = 0;
+        let mut step_id: u64 = 0;
+        let mut data_ptr: *mut u8 = std::ptr::null_mut();
+        let mut data_len: usize = 0;
+        let rc = unsafe {
+            ct_reader_event_fields(
+                self.handle, index,
+                &mut kind, &mut step_id,
+                &mut data_ptr, &mut data_len,
+            )
+        };
+        if rc != 0 {
+            return Err(last_error().into());
+        }
+        let data = if data_ptr.is_null() || data_len == 0 {
+            Vec::new()
+        } else {
+            let v = unsafe { std::slice::from_raw_parts(data_ptr, data_len) }.to_vec();
+            unsafe { ct_free_buffer(data_ptr) };
+            v
+        };
+        Ok((kind, step_id, data))
     }
 
     // --- Metadata ---

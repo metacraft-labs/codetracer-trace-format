@@ -162,6 +162,23 @@ extern "C" {
         content: *const std::os::raw::c_char,
     );
 
+    // Thread lifecycle events.  Added so recorders can route
+    // `TraceLowLevelEvent::ThreadStart / ThreadExit / ThreadSwitch` through
+    // dedicated entry points instead of `add_event`, which used to be a silent
+    // no-op on the Nim multi-stream backend (incidents 1.21 / 1.22 / 1.27).
+    fn trace_writer_register_thread_start(
+        handle: *mut std::ffi::c_void,
+        thread_id: u64,
+    );
+    fn trace_writer_register_thread_exit(
+        handle: *mut std::ffi::c_void,
+        thread_id: u64,
+    );
+    fn trace_writer_register_thread_switch(
+        handle: *mut std::ffi::c_void,
+        thread_id: u64,
+    );
+
     // ----- meta.dat -----
 
     fn ct_write_meta_dat(
@@ -553,6 +570,22 @@ pub struct NimTraceWriter {
     /// Reusable streaming value encoder — avoids allocation per value for
     /// compound types (sequences, tuples, dicts) by encoding directly to CBOR.
     streaming_encoder: StreamingValueEncoder,
+    /// PathId -> path string reverse map.
+    ///
+    /// The Nim FFI tracks paths internally (every `register_path` /
+    /// `register_step` call interns the path string), and our `ensure_path_id`
+    /// returns a placeholder `PathId(0)` because the Nim side owns the real ID
+    /// assignment.  However, recorders that route events through `add_event`
+    /// pass `Step(StepRecord{path_id, line})` where `path_id` is a real index
+    /// into the recorder's own paths table.  To dispatch those events cleanly
+    /// we mirror the recorder's path table here, populated by the
+    /// `Path(PathBuf)` events the same recorder emits before any `Step`.
+    path_table: Vec<std::path::PathBuf>,
+    /// Variable index -> name reverse map.  Same rationale as `path_table` —
+    /// `add_event(Value(FullValueRecord{variable_id, ...}))` needs a name
+    /// string to call `register_variable_with_full_value`.  Populated from
+    /// preceding `VariableName(String)` / `Variable(String)` events.
+    variable_table: Vec<String>,
 }
 
 // The Nim library is single-threaded but callers hold exclusive &mut self,
@@ -569,6 +602,8 @@ impl NimTraceWriter {
         NimTraceWriter {
             handle,
             streaming_encoder: StreamingValueEncoder::new(),
+            path_table: Vec::new(),
+            variable_table: Vec::new(),
         }
     }
 
@@ -845,6 +880,25 @@ impl NimTraceWriter {
         }
     }
 
+    /// Register a `ThreadStart` event (a new thread came into existence).
+    ///
+    /// Recorders observing multi-threaded execution should call this rather than
+    /// routing the event through `TraceWriter::add_event`, which used to be a
+    /// silent no-op on this backend (incidents 1.21 / 1.22 / 1.27).
+    pub fn register_thread_start(&mut self, thread_id: u64) {
+        unsafe { trace_writer_register_thread_start(self.handle, thread_id) }
+    }
+
+    /// Register a `ThreadExit` event (a thread terminated).
+    pub fn register_thread_exit(&mut self, thread_id: u64) {
+        unsafe { trace_writer_register_thread_exit(self.handle, thread_id) }
+    }
+
+    /// Register a `ThreadSwitch` event (the active thread changed).
+    pub fn register_thread_switch(&mut self, thread_id: u64) {
+        unsafe { trace_writer_register_thread_switch(self.handle, thread_id) }
+    }
+
     // --- Methods that are no-ops in the Nim backend ---
 
     pub fn ensure_path_id(&mut self, _path: &Path) -> PathId {
@@ -973,16 +1027,177 @@ impl NimTraceWriter {
         // Not exposed in the Nim C API — no-op
     }
 
-    pub fn add_event(&mut self, _event: TraceLowLevelEvent) {
-        // The Nim library does not expose low-level event buffering
+    /// Dispatch a [`TraceLowLevelEvent`] to the correct `register_*` entry point.
+    ///
+    /// Historically this method was a silent no-op on the Nim multi-stream
+    /// backend, which caused recorders that built up traces through
+    /// `TraceWriter::add_event(...)` to lose every event they produced.  Three
+    /// separate incidents traced data loss to this footgun (see comments on
+    /// `register_thread_*` and the migration log).  Each variant of
+    /// `TraceLowLevelEvent` now has a real dispatch path so no events are
+    /// dropped silently.
+    ///
+    /// Variants whose payload is reduced (e.g. `Step(StepRecord{path_id, ...})`
+    /// vs `register_step(&Path, Line)`) rely on `path_table` / `variable_table`
+    /// being populated by the corresponding `Path` / `VariableName` events the
+    /// same recorder is expected to emit in causal order.  When the lookup
+    /// cannot be resolved (e.g. an out-of-range `PathId`) we still call the
+    /// underlying entry point with a stringified placeholder rather than
+    /// dropping the event — preserving the invariant that every `add_event`
+    /// call leaves a trace footprint.
+    pub fn add_event(&mut self, event: TraceLowLevelEvent) {
+        match event {
+            TraceLowLevelEvent::Path(path) => {
+                // Mirror the path into our reverse table (PathIds are assigned
+                // sequentially in emission order) and propagate to the Nim
+                // backend so the path is interned in its registry too.
+                self.path_table.push(path.clone());
+                self.register_path(&path);
+            }
+            TraceLowLevelEvent::VariableName(name) => {
+                self.variable_table.push(name.clone());
+                self.register_variable_name(&name);
+            }
+            TraceLowLevelEvent::Variable(name) => {
+                // Legacy alias for VariableName — keep both tables in sync.
+                self.variable_table.push(name.clone());
+                self.register_variable_name(&name);
+            }
+            TraceLowLevelEvent::Step(StepRecord { path_id, line }) => {
+                let path: std::path::PathBuf = self
+                    .path_table
+                    .get(path_id.0)
+                    .cloned()
+                    .unwrap_or_else(|| std::path::PathBuf::from(format!("<path_{}>", path_id.0)));
+                self.register_step(&path, line);
+            }
+            TraceLowLevelEvent::Type(type_record) => {
+                self.register_raw_type(type_record);
+            }
+            TraceLowLevelEvent::Function(rec) => {
+                let path: std::path::PathBuf = self
+                    .path_table
+                    .get(rec.path_id.0)
+                    .cloned()
+                    .unwrap_or_else(|| std::path::PathBuf::from(format!("<path_{}>", rec.path_id.0)));
+                self.register_function(&rec.name, &path, rec.line);
+            }
+            TraceLowLevelEvent::Call(rec) => {
+                // Stage the call args via `register_call_arg` so the Nim
+                // multi-stream writer attaches them to the call record (mirrors
+                // what `arg()` does for the streaming-style API).
+                for full in &rec.args {
+                    let cbor = self.streaming_encoder.encode(&full.value).to_vec();
+                    let name = self
+                        .variable_table
+                        .get(full.variable_id.0)
+                        .cloned()
+                        .unwrap_or_else(|| format!("var_{}", full.variable_id.0));
+                    self.register_call_arg(&name, &cbor);
+                }
+                self.register_call(rec.function_id, rec.args);
+            }
+            TraceLowLevelEvent::Return(rec) => {
+                self.register_return(rec.return_value);
+            }
+            TraceLowLevelEvent::Event(rec) => {
+                self.register_special_event(rec.kind, &rec.metadata, &rec.content);
+            }
+            TraceLowLevelEvent::Asm(instructions) => {
+                self.register_asm(&instructions);
+            }
+            TraceLowLevelEvent::Value(full) => {
+                let name = self
+                    .variable_table
+                    .get(full.variable_id.0)
+                    .cloned()
+                    .unwrap_or_else(|| format!("var_{}", full.variable_id.0));
+                self.register_variable_with_full_value(&name, full.value);
+            }
+            TraceLowLevelEvent::BindVariable(rec) => {
+                let name = self
+                    .variable_table
+                    .get(rec.variable_id.0)
+                    .cloned()
+                    .unwrap_or_else(|| format!("var_{}", rec.variable_id.0));
+                self.bind_variable(&name, rec.place);
+            }
+            TraceLowLevelEvent::Assignment(rec) => {
+                let name = self
+                    .variable_table
+                    .get(rec.to.0)
+                    .cloned()
+                    .unwrap_or_else(|| format!("var_{}", rec.to.0));
+                self.assign(&name, rec.from, rec.pass_by);
+            }
+            TraceLowLevelEvent::DropVariables(ids) => {
+                let names: Vec<String> = ids
+                    .into_iter()
+                    .map(|id| {
+                        self.variable_table
+                            .get(id.0)
+                            .cloned()
+                            .unwrap_or_else(|| format!("var_{}", id.0))
+                    })
+                    .collect();
+                self.drop_variables(&names);
+            }
+            TraceLowLevelEvent::CompoundValue(rec) => {
+                self.register_compound_value(rec.place, rec.value);
+            }
+            TraceLowLevelEvent::CellValue(rec) => {
+                self.register_cell_value(rec.place, rec.value);
+            }
+            TraceLowLevelEvent::AssignCompoundItem(rec) => {
+                self.assign_compound_item(rec.place, rec.index, rec.item_place);
+            }
+            TraceLowLevelEvent::AssignCell(rec) => {
+                self.assign_cell(rec.place, rec.new_value);
+            }
+            TraceLowLevelEvent::VariableCell(rec) => {
+                let name = self
+                    .variable_table
+                    .get(rec.variable_id.0)
+                    .cloned()
+                    .unwrap_or_else(|| format!("var_{}", rec.variable_id.0));
+                self.register_variable(&name, rec.place);
+            }
+            TraceLowLevelEvent::DropVariable(id) => {
+                let name = self
+                    .variable_table
+                    .get(id.0)
+                    .cloned()
+                    .unwrap_or_else(|| format!("var_{}", id.0));
+                self.drop_variable(&name);
+            }
+            TraceLowLevelEvent::ThreadStart(tid) => {
+                self.register_thread_start(tid.0);
+            }
+            TraceLowLevelEvent::ThreadExit(tid) => {
+                self.register_thread_exit(tid.0);
+            }
+            TraceLowLevelEvent::ThreadSwitch(tid) => {
+                self.register_thread_switch(tid.0);
+            }
+            TraceLowLevelEvent::DropLastStep => {
+                self.drop_last_step();
+            }
+        }
     }
 
-    pub fn append_events(&mut self, _events: &mut Vec<TraceLowLevelEvent>) {
-        // The Nim library does not expose low-level event buffering
+    /// Drain `events` into `add_event` one by one, dispatching every variant
+    /// to its real `register_*` entry point.  The vector is cleared as a side
+    /// effect so callers can reuse it as a scratch buffer.
+    pub fn append_events(&mut self, events: &mut Vec<TraceLowLevelEvent>) {
+        for event in events.drain(..) {
+            self.add_event(event);
+        }
     }
 
+    /// Returns an empty slice — the Nim writer streams events directly to
+    /// disk and does not retain an in-memory log.  Consumers that need
+    /// buffered events should use [`non_streaming_trace_writer::NonStreamingTraceWriter`].
     pub fn events(&self) -> &[TraceLowLevelEvent] {
-        // Nim writer streams to disk; no in-memory buffer
         &[]
     }
 }
@@ -1037,6 +1252,25 @@ pub trait TraceWriter: Send {
     fn arg(&mut self, name: &str, value: ValueRecord) -> FullValueRecord;
     fn register_return(&mut self, return_value: ValueRecord);
     fn register_special_event(&mut self, kind: EventLogKind, metadata: &str, content: &str);
+
+    /// Register a `ThreadStart` event.  Default implementation delegates to
+    /// [`add_event`](Self::add_event) so existing implementations (notably the
+    /// in-memory test double) continue to capture the event with no extra
+    /// boilerplate.  Backends with native thread-event support — like
+    /// [`NimTraceWriter`] — override this to use the dedicated entry point.
+    fn register_thread_start(&mut self, thread_id: u64) {
+        self.add_event(TraceLowLevelEvent::ThreadStart(ThreadId(thread_id)));
+    }
+
+    /// Register a `ThreadExit` event.  See [`register_thread_start`].
+    fn register_thread_exit(&mut self, thread_id: u64) {
+        self.add_event(TraceLowLevelEvent::ThreadExit(ThreadId(thread_id)));
+    }
+
+    /// Register a `ThreadSwitch` event.  See [`register_thread_start`].
+    fn register_thread_switch(&mut self, thread_id: u64) {
+        self.add_event(TraceLowLevelEvent::ThreadSwitch(ThreadId(thread_id)));
+    }
 
     fn to_raw_type(&self, kind: TypeKind, lang_type: &str) -> TypeRecord;
     fn register_type(&mut self, kind: TypeKind, lang_type: &str);
@@ -1163,6 +1397,15 @@ impl TraceWriter for NimTraceWriter {
     }
     fn register_special_event(&mut self, kind: EventLogKind, metadata: &str, content: &str) {
         NimTraceWriter::register_special_event(self, kind, metadata, content)
+    }
+    fn register_thread_start(&mut self, thread_id: u64) {
+        NimTraceWriter::register_thread_start(self, thread_id)
+    }
+    fn register_thread_exit(&mut self, thread_id: u64) {
+        NimTraceWriter::register_thread_exit(self, thread_id)
+    }
+    fn register_thread_switch(&mut self, thread_id: u64) {
+        NimTraceWriter::register_thread_switch(self, thread_id)
     }
     fn to_raw_type(&self, kind: TypeKind, lang_type: &str) -> TypeRecord {
         NimTraceWriter::to_raw_type(self, kind, lang_type)

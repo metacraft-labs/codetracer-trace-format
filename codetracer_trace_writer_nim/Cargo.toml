@@ -9,3 +9,7 @@ codetracer_trace_types = { path = "../codetracer_trace_types" }
 
 [build-dependencies]
 # None needed — we use manual linking via build.rs
+
+[dev-dependencies]
+serde_json = "1.0"
+tempfile = "3"

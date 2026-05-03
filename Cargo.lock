@@ -318,6 +318,8 @@ name = "codetracer_trace_writer_nim"
 version = "0.1.0"
 dependencies = [
  "codetracer_trace_types",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

@@ -284,6 +284,87 @@ fn last_error() -> String {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::{Path, PathBuf};
+
+    fn write_trace_with_staged_call_args(dir: &Path) -> PathBuf {
+        let mut writer = create_trace_writer("ctfs_arg_roundtrip", &[], TraceEventsFileFormat::Ctfs);
+        let events_path = dir.join("trace.json");
+        let metadata_path = dir.join("trace_metadata.json");
+        let paths_path = dir.join("trace_paths.json");
+
+        writer.begin_writing_trace_events(&events_path).unwrap();
+        writer.begin_writing_trace_metadata(&metadata_path).unwrap();
+        writer.begin_writing_trace_paths(&paths_path).unwrap();
+
+        let source_path = Path::new("/tmp/ctfs_arg_roundtrip.rs");
+        writer.start(source_path, Line(1));
+        writer.register_step(source_path, Line(2));
+
+        writer.ensure_function_id("compute", source_path, Line(2));
+        let function_id = writer.ensure_function_id("add", source_path, Line(3));
+        let int_type_id = writer.ensure_type_id(TypeKind::Int, "uint256");
+        writer.arg("x", ValueRecord::Raw { r: "0xa".to_string(), type_id: int_type_id });
+        writer.arg("y", ValueRecord::Raw { r: "0x14".to_string(), type_id: int_type_id });
+        writer.register_call(function_id, vec![]);
+        writer.register_return(NONE_VALUE);
+        writer.register_return(NONE_VALUE);
+
+        writer.finish_writing_trace_events().unwrap();
+        writer.finish_writing_trace_metadata().unwrap();
+        writer.finish_writing_trace_paths().unwrap();
+        writer.close().unwrap();
+
+        dir.join("ctfs_arg_roundtrip.ct")
+    }
+
+    #[test]
+    fn nim_writer_arg_before_register_call_roundtrips_call_args() {
+        let dir = tempfile::tempdir().unwrap();
+        let trace_path = write_trace_with_staged_call_args(dir.path());
+
+        let reader = NimTraceReaderHandle::open(trace_path.to_str().unwrap()).unwrap();
+        let function_names = (0..reader.function_count())
+            .map(|id| reader.function(id).unwrap_or_else(|err| format!("<error:{err}>")))
+            .collect::<Vec<_>>();
+        let mut call_jsons = Vec::new();
+        let mut add_call_key = None;
+        for key in 0..reader.call_count() {
+            let raw = reader.call_json(key).unwrap();
+            let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
+            call_jsons.push(raw);
+            let function_id = parsed["function_id"]
+                .as_u64()
+                .or_else(|| parsed["functionId"].as_u64())
+                .unwrap_or(u64::MAX);
+            if reader.function(function_id).is_ok_and(|function_name| function_name == "add") {
+                add_call_key = Some(key);
+                break;
+            }
+        }
+
+        let add_call_key = add_call_key.unwrap_or_else(|| {
+            panic!("expected an `add` call record; functions={function_names:?}; calls={call_jsons:?}")
+        });
+        let raw = reader.call_json(add_call_key).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
+        let args = parsed["args"]
+            .as_array()
+            .expect("call_json should expose args as an array");
+        assert_eq!(args.len(), 2, "call_json should include staged x/y args: {raw}");
+
+        assert_eq!(reader.call_arg_count(add_call_key), 2);
+        let (x_varname_id, x_value) = reader.call_arg(add_call_key, 0).unwrap();
+        let (y_varname_id, y_value) = reader.call_arg(add_call_key, 1).unwrap();
+        assert_eq!(reader.varname(x_varname_id).unwrap(), "x");
+        assert_eq!(reader.varname(y_varname_id).unwrap(), "y");
+        assert!(!x_value.is_empty(), "x arg should carry encoded value bytes");
+        assert!(!y_value.is_empty(), "y arg should carry encoded value bytes");
+    }
+}
+
 fn check_result(code: i32) -> Result<(), Box<dyn Error>> {
     if code == 0 {
         Ok(())

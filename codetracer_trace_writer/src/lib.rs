@@ -47,9 +47,9 @@ pub fn create_trace_writer(program: &str, args: &[String], format: TraceEventsFi
 
 #[cfg(test)]
 mod tests {
+    use crate::{non_streaming_trace_writer::NonStreamingTraceWriter, trace_writer::TraceWriter};
     use codetracer_trace_types::*;
     use std::path::Path;
-    use crate::{non_streaming_trace_writer::NonStreamingTraceWriter, trace_writer::TraceWriter};
 
     #[test]
     fn test_simple_trace() {

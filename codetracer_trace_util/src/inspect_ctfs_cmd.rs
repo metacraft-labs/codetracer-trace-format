@@ -58,19 +58,12 @@ pub(crate) fn run(cmd: InspectCtfsCommand) {
     let mut total_data_blocks = 0u64;
     let mut total_mapping_blocks = 0u64;
 
-    println!(
-        "  {:20} {:>10} {:>8} {:>10} {:>15}",
-        "Name", "Size", "Blocks", "Allocated", "Waste"
-    );
+    println!("  {:20} {:>10} {:>8} {:>10} {:>15}", "Name", "Size", "Blocks", "Allocated", "Waste");
     println!("  {}", "\u{2500}".repeat(70));
 
     for name in &files {
         let size = reader.file_size(name).unwrap_or(0);
-        let data_blocks = if size == 0 {
-            0
-        } else {
-            (size + block_size - 1) / block_size
-        };
+        let data_blocks = if size == 0 { 0 } else { (size + block_size - 1) / block_size };
 
         // Each file has at least one mapping block (the root mapping block).
         // For multi-level mappings there could be more, but for a simple
@@ -90,11 +83,7 @@ pub(crate) fn run(cmd: InspectCtfsCommand) {
 
         let allocated = (data_blocks + mapping_blocks) * block_size;
         let waste = allocated.saturating_sub(size);
-        let waste_pct = if allocated > 0 {
-            waste as f64 / allocated as f64 * 100.0
-        } else {
-            0.0
-        };
+        let waste_pct = if allocated > 0 { waste as f64 / allocated as f64 * 100.0 } else { 0.0 };
 
         println!(
             "  {:20} {:>10} {:>8} {:>10} {:>10} ({:.1}%)",
@@ -111,10 +100,7 @@ pub(crate) fn run(cmd: InspectCtfsCommand) {
         total_mapping_blocks += mapping_blocks;
 
         if cmd.blocks {
-            println!(
-                "  {:20} data blocks: {}, mapping blocks: {}",
-                "", data_blocks, mapping_blocks
-            );
+            println!("  {:20} data blocks: {}, mapping blocks: {}", "", data_blocks, mapping_blocks);
         }
     }
 
@@ -139,15 +125,14 @@ pub(crate) fn run(cmd: InspectCtfsCommand) {
         total_mapping_blocks,
         root_blocks
     );
-    println!(
-        "    Overhead:       {} ({:.1}%)",
-        format_size(overhead),
-        overhead_pct
-    );
+    println!("    Overhead:       {} ({:.1}%)", format_size(overhead), overhead_pct);
 
     if total_data < 1_048_576 {
         println!();
-        println!("  Note: Overhead is high for small traces due to {}KB block alignment.", block_size / 1024);
+        println!(
+            "  Note: Overhead is high for small traces due to {}KB block alignment.",
+            block_size / 1024
+        );
         println!("  For traces > 1MB, overhead is typically < 2%.");
     }
 

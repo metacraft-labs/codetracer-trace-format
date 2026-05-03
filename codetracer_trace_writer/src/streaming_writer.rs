@@ -79,10 +79,7 @@ impl<'a> StreamingTraceWriter<'a> {
     }
 
     /// Write a single event, tracking its decompressed byte offset.
-    pub fn write_event(
-        &mut self,
-        event: &TraceLowLevelEvent,
-    ) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn write_event(&mut self, event: &TraceLowLevelEvent) -> Result<(), Box<dyn std::error::Error>> {
         let buf: Vec<u8> = Vec::new();
         let serialized = cbor4ii::serde::to_vec(buf, event)?;
 

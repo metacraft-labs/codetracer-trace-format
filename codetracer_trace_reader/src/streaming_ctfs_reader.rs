@@ -103,9 +103,7 @@ impl StreamingCtfsReader {
     ///
     /// Returns an empty vec if no new complete Zstd frames are available yet.
     /// Handles partial frames and partial CBOR events gracefully.
-    pub fn poll_new_events(
-        &mut self,
-    ) -> Result<Vec<TraceLowLevelEvent>, Box<dyn std::error::Error>> {
+    pub fn poll_new_events(&mut self) -> Result<Vec<TraceLowLevelEvent>, Box<dyn std::error::Error>> {
         let ctfs = ConcurrentCtfsReader::open(&self.path)?;
 
         let current_size = match ctfs.file_size("events.log") {

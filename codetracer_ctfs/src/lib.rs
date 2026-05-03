@@ -17,10 +17,7 @@ pub use block_alloc::AtomicBlockAllocator;
 pub use chunked::{ChunkedReader, ChunkedWriter};
 pub use concurrent_reader::ConcurrentCtfsReader;
 pub use concurrent_writer::{ConcurrentCtfsWriter, FileWriter};
-pub use header::{
-    ChunkIndexEntry, CompressionMethod, EncryptionMethod,
-    CHUNK_INDEX_ENTRY_SIZE, DEFAULT_CHUNK_SIZE,
-};
+pub use header::{ChunkIndexEntry, CompressionMethod, EncryptionMethod, CHUNK_INDEX_ENTRY_SIZE, DEFAULT_CHUNK_SIZE};
 pub use reader::CtfsReader;
 pub use writer::{CtfsWriter, FileHandle};
 
@@ -189,9 +186,7 @@ mod tests {
             while written < file_size {
                 let remaining = file_size - written;
                 let this_chunk = remaining.min(chunk_size);
-                let data: Vec<u8> = (0..this_chunk)
-                    .map(|i| ((written + i) % 251) as u8)
-                    .collect();
+                let data: Vec<u8> = (0..this_chunk).map(|i| ((written + i) % 251) as u8).collect();
                 w.write(h, &data).unwrap();
                 written += this_chunk;
             }
@@ -290,9 +285,7 @@ mod tests {
             let mut w = CtfsWriter::open_append(&path).unwrap();
             let h = w.find_file("append.dat").unwrap();
             let offset = round * append_size;
-            let data: Vec<u8> = (0..append_size)
-                .map(|i| ((offset + i) % 251) as u8)
-                .collect();
+            let data: Vec<u8> = (0..append_size).map(|i| ((offset + i) % 251) as u8).collect();
             w.append(h, &data).unwrap();
             w.close().unwrap();
         }
@@ -368,9 +361,7 @@ mod tests {
                 let mut total_written = 0usize;
 
                 while start.elapsed() < duration {
-                    let data: Vec<u8> = (0..chunk_size)
-                        .map(|j| ((total_written + j) % 251) as u8)
-                        .collect();
+                    let data: Vec<u8> = (0..chunk_size).map(|j| ((total_written + j) % 251) as u8).collect();
                     fw.write(&writer_ref, &data).unwrap();
                     total_written += chunk_size;
                 }
@@ -399,13 +390,7 @@ mod tests {
 
             // Verify pattern
             for j in 0..data.len() {
-                assert_eq!(
-                    data[j],
-                    (j % 251) as u8,
-                    "corruption in file {} at byte {}",
-                    name,
-                    j
-                );
+                assert_eq!(data[j], (j % 251) as u8, "corruption in file {} at byte {}", name, j);
             }
         }
     }
@@ -450,12 +435,7 @@ mod tests {
                         let n = reader.read_at("stream.dat", 0, &mut buf).unwrap();
                         if n == 4096 {
                             for j in 0..4096 {
-                                assert_eq!(
-                                    buf[j],
-                                    (j % 251) as u8,
-                                    "reader saw corruption at byte {}",
-                                    j
-                                );
+                                assert_eq!(buf[j], (j % 251) as u8, "reader saw corruption at byte {}", j);
                             }
                         }
                         reads_done += 1;
@@ -473,9 +453,7 @@ mod tests {
         let mut total_written = initial_data.len();
 
         while start.elapsed() < duration {
-            let chunk: Vec<u8> = (0..4096)
-                .map(|j| ((total_written + j) % 251) as u8)
-                .collect();
+            let chunk: Vec<u8> = (0..4096).map(|j| ((total_written + j) % 251) as u8).collect();
             fw.write(&writer, &chunk).unwrap();
             total_written += 4096;
 
@@ -553,11 +531,7 @@ mod tests {
             let name = format!("f{:011}", i);
             let data = reader.read_file(&name).unwrap();
             assert_eq!(data.len(), 1024, "file {} has wrong size", name);
-            assert!(
-                data.iter().all(|&b| b == i as u8),
-                "file {} has wrong data",
-                name
-            );
+            assert!(data.iter().all(|&b| b == i as u8), "file {} has wrong data", name);
         }
     }
 
@@ -567,10 +541,7 @@ mod tests {
         let path = tmp.path().to_path_buf();
 
         {
-            let w = CtfsWriter::create_with_compression(
-                &path, 4096, 31,
-                crate::header::CompressionMethod::Zstd,
-            ).unwrap();
+            let w = CtfsWriter::create_with_compression(&path, 4096, 31, crate::header::CompressionMethod::Zstd).unwrap();
             w.close().unwrap();
         }
 
@@ -618,12 +589,8 @@ mod tests {
 
         // Write chunked file into CTFS container
         {
-            let mut w = CtfsWriter::create_with_compression(
-                &path, 4096, 31,
-                crate::header::CompressionMethod::Zstd,
-            ).unwrap();
-            w.add_file_chunked("events.bin", &events, &event_sizes, &first_geids, chunk_size)
-                .unwrap();
+            let mut w = CtfsWriter::create_with_compression(&path, 4096, 31, crate::header::CompressionMethod::Zstd).unwrap();
+            w.add_file_chunked("events.bin", &events, &event_sizes, &first_geids, chunk_size).unwrap();
             w.close().unwrap();
         }
 
@@ -658,12 +625,8 @@ mod tests {
         }
 
         {
-            let mut w = CtfsWriter::create_with_compression(
-                &path, 4096, 31,
-                crate::header::CompressionMethod::Zstd,
-            ).unwrap();
-            w.add_file_chunked("events.bin", &events, &event_sizes, &first_geids, chunk_size)
-                .unwrap();
+            let mut w = CtfsWriter::create_with_compression(&path, 4096, 31, crate::header::CompressionMethod::Zstd).unwrap();
+            w.add_file_chunked("events.bin", &events, &event_sizes, &first_geids, chunk_size).unwrap();
             w.close().unwrap();
         }
 
@@ -763,9 +726,7 @@ mod tests {
                 let mut total_written = 4096usize; // account for initial write
 
                 while start.elapsed() < duration && !done_ref.load(Ordering::Relaxed) {
-                    let chunk: Vec<u8> = (0..1024)
-                        .map(|j| ((total_written + j) % 251) as u8)
-                        .collect();
+                    let chunk: Vec<u8> = (0..1024).map(|j| ((total_written + j) % 251) as u8).collect();
                     fw.write(&writer_ref, &chunk).unwrap();
                     total_written += 1024;
 

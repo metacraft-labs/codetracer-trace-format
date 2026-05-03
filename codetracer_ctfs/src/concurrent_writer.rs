@@ -102,12 +102,7 @@ impl ConcurrentCtfsWriter {
     pub fn create(path: &Path, block_size: u32, max_root_entries: u32) -> Result<Arc<Self>, CtfsError> {
         let _ext_header = ExtendedHeader::new(block_size, max_root_entries)?;
 
-        let file = OpenOptions::new()
-            .read(true)
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(path)?;
+        let file = OpenOptions::new().read(true).write(true).create(true).truncate(true).open(path)?;
 
         let entries_offset = (HEADER_SIZE + EXTENDED_HEADER_SIZE) as u64;
 
@@ -310,12 +305,7 @@ impl FileWriter {
         bs: u32,
     ) -> Result<(), CtfsError> {
         if level == 1 {
-            debug_assert!(
-                idx_within_level < usable,
-                "idx {} >= usable {} at level 1",
-                idx_within_level,
-                usable
-            );
+            debug_assert!(idx_within_level < usable, "idx {} >= usable {} at level 1", idx_within_level, usable);
             write_ptr_at(&parent.file, mapping_block, idx_within_level as usize, data_block, bs)?;
             return Ok(());
         }
@@ -324,13 +314,7 @@ impl FileWriter {
         let entry_idx = idx_within_level / sub_cap;
         let sub_idx = idx_within_level % sub_cap;
 
-        debug_assert!(
-            entry_idx < usable,
-            "entry_idx {} >= usable {} at level {}",
-            entry_idx,
-            usable,
-            level
-        );
+        debug_assert!(entry_idx < usable, "entry_idx {} >= usable {} at level {}", entry_idx, usable, level);
 
         let child_block = read_ptr_at(&parent.file, mapping_block, entry_idx as usize, bs)?;
         let target_block = if child_block == 0 {

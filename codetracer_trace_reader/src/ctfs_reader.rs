@@ -44,9 +44,7 @@ fn deserialize_cbor(data: &[u8]) -> Result<Vec<TraceLowLevelEvent>, Box<dyn std:
 /// Supports both legacy CBOR+Zstd (zeekstd) encoding and the newer
 /// split-binary+chunked-Zstd encoding. The format is detected automatically
 /// from the `events.fmt` marker file.
-pub fn read_trace_from_ctfs(
-    path: &std::path::Path,
-) -> Result<Vec<TraceLowLevelEvent>, Box<dyn std::error::Error>> {
+pub fn read_trace_from_ctfs(path: &std::path::Path) -> Result<Vec<TraceLowLevelEvent>, Box<dyn std::error::Error>> {
     let mut reader = CtfsReader::open(path)?;
     let format = detect_format(&mut reader);
     let events_data = reader.read_file("events.log")?;
@@ -63,9 +61,7 @@ pub fn read_trace_from_ctfs(
         EventSerializationFormat::SplitBinary => {
             // SplitBinary uses chunked Zstd -- decompress all chunks then decode.
             let decompressed = ChunkedReader::decompress_all(data)?;
-            Ok(codetracer_trace_writer::split_binary::decode_events(
-                &decompressed,
-            ))
+            Ok(codetracer_trace_writer::split_binary::decode_events(&decompressed))
         }
         EventSerializationFormat::Cbor => {
             // Try chunked format first (for future CBOR+chunked combinations),
@@ -82,9 +78,7 @@ pub fn read_trace_from_ctfs(
 
                 let mut result: Vec<TraceLowLevelEvent> = Vec::new();
                 while !is_at_eof(&mut buf_reader)? {
-                    let obj = cbor4ii::serde::from_reader::<TraceLowLevelEvent, _>(
-                        &mut buf_reader,
-                    )?;
+                    let obj = cbor4ii::serde::from_reader::<TraceLowLevelEvent, _>(&mut buf_reader)?;
                     result.push(obj);
                 }
                 Ok(result)
@@ -99,11 +93,7 @@ pub fn read_trace_from_ctfs(
 /// `count` events starting from that position. Only supported for
 /// SplitBinary format with chunked Zstd; for CBOR, falls back to
 /// decompressing the entire target chunk.
-pub fn seek_events_in_ctfs(
-    path: &std::path::Path,
-    target_event: usize,
-    count: usize,
-) -> Result<Vec<TraceLowLevelEvent>, Box<dyn std::error::Error>> {
+pub fn seek_events_in_ctfs(path: &std::path::Path, target_event: usize, count: usize) -> Result<Vec<TraceLowLevelEvent>, Box<dyn std::error::Error>> {
     let mut reader = CtfsReader::open(path)?;
     let format = detect_format(&mut reader);
     let events_data = reader.read_file("events.log")?;
@@ -122,8 +112,7 @@ pub fn seek_events_in_ctfs(
         EventSerializationFormat::SplitBinary => {
             // Lazy scanning within the chunk -- build offset index then decode
             // only the requested range.
-            let offsets =
-                codetracer_trace_writer::split_binary::scan_event_offsets(&chunk_data);
+            let offsets = codetracer_trace_writer::split_binary::scan_event_offsets(&chunk_data);
             let end = (offset_in_chunk + count).min(offsets.len());
             let mut events = Vec::with_capacity(end - offset_in_chunk);
             for i in offset_in_chunk..end {
@@ -134,9 +123,7 @@ pub fn seek_events_in_ctfs(
                     chunk_data.len()
                 };
                 let mut cursor = Cursor::new(&chunk_data[start..event_end]);
-                events.push(
-                    codetracer_trace_writer::split_binary::decode_event(&mut cursor)?,
-                );
+                events.push(codetracer_trace_writer::split_binary::decode_event(&mut cursor)?);
             }
             Ok(events)
         }

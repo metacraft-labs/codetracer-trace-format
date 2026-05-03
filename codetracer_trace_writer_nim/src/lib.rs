@@ -19,41 +19,20 @@ extern "C" {
 
     fn trace_writer_last_error() -> *const std::os::raw::c_char;
 
-    fn trace_writer_new(program: *const std::os::raw::c_char, format: i32)
-        -> *mut std::ffi::c_void;
+    fn trace_writer_new(program: *const std::os::raw::c_char, format: i32) -> *mut std::ffi::c_void;
     fn trace_writer_free(handle: *mut std::ffi::c_void);
     fn trace_writer_close(handle: *mut std::ffi::c_void) -> i32;
 
-    fn trace_writer_begin_metadata(
-        handle: *mut std::ffi::c_void,
-        path: *const std::os::raw::c_char,
-    ) -> i32;
+    fn trace_writer_begin_metadata(handle: *mut std::ffi::c_void, path: *const std::os::raw::c_char) -> i32;
     fn trace_writer_finish_metadata(handle: *mut std::ffi::c_void) -> i32;
-    fn trace_writer_begin_events(
-        handle: *mut std::ffi::c_void,
-        path: *const std::os::raw::c_char,
-    ) -> i32;
+    fn trace_writer_begin_events(handle: *mut std::ffi::c_void, path: *const std::os::raw::c_char) -> i32;
     fn trace_writer_finish_events(handle: *mut std::ffi::c_void) -> i32;
-    fn trace_writer_begin_paths(
-        handle: *mut std::ffi::c_void,
-        path: *const std::os::raw::c_char,
-    ) -> i32;
+    fn trace_writer_begin_paths(handle: *mut std::ffi::c_void, path: *const std::os::raw::c_char) -> i32;
     fn trace_writer_finish_paths(handle: *mut std::ffi::c_void) -> i32;
 
-    fn trace_writer_start(
-        handle: *mut std::ffi::c_void,
-        path: *const std::os::raw::c_char,
-        line: i64,
-    );
-    fn trace_writer_set_workdir(
-        handle: *mut std::ffi::c_void,
-        workdir: *const std::os::raw::c_char,
-    );
-    fn trace_writer_register_step(
-        handle: *mut std::ffi::c_void,
-        path: *const std::os::raw::c_char,
-        line: i64,
-    );
+    fn trace_writer_start(handle: *mut std::ffi::c_void, path: *const std::os::raw::c_char, line: i64);
+    fn trace_writer_set_workdir(handle: *mut std::ffi::c_void, workdir: *const std::os::raw::c_char);
+    fn trace_writer_register_step(handle: *mut std::ffi::c_void, path: *const std::os::raw::c_char, line: i64);
 
     fn trace_writer_ensure_function_id(
         handle: *mut std::ffi::c_void,
@@ -62,29 +41,15 @@ extern "C" {
         line: i64,
     ) -> usize;
 
-    fn trace_writer_ensure_type_id(
-        handle: *mut std::ffi::c_void,
-        kind: i32,
-        lang_type: *const std::os::raw::c_char,
-    ) -> usize;
+    fn trace_writer_ensure_type_id(handle: *mut std::ffi::c_void, kind: i32, lang_type: *const std::os::raw::c_char) -> usize;
 
     fn trace_writer_register_call(handle: *mut std::ffi::c_void, function_id: usize);
     /// Stage one (name, CBOR-encoded value) argument for the next
     /// `trace_writer_register_call`.
-    fn trace_writer_register_call_arg(
-        handle: *mut std::ffi::c_void,
-        name: *const std::os::raw::c_char,
-        cbor_data: *const u8,
-        cbor_len: usize,
-    );
+    fn trace_writer_register_call_arg(handle: *mut std::ffi::c_void, name: *const std::os::raw::c_char, cbor_data: *const u8, cbor_len: usize);
     fn trace_writer_register_return(handle: *mut std::ffi::c_void);
 
-    fn trace_writer_register_return_int(
-        handle: *mut std::ffi::c_void,
-        value: i64,
-        type_kind: i32,
-        type_name: *const std::os::raw::c_char,
-    );
+    fn trace_writer_register_return_int(handle: *mut std::ffi::c_void, value: i64, type_kind: i32, type_name: *const std::os::raw::c_char);
     fn trace_writer_register_return_raw(
         handle: *mut std::ffi::c_void,
         value_repr: *const std::os::raw::c_char,
@@ -107,18 +72,9 @@ extern "C" {
         type_name: *const std::os::raw::c_char,
     );
 
-    fn trace_writer_register_variable_cbor(
-        handle: *mut std::ffi::c_void,
-        name: *const std::os::raw::c_char,
-        cbor_data: *const u8,
-        cbor_len: usize,
-    );
+    fn trace_writer_register_variable_cbor(handle: *mut std::ffi::c_void, name: *const std::os::raw::c_char, cbor_data: *const u8, cbor_len: usize);
 
-    fn trace_writer_register_return_cbor(
-        handle: *mut std::ffi::c_void,
-        cbor_data: *const u8,
-        cbor_len: usize,
-    );
+    fn trace_writer_register_return_cbor(handle: *mut std::ffi::c_void, cbor_data: *const u8, cbor_len: usize);
 
     // ----- Streaming value encoder -----
 
@@ -129,25 +85,10 @@ extern "C" {
     fn ct_value_write_int(h: *mut std::ffi::c_void, value: i64, type_id: u64) -> i32;
     fn ct_value_write_float(h: *mut std::ffi::c_void, value: f64, type_id: u64) -> i32;
     fn ct_value_write_bool_typed(h: *mut std::ffi::c_void, value: i32, type_id: u64) -> i32;
-    fn ct_value_write_string(
-        h: *mut std::ffi::c_void,
-        data: *const u8,
-        len: usize,
-        type_id: u64,
-    ) -> i32;
+    fn ct_value_write_string(h: *mut std::ffi::c_void, data: *const u8, len: usize, type_id: u64) -> i32;
     fn ct_value_write_none_typed(h: *mut std::ffi::c_void, type_id: u64) -> i32;
-    fn ct_value_write_raw(
-        h: *mut std::ffi::c_void,
-        data: *const u8,
-        len: usize,
-        type_id: u64,
-    ) -> i32;
-    fn ct_value_write_error(
-        h: *mut std::ffi::c_void,
-        data: *const u8,
-        len: usize,
-        type_id: u64,
-    ) -> i32;
+    fn ct_value_write_raw(h: *mut std::ffi::c_void, data: *const u8, len: usize, type_id: u64) -> i32;
+    fn ct_value_write_error(h: *mut std::ffi::c_void, data: *const u8, len: usize, type_id: u64) -> i32;
 
     fn ct_value_begin_sequence(h: *mut std::ffi::c_void, type_id: u64, element_count: i32) -> i32;
     fn ct_value_begin_tuple(h: *mut std::ffi::c_void, type_id: u64, element_count: i32) -> i32;
@@ -166,26 +107,13 @@ extern "C" {
     // `TraceLowLevelEvent::ThreadStart / ThreadExit / ThreadSwitch` through
     // dedicated entry points instead of `add_event`, which used to be a silent
     // no-op on the Nim multi-stream backend (incidents 1.21 / 1.22 / 1.27).
-    fn trace_writer_register_thread_start(
-        handle: *mut std::ffi::c_void,
-        thread_id: u64,
-    );
-    fn trace_writer_register_thread_exit(
-        handle: *mut std::ffi::c_void,
-        thread_id: u64,
-    );
-    fn trace_writer_register_thread_switch(
-        handle: *mut std::ffi::c_void,
-        thread_id: u64,
-    );
+    fn trace_writer_register_thread_start(handle: *mut std::ffi::c_void, thread_id: u64);
+    fn trace_writer_register_thread_exit(handle: *mut std::ffi::c_void, thread_id: u64);
+    fn trace_writer_register_thread_switch(handle: *mut std::ffi::c_void, thread_id: u64);
 
     // ----- meta.dat -----
 
-    fn ct_write_meta_dat(
-        handle: *mut std::ffi::c_void,
-        recorder_id: *const u8,
-        recorder_id_len: usize,
-    ) -> i32;
+    fn ct_write_meta_dat(handle: *mut std::ffi::c_void, recorder_id: *const u8, recorder_id_len: usize) -> i32;
 
     fn ct_read_meta_dat(data: *const u8, len: usize) -> *mut std::ffi::c_void;
     fn ct_meta_dat_program(h: *mut std::ffi::c_void, out_len: *mut usize) -> *const u8;
@@ -372,25 +300,12 @@ impl StreamingValueEncoder {
 
     /// Write a boolean value.
     pub fn write_bool(&mut self, value: bool, type_id: TypeId) {
-        unsafe {
-            ct_value_write_bool_typed(
-                self.handle,
-                if value { 1 } else { 0 },
-                type_id.0 as u64,
-            )
-        };
+        unsafe { ct_value_write_bool_typed(self.handle, if value { 1 } else { 0 }, type_id.0 as u64) };
     }
 
     /// Write a string value.
     pub fn write_string(&mut self, text: &str, type_id: TypeId) {
-        unsafe {
-            ct_value_write_string(
-                self.handle,
-                text.as_ptr(),
-                text.len(),
-                type_id.0 as u64,
-            )
-        };
+        unsafe { ct_value_write_string(self.handle, text.as_ptr(), text.len(), type_id.0 as u64) };
     }
 
     /// Write a None/null value.
@@ -400,52 +315,26 @@ impl StreamingValueEncoder {
 
     /// Write a raw string representation (for types without structured encoding).
     pub fn write_raw(&mut self, repr: &str, type_id: TypeId) {
-        unsafe {
-            ct_value_write_raw(
-                self.handle,
-                repr.as_ptr(),
-                repr.len(),
-                type_id.0 as u64,
-            )
-        };
+        unsafe { ct_value_write_raw(self.handle, repr.as_ptr(), repr.len(), type_id.0 as u64) };
     }
 
     /// Write an error sentinel value.
     pub fn write_error(&mut self, msg: &str, type_id: TypeId) {
-        unsafe {
-            ct_value_write_error(
-                self.handle,
-                msg.as_ptr(),
-                msg.len(),
-                type_id.0 as u64,
-            )
-        };
+        unsafe { ct_value_write_error(self.handle, msg.as_ptr(), msg.len(), type_id.0 as u64) };
     }
 
     /// Begin a sequence (list/array) with a known element count.
     /// Must be followed by exactly `count` element encodings and one
     /// [`end_compound`](Self::end_compound) call.
     pub fn begin_sequence(&mut self, type_id: TypeId, count: usize) {
-        unsafe {
-            ct_value_begin_sequence(
-                self.handle,
-                type_id.0 as u64,
-                count as i32,
-            )
-        };
+        unsafe { ct_value_begin_sequence(self.handle, type_id.0 as u64, count as i32) };
     }
 
     /// Begin a tuple with a known element count.
     /// Must be followed by exactly `count` element encodings and one
     /// [`end_compound`](Self::end_compound) call.
     pub fn begin_tuple(&mut self, type_id: TypeId, count: usize) {
-        unsafe {
-            ct_value_begin_tuple(
-                self.handle,
-                type_id.0 as u64,
-                count as i32,
-            )
-        };
+        unsafe { ct_value_begin_tuple(self.handle, type_id.0 as u64, count as i32) };
     }
 
     /// End a compound value (sequence or tuple) started by
@@ -468,65 +357,30 @@ impl StreamingValueEncoder {
                 unsafe { ct_value_write_float(self.handle, *f, type_id.0 as u64) };
             }
             ValueRecord::Bool { b, type_id } => {
-                unsafe {
-                    ct_value_write_bool_typed(
-                        self.handle,
-                        if *b { 1 } else { 0 },
-                        type_id.0 as u64,
-                    )
-                };
+                unsafe { ct_value_write_bool_typed(self.handle, if *b { 1 } else { 0 }, type_id.0 as u64) };
             }
             ValueRecord::String { text, type_id } => {
-                unsafe {
-                    ct_value_write_string(
-                        self.handle,
-                        text.as_ptr(),
-                        text.len(),
-                        type_id.0 as u64,
-                    )
-                };
+                unsafe { ct_value_write_string(self.handle, text.as_ptr(), text.len(), type_id.0 as u64) };
             }
             ValueRecord::Raw { r, type_id } => {
-                unsafe {
-                    ct_value_write_raw(
-                        self.handle,
-                        r.as_ptr(),
-                        r.len(),
-                        type_id.0 as u64,
-                    )
-                };
+                unsafe { ct_value_write_raw(self.handle, r.as_ptr(), r.len(), type_id.0 as u64) };
             }
             ValueRecord::Error { msg, type_id } => {
-                unsafe {
-                    ct_value_write_error(
-                        self.handle,
-                        msg.as_ptr(),
-                        msg.len(),
-                        type_id.0 as u64,
-                    )
-                };
+                unsafe { ct_value_write_error(self.handle, msg.as_ptr(), msg.len(), type_id.0 as u64) };
             }
-            ValueRecord::Sequence { elements, is_slice: _, type_id } => {
-                unsafe {
-                    ct_value_begin_sequence(
-                        self.handle,
-                        type_id.0 as u64,
-                        elements.len() as i32,
-                    )
-                };
+            ValueRecord::Sequence {
+                elements,
+                is_slice: _,
+                type_id,
+            } => {
+                unsafe { ct_value_begin_sequence(self.handle, type_id.0 as u64, elements.len() as i32) };
                 for elem in elements {
                     self.encode_recursive(elem);
                 }
                 unsafe { ct_value_end_compound(self.handle) };
             }
             ValueRecord::Tuple { elements, type_id } => {
-                unsafe {
-                    ct_value_begin_tuple(
-                        self.handle,
-                        type_id.0 as u64,
-                        elements.len() as i32,
-                    )
-                };
+                unsafe { ct_value_begin_tuple(self.handle, type_id.0 as u64, elements.len() as i32) };
                 for elem in elements {
                     self.encode_recursive(elem);
                 }
@@ -535,9 +389,7 @@ impl StreamingValueEncoder {
             // For types not yet supported by the streaming encoder, fall back to raw.
             _ => {
                 let (repr, _kind, _type_name) = value_record_to_raw(value);
-                unsafe {
-                    ct_value_write_raw(self.handle, repr.as_ptr(), repr.len(), 0)
-                };
+                unsafe { ct_value_write_raw(self.handle, repr.as_ptr(), repr.len(), 0) };
             }
         }
     }
@@ -621,13 +473,7 @@ impl NimTraceWriter {
     /// Write binary meta.dat to the trace container.
     pub fn write_meta_dat(&mut self, recorder_id: &str) -> Result<(), Box<dyn Error>> {
         ensure_nim_initialized();
-        let ret = unsafe {
-            ct_write_meta_dat(
-                self.handle,
-                recorder_id.as_ptr(),
-                recorder_id.len(),
-            )
-        };
+        let ret = unsafe { ct_write_meta_dat(self.handle, recorder_id.as_ptr(), recorder_id.len()) };
         if ret != 0 {
             Err(last_error().into())
         } else {
@@ -692,23 +538,16 @@ impl NimTraceWriter {
         unsafe { trace_writer_start(self.handle, c_path.as_ptr(), line.0 as i64) }
     }
 
-    pub fn ensure_function_id(
-        &mut self,
-        function_name: &str,
-        path: &Path,
-        line: Line,
-    ) -> FunctionId {
+    pub fn ensure_function_id(&mut self, function_name: &str, path: &Path, line: Line) -> FunctionId {
         let c_name = str_to_cstring(function_name);
         let c_path = path_to_cstring(path);
-        let id =
-            unsafe { trace_writer_ensure_function_id(self.handle, c_name.as_ptr(), c_path.as_ptr(), line.0 as i64) };
+        let id = unsafe { trace_writer_ensure_function_id(self.handle, c_name.as_ptr(), c_path.as_ptr(), line.0 as i64) };
         FunctionId(id)
     }
 
     pub fn ensure_type_id(&mut self, kind: TypeKind, lang_type: &str) -> TypeId {
         let c_lang = str_to_cstring(lang_type);
-        let id =
-            unsafe { trace_writer_ensure_type_id(self.handle, kind as i32, c_lang.as_ptr()) };
+        let id = unsafe { trace_writer_ensure_type_id(self.handle, kind as i32, c_lang.as_ptr()) };
         TypeId(id)
     }
 
@@ -731,14 +570,7 @@ impl NimTraceWriter {
         match &return_value {
             ValueRecord::Int { i, type_id } => {
                 let type_name = str_to_cstring(&format!("type_{}", type_id.0));
-                unsafe {
-                    trace_writer_register_return_int(
-                        self.handle,
-                        *i,
-                        TypeKind::Int as i32,
-                        type_name.as_ptr(),
-                    )
-                }
+                unsafe { trace_writer_register_return_int(self.handle, *i, TypeKind::Int as i32, type_name.as_ptr()) }
             }
             ValueRecord::None { .. } => unsafe {
                 trace_writer_register_return(self.handle);
@@ -746,31 +578,16 @@ impl NimTraceWriter {
             // Compound types benefit from the streaming encoder: instead of
             // flattening to a raw string like "[...]", we encode the full
             // structure to CBOR so the reader can reconstruct it.
-            ValueRecord::Sequence { .. }
-            | ValueRecord::Tuple { .. }
-            | ValueRecord::Struct { .. } => {
+            ValueRecord::Sequence { .. } | ValueRecord::Tuple { .. } | ValueRecord::Struct { .. } => {
                 let cbor = self.streaming_encoder.encode(&return_value);
-                unsafe {
-                    trace_writer_register_return_cbor(
-                        self.handle,
-                        cbor.as_ptr(),
-                        cbor.len(),
-                    )
-                }
+                unsafe { trace_writer_register_return_cbor(self.handle, cbor.as_ptr(), cbor.len()) }
             }
             _ => {
                 // Leaf types: serialize to raw representation via the existing path
                 let (repr, kind, type_name) = value_record_to_raw(&return_value);
                 let c_repr = str_to_cstring(&repr);
                 let c_type = str_to_cstring(&type_name);
-                unsafe {
-                    trace_writer_register_return_raw(
-                        self.handle,
-                        c_repr.as_ptr(),
-                        kind as i32,
-                        c_type.as_ptr(),
-                    )
-                }
+                unsafe { trace_writer_register_return_raw(self.handle, c_repr.as_ptr(), kind as i32, c_type.as_ptr()) }
             }
         }
     }
@@ -780,44 +597,19 @@ impl NimTraceWriter {
         match &value {
             ValueRecord::Int { i, type_id } => {
                 let type_name = str_to_cstring(&format!("type_{}", type_id.0));
-                unsafe {
-                    trace_writer_register_variable_int(
-                        self.handle,
-                        c_name.as_ptr(),
-                        *i,
-                        TypeKind::Int as i32,
-                        type_name.as_ptr(),
-                    )
-                }
+                unsafe { trace_writer_register_variable_int(self.handle, c_name.as_ptr(), *i, TypeKind::Int as i32, type_name.as_ptr()) }
             }
             // Compound types: use the streaming encoder for full structural
             // CBOR encoding instead of flattening to "[...]" / "(...)".
-            ValueRecord::Sequence { .. }
-            | ValueRecord::Tuple { .. }
-            | ValueRecord::Struct { .. } => {
+            ValueRecord::Sequence { .. } | ValueRecord::Tuple { .. } | ValueRecord::Struct { .. } => {
                 let cbor = self.streaming_encoder.encode(&value);
-                unsafe {
-                    trace_writer_register_variable_cbor(
-                        self.handle,
-                        c_name.as_ptr(),
-                        cbor.as_ptr(),
-                        cbor.len(),
-                    )
-                }
+                unsafe { trace_writer_register_variable_cbor(self.handle, c_name.as_ptr(), cbor.as_ptr(), cbor.len()) }
             }
             _ => {
                 let (repr, kind, type_name) = value_record_to_raw(&value);
                 let c_repr = str_to_cstring(&repr);
                 let c_type = str_to_cstring(&type_name);
-                unsafe {
-                    trace_writer_register_variable_raw(
-                        self.handle,
-                        c_name.as_ptr(),
-                        c_repr.as_ptr(),
-                        kind as i32,
-                        c_type.as_ptr(),
-                    )
-                }
+                unsafe { trace_writer_register_variable_raw(self.handle, c_name.as_ptr(), c_repr.as_ptr(), kind as i32, c_type.as_ptr()) }
             }
         }
     }
@@ -829,14 +621,7 @@ impl NimTraceWriter {
     /// value encoder C FFI during their object walk (M58+).
     pub fn register_variable_cbor(&mut self, name: &str, cbor: &[u8]) {
         let c_name = str_to_cstring(name);
-        unsafe {
-            trace_writer_register_variable_cbor(
-                self.handle,
-                c_name.as_ptr(),
-                cbor.as_ptr(),
-                cbor.len(),
-            )
-        }
+        unsafe { trace_writer_register_variable_cbor(self.handle, c_name.as_ptr(), cbor.as_ptr(), cbor.len()) }
     }
 
     /// Stage one (name, CBOR-encoded value) argument for the next
@@ -844,40 +629,20 @@ impl NimTraceWriter {
     /// [`TraceWriter::register_call_arg`] for the rationale.
     pub fn register_call_arg(&mut self, name: &str, cbor: &[u8]) {
         let c_name = str_to_cstring(name);
-        unsafe {
-            trace_writer_register_call_arg(
-                self.handle,
-                c_name.as_ptr(),
-                cbor.as_ptr(),
-                cbor.len(),
-            )
-        }
+        unsafe { trace_writer_register_call_arg(self.handle, c_name.as_ptr(), cbor.as_ptr(), cbor.len()) }
     }
 
     /// Register a return value that is already encoded as CBOR bytes.
     ///
     /// See [`register_variable_cbor`](Self::register_variable_cbor) for rationale.
     pub fn register_return_cbor(&mut self, cbor: &[u8]) {
-        unsafe {
-            trace_writer_register_return_cbor(
-                self.handle,
-                cbor.as_ptr(),
-                cbor.len(),
-            )
-        }
+        unsafe { trace_writer_register_return_cbor(self.handle, cbor.as_ptr(), cbor.len()) }
     }
 
     pub fn register_special_event(&mut self, kind: EventLogKind, metadata: &str, content: &str) {
         let c_metadata = str_to_cstring(metadata);
         let c_content = str_to_cstring(content);
-        unsafe {
-            trace_writer_register_special_event(
-                self.handle,
-                kind as i32,
-                c_metadata.as_ptr(),
-                c_content.as_ptr(),
-            )
-        }
+        unsafe { trace_writer_register_special_event(self.handle, kind as i32, c_metadata.as_ptr(), c_content.as_ptr()) }
     }
 
     /// Register a `ThreadStart` event (a new thread came into existence).
@@ -937,12 +702,7 @@ impl NimTraceWriter {
         let cbor = self.streaming_encoder.encode(&value).to_vec();
         let c_name = str_to_cstring(name);
         unsafe {
-            trace_writer_register_call_arg(
-                self.handle,
-                c_name.as_ptr(),
-                cbor.as_ptr(),
-                cbor.len(),
-            );
+            trace_writer_register_call_arg(self.handle, c_name.as_ptr(), cbor.as_ptr(), cbor.len());
         }
 
         FullValueRecord {
@@ -1123,22 +883,13 @@ impl NimTraceWriter {
                 self.bind_variable(&name, rec.place);
             }
             TraceLowLevelEvent::Assignment(rec) => {
-                let name = self
-                    .variable_table
-                    .get(rec.to.0)
-                    .cloned()
-                    .unwrap_or_else(|| format!("var_{}", rec.to.0));
+                let name = self.variable_table.get(rec.to.0).cloned().unwrap_or_else(|| format!("var_{}", rec.to.0));
                 self.assign(&name, rec.from, rec.pass_by);
             }
             TraceLowLevelEvent::DropVariables(ids) => {
                 let names: Vec<String> = ids
                     .into_iter()
-                    .map(|id| {
-                        self.variable_table
-                            .get(id.0)
-                            .cloned()
-                            .unwrap_or_else(|| format!("var_{}", id.0))
-                    })
+                    .map(|id| self.variable_table.get(id.0).cloned().unwrap_or_else(|| format!("var_{}", id.0)))
                     .collect();
                 self.drop_variables(&names);
             }
@@ -1163,11 +914,7 @@ impl NimTraceWriter {
                 self.register_variable(&name, rec.place);
             }
             TraceLowLevelEvent::DropVariable(id) => {
-                let name = self
-                    .variable_table
-                    .get(id.0)
-                    .cloned()
-                    .unwrap_or_else(|| format!("var_{}", id.0));
+                let name = self.variable_table.get(id.0).cloned().unwrap_or_else(|| format!("var_{}", id.0));
                 self.drop_variable(&name);
             }
             TraceLowLevelEvent::ThreadStart(tid) => {
@@ -1609,8 +1356,7 @@ fn read_nim_buffer(ptr: *mut u8, len: usize) -> String {
     if ptr.is_null() || len == 0 {
         return String::new();
     }
-    let s = unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len)) }
-        .to_string();
+    let s = unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len)) }.to_string();
     unsafe { ct_free_buffer(ptr) };
     s
 }
@@ -1781,11 +1527,7 @@ impl Drop for NimTraceReaderHandle {
 /// Create a trace writer backed by the Nim library.
 ///
 /// This is a drop-in replacement for `codetracer_trace_writer::create_trace_writer`.
-pub fn create_trace_writer(
-    program: &str,
-    _args: &[String],
-    format: TraceEventsFileFormat,
-) -> Box<dyn TraceWriter> {
+pub fn create_trace_writer(program: &str, _args: &[String], format: TraceEventsFileFormat) -> Box<dyn TraceWriter> {
     Box::new(NimTraceWriter::new(program, format))
 }
 
@@ -1800,33 +1542,17 @@ fn value_record_to_raw(value: &ValueRecord) -> (String, TypeKind, String) {
         ValueRecord::Int { i, type_id } => (i.to_string(), TypeKind::Int, format!("type_{}", type_id.0)),
         ValueRecord::Float { f, type_id } => (f.to_string(), TypeKind::Float, format!("type_{}", type_id.0)),
         ValueRecord::Bool { b, type_id } => (b.to_string(), TypeKind::Bool, format!("type_{}", type_id.0)),
-        ValueRecord::String { text, type_id } => {
-            (text.clone(), TypeKind::String, format!("type_{}", type_id.0))
-        }
+        ValueRecord::String { text, type_id } => (text.clone(), TypeKind::String, format!("type_{}", type_id.0)),
         ValueRecord::Raw { r, type_id } => (r.clone(), TypeKind::Raw, format!("type_{}", type_id.0)),
-        ValueRecord::Error { msg, type_id } => {
-            (msg.clone(), TypeKind::Error, format!("type_{}", type_id.0))
-        }
+        ValueRecord::Error { msg, type_id } => (msg.clone(), TypeKind::Error, format!("type_{}", type_id.0)),
         ValueRecord::None { type_id } => ("None".to_string(), TypeKind::None, format!("type_{}", type_id.0)),
         ValueRecord::Char { c, type_id } => (c.to_string(), TypeKind::Char, format!("type_{}", type_id.0)),
-        ValueRecord::Sequence { type_id, .. } => {
-            ("[...]".to_string(), TypeKind::Seq, format!("type_{}", type_id.0))
-        }
-        ValueRecord::Tuple { type_id, .. } => {
-            ("(...)".to_string(), TypeKind::Tuple, format!("type_{}", type_id.0))
-        }
-        ValueRecord::Struct { type_id, .. } => {
-            ("{...}".to_string(), TypeKind::Struct, format!("type_{}", type_id.0))
-        }
-        ValueRecord::Variant { discriminator, type_id, .. } => {
-            (discriminator.clone(), TypeKind::Variant, format!("type_{}", type_id.0))
-        }
-        ValueRecord::Reference { address, type_id, .. } => {
-            (format!("0x{:x}", address), TypeKind::Pointer, format!("type_{}", type_id.0))
-        }
-        ValueRecord::Cell { place } => {
-            (format!("place_{}", place.0), TypeKind::Raw, "Cell".to_string())
-        }
+        ValueRecord::Sequence { type_id, .. } => ("[...]".to_string(), TypeKind::Seq, format!("type_{}", type_id.0)),
+        ValueRecord::Tuple { type_id, .. } => ("(...)".to_string(), TypeKind::Tuple, format!("type_{}", type_id.0)),
+        ValueRecord::Struct { type_id, .. } => ("{...}".to_string(), TypeKind::Struct, format!("type_{}", type_id.0)),
+        ValueRecord::Variant { discriminator, type_id, .. } => (discriminator.clone(), TypeKind::Variant, format!("type_{}", type_id.0)),
+        ValueRecord::Reference { address, type_id, .. } => (format!("0x{:x}", address), TypeKind::Pointer, format!("type_{}", type_id.0)),
+        ValueRecord::Cell { place } => (format!("place_{}", place.0), TypeKind::Raw, "Cell".to_string()),
         ValueRecord::BigInt { negative, type_id, .. } => {
             let sign = if *negative { "-" } else { "" };
             (format!("{}(bigint)", sign), TypeKind::Int, format!("type_{}", type_id.0))
@@ -1973,25 +1699,17 @@ pub mod non_streaming_trace_writer {
         }
         fn register_step(&mut self, path: &Path, line: Line) {
             let path_id = self.ensure_path_id(path);
-            self.events.push(TraceLowLevelEvent::Step(StepRecord {
-                path_id,
-                line,
-            }));
+            self.events.push(TraceLowLevelEvent::Step(StepRecord { path_id, line }));
         }
         fn register_call(&mut self, function_id: FunctionId, args: Vec<FullValueRecord>) {
-            self.events.push(TraceLowLevelEvent::Call(CallRecord {
-                function_id,
-                args,
-            }));
+            self.events.push(TraceLowLevelEvent::Call(CallRecord { function_id, args }));
         }
         fn arg(&mut self, name: &str, value: ValueRecord) -> FullValueRecord {
             let variable_id = self.ensure_variable_id(name);
             FullValueRecord { variable_id, value }
         }
         fn register_return(&mut self, return_value: ValueRecord) {
-            self.events.push(TraceLowLevelEvent::Return(ReturnRecord {
-                return_value,
-            }));
+            self.events.push(TraceLowLevelEvent::Return(ReturnRecord { return_value }));
         }
         fn register_special_event(&mut self, kind: EventLogKind, metadata: &str, content: &str) {
             self.events.push(TraceLowLevelEvent::Event(RecordEvent {
@@ -2016,10 +1734,7 @@ pub mod non_streaming_trace_writer {
         fn register_asm(&mut self, instructions: &[String]) {}
         fn register_variable_with_full_value(&mut self, name: &str, value: ValueRecord) {
             let variable_id = self.ensure_variable_id(name);
-            self.events.push(TraceLowLevelEvent::Value(FullValueRecord {
-                variable_id,
-                value,
-            }));
+            self.events.push(TraceLowLevelEvent::Value(FullValueRecord { variable_id, value }));
         }
         fn register_variable_cbor(&mut self, name: &str, cbor: &[u8]) {
             // Test double: store CBOR as a Raw value with hex representation.
@@ -2033,16 +1748,15 @@ pub mod non_streaming_trace_writer {
         fn register_return_cbor(&mut self, cbor: &[u8]) {
             // Test double: store CBOR as a Raw return value with hex representation.
             let hex = cbor.iter().map(|b| format!("{b:02x}")).collect::<String>();
-            self.events.push(TraceLowLevelEvent::Return(ReturnRecord { return_value: ValueRecord::Raw { r: hex, type_id: TypeId(0) } }));
+            self.events.push(TraceLowLevelEvent::Return(ReturnRecord {
+                return_value: ValueRecord::Raw { r: hex, type_id: TypeId(0) },
+            }));
         }
         fn register_variable_name(&mut self, variable_name: &str) {
             self.ensure_variable_id(variable_name);
         }
         fn register_full_value(&mut self, variable_id: VariableId, value: ValueRecord) {
-            self.events.push(TraceLowLevelEvent::Value(FullValueRecord {
-                variable_id,
-                value,
-            }));
+            self.events.push(TraceLowLevelEvent::Value(FullValueRecord { variable_id, value }));
         }
         fn register_compound_value(&mut self, place: Place, value: ValueRecord) {}
         fn register_cell_value(&mut self, place: Place, value: ValueRecord) {}

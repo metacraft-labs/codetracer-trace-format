@@ -1,5 +1,5 @@
-use std::io::{Read, Write};
 use crate::CtfsError;
+use std::io::{Read, Write};
 
 pub const FILE_ENTRY_SIZE: usize = 24;
 
@@ -16,7 +16,11 @@ pub struct FileEntry {
 
 impl FileEntry {
     pub fn empty() -> Self {
-        FileEntry { size: 0, map_block: 0, name: 0 }
+        FileEntry {
+            size: 0,
+            map_block: 0,
+            name: 0,
+        }
     }
 
     pub fn is_empty(&self) -> bool {

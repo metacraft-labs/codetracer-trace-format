@@ -6,9 +6,9 @@ use std::{
 };
 
 use crate::TraceEventsFileFormat;
+use codetracer_trace_format_capnp::capnptrace::HEADER;
 use codetracer_trace_format_cbor_zstd::HEADERV1;
 use codetracer_trace_types::TraceLowLevelEvent;
-use codetracer_trace_format_capnp::capnptrace::HEADER;
 
 pub trait TraceReader {
     fn load_trace_events(&mut self, path: &Path) -> Result<Vec<TraceLowLevelEvent>, Box<dyn Error>>;

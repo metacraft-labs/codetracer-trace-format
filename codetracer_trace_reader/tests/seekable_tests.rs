@@ -6,7 +6,7 @@ use std::io::{Read, Seek, SeekFrom};
 use codetracer_trace_types::*;
 
 use codetracer_trace_reader::seekable_reader;
-use codetracer_trace_writer::streaming_writer::{StreamingTraceWriter, DEFAULT_FRAME_SIZE};
+use codetracer_trace_writer::streaming_writer::{DEFAULT_FRAME_SIZE, StreamingTraceWriter};
 
 /// Helper: generate N distinct test events.
 fn make_test_events(n: usize) -> Vec<TraceLowLevelEvent> {
@@ -52,10 +52,7 @@ fn test_read_all_events_roundtrip() {
     assert_eq!(read_back.len(), events.len());
     for (orig, read) in events.iter().zip(read_back.iter()) {
         match (orig, read) {
-            (
-                TraceLowLevelEvent::Step(StepRecord { line: l1, .. }),
-                TraceLowLevelEvent::Step(StepRecord { line: l2, .. }),
-            ) => assert_eq!(l1, l2),
+            (TraceLowLevelEvent::Step(StepRecord { line: l1, .. }), TraceLowLevelEvent::Step(StepRecord { line: l2, .. })) => assert_eq!(l1, l2),
             _ => panic!("Event type mismatch"),
         }
     }
@@ -100,9 +97,7 @@ fn test_seekable_read_last_events() {
     let offset_95 = writer.event_offsets()[95].decompressed_offset;
     writer.finish().unwrap();
     let mut file = File::open(&path).unwrap();
-    let last5 =
-        seekable_reader::read_events_at_offset(&mut file, offset_95, total_decompressed)
-            .unwrap();
+    let last5 = seekable_reader::read_events_at_offset(&mut file, offset_95, total_decompressed).unwrap();
 
     assert_eq!(last5.len(), 5, "Expected exactly 5 events at end");
     for (i, event) in last5.iter().enumerate() {
@@ -176,8 +171,7 @@ fn test_smaller_frame_size() {
     let offset_210 = offsets[210].decompressed_offset;
     drop(file);
     let mut file = File::open(&path).unwrap();
-    let subset =
-        seekable_reader::read_events_at_offset(&mut file, offset_200, offset_210).unwrap();
+    let subset = seekable_reader::read_events_at_offset(&mut file, offset_200, offset_210).unwrap();
     assert_eq!(subset.len(), 10);
     for (i, event) in subset.iter().enumerate() {
         match event {

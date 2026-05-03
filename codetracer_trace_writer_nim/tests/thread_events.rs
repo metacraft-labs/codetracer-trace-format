@@ -22,9 +22,7 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use codetracer_trace_types::{Line, ThreadId, TraceLowLevelEvent};
-use codetracer_trace_writer_nim::{
-    NimTraceReaderHandle, NimTraceWriter, TraceEventsFileFormat,
-};
+use codetracer_trace_writer_nim::{NimTraceReaderHandle, NimTraceWriter, TraceEventsFileFormat};
 
 /// The Nim runtime is **not** thread-safe — its global state (interning
 /// tables, heap, trace-writer registry) lives behind a single lock.  Multiple
@@ -34,43 +32,28 @@ static NIM_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 fn make_writer(program_basename: &str) -> (tempfile::TempDir, NimTraceWriter) {
     let dir = tempfile::tempdir().expect("tempdir");
-    let mut writer =
-        NimTraceWriter::new(program_basename, TraceEventsFileFormat::Binary);
+    let mut writer = NimTraceWriter::new(program_basename, TraceEventsFileFormat::Binary);
 
     // Start the trace lifecycle exactly the way recorders do.  The
     // multi-stream backend defers .ct creation until `begin_writing_trace_events`,
     // and the trace reader needs the metadata + paths phases for .ct
     // post-processing to complete.
     let metadata_path = dir.path().join("trace_metadata.json");
-    writer
-        .begin_writing_trace_metadata(&metadata_path)
-        .expect("begin_metadata");
-    writer
-        .finish_writing_trace_metadata()
-        .expect("finish_metadata");
+    writer.begin_writing_trace_metadata(&metadata_path).expect("begin_metadata");
+    writer.finish_writing_trace_metadata().expect("finish_metadata");
 
     let events_path = dir.path().join("trace.json");
-    writer
-        .begin_writing_trace_events(&events_path)
-        .expect("begin_events");
+    writer.begin_writing_trace_events(&events_path).expect("begin_events");
 
     let paths_path = dir.path().join("trace_paths.json");
-    writer
-        .begin_writing_trace_paths(&paths_path)
-        .expect("begin_paths");
+    writer.begin_writing_trace_paths(&paths_path).expect("begin_paths");
     writer.finish_writing_trace_paths().expect("finish_paths");
 
     (dir, writer)
 }
 
-fn close_writer(
-    dir: tempfile::TempDir,
-    mut writer: NimTraceWriter,
-    program_basename: &str,
-) -> std::path::PathBuf {
-    writer
-        .finish_writing_trace_events()
-        .expect("finish_events");
+fn close_writer(dir: tempfile::TempDir, mut writer: NimTraceWriter, program_basename: &str) -> std::path::PathBuf {
+    writer.finish_writing_trace_events().expect("finish_events");
     writer.close().expect("close");
     drop(writer);
     let ct_path = dir.path().join(format!("{program_basename}.ct"));
@@ -78,11 +61,7 @@ fn close_writer(
     // this scope, and TempDir would otherwise delete it.
     #[allow(deprecated)]
     let _dir_path = dir.into_path();
-    assert!(
-        ct_path.exists(),
-        ".ct trace file was not created at {}",
-        ct_path.display()
-    );
+    assert!(ct_path.exists(), ".ct trace file was not created at {}", ct_path.display());
     ct_path
 }
 
@@ -110,8 +89,7 @@ fn add_event_thread_switch_is_captured() {
     // Read the trace back.  We expect 4 step-stream entries: the start step,
     // the explicit step at line 2, the thread-switch event (which writes to
     // the exec stream and bumps stepCount), and the explicit step at line 3.
-    let reader = NimTraceReaderHandle::open(ct_path.to_str().unwrap())
-        .expect("reader open");
+    let reader = NimTraceReaderHandle::open(ct_path.to_str().unwrap()).expect("reader open");
 
     let step_count = reader.step_count();
     assert_eq!(step_count, 4, "expected 4 exec-stream entries, got {step_count}");
@@ -120,10 +98,7 @@ fn add_event_thread_switch_is_captured() {
     // identify it as the new `thread_switch` step-event kind with thread_id
     // matching what we sent.
     let json = reader.step_json(2).expect("step_json[2]");
-    assert!(
-        json.contains("\"kind\":\"thread_switch\""),
-        "expected thread_switch event, got: {json}"
-    );
+    assert!(json.contains("\"kind\":\"thread_switch\""), "expected thread_switch event, got: {json}");
     assert!(
         json.contains("\"thread_id\":3735928559"),
         "expected thread_id 3735928559 (0xDEADBEEF), got: {json}"
@@ -150,17 +125,14 @@ fn register_thread_lifecycle_round_trip() {
 
     let ct_path = close_writer(dir, writer, program);
 
-    let reader = NimTraceReaderHandle::open(ct_path.to_str().unwrap())
-        .expect("reader open");
+    let reader = NimTraceReaderHandle::open(ct_path.to_str().unwrap()).expect("reader open");
 
     // Layout: start (idx 0) | thread_start (1) | step line 2 (2) |
     //         thread_switch (3) | step line 3 (4) | thread_exit (5)
     let step_count = reader.step_count();
     assert_eq!(step_count, 6, "expected 6 exec-stream entries, got {step_count}");
 
-    let kinds: Vec<String> = (0..step_count)
-        .map(|i| reader.step_json(i).expect("step_json"))
-        .collect();
+    let kinds: Vec<String> = (0..step_count).map(|i| reader.step_json(i).expect("step_json")).collect();
 
     // Verify each thread event is at the expected position with the right kind.
     assert!(
@@ -197,8 +169,7 @@ fn add_event_thread_start_and_exit_round_trip() {
     writer.add_event(TraceLowLevelEvent::ThreadExit(ThreadId(42)));
 
     let ct_path = close_writer(dir, writer, program);
-    let reader = NimTraceReaderHandle::open(ct_path.to_str().unwrap())
-        .expect("reader open");
+    let reader = NimTraceReaderHandle::open(ct_path.to_str().unwrap()).expect("reader open");
 
     let step_count = reader.step_count();
     assert_eq!(step_count, 4, "expected 4 exec-stream entries, got {step_count}");
@@ -241,22 +212,15 @@ fn append_events_drains_and_dispatches() {
     );
 
     let ct_path = close_writer(dir, writer, program);
-    let reader = NimTraceReaderHandle::open(ct_path.to_str().unwrap())
-        .expect("reader open");
+    let reader = NimTraceReaderHandle::open(ct_path.to_str().unwrap()).expect("reader open");
 
     let step_count = reader.step_count();
     assert_eq!(step_count, 4, "expected 4 exec-stream entries, got {step_count}");
 
-    assert!(
-        reader.step_json(1).unwrap().contains("\"kind\":\"thread_start\""),
-        "missing thread_start"
-    );
+    assert!(reader.step_json(1).unwrap().contains("\"kind\":\"thread_start\""), "missing thread_start");
     assert!(
         reader.step_json(2).unwrap().contains("\"kind\":\"thread_switch\""),
         "missing thread_switch"
     );
-    assert!(
-        reader.step_json(3).unwrap().contains("\"kind\":\"thread_exit\""),
-        "missing thread_exit"
-    );
+    assert!(reader.step_json(3).unwrap().contains("\"kind\":\"thread_exit\""), "missing thread_exit");
 }

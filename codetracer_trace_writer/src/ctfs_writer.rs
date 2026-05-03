@@ -127,23 +127,11 @@ impl CtfsTraceWriter {
     /// Uses the default SplitBinary format. The `flush_threshold` controls
     /// CBOR mode flushing; in SplitBinary mode, flushing is chunk-based.
     pub fn with_flush_threshold(program: &str, args: &[String], flush_threshold: usize) -> Self {
-        Self::with_options(
-            program,
-            args,
-            EventSerializationFormat::SplitBinary,
-            flush_threshold,
-            DEFAULT_CHUNK_SIZE,
-        )
+        Self::with_options(program, args, EventSerializationFormat::SplitBinary, flush_threshold, DEFAULT_CHUNK_SIZE)
     }
 
     /// Create a new CTFS trace writer with explicit format and tuning options.
-    pub fn with_options(
-        program: &str,
-        args: &[String],
-        format: EventSerializationFormat,
-        flush_threshold: usize,
-        chunk_size: usize,
-    ) -> Self {
+    pub fn with_options(program: &str, args: &[String], format: EventSerializationFormat, flush_threshold: usize, chunk_size: usize) -> Self {
         CtfsTraceWriter {
             base: AbstractTraceWriterData::new(program, args),
             ctfs_writer: None,
@@ -166,13 +154,7 @@ impl CtfsTraceWriter {
 
     /// Create a new CTFS trace writer using the legacy CBOR format.
     pub fn new_cbor(program: &str, args: &[String]) -> Self {
-        Self::with_options(
-            program,
-            args,
-            EventSerializationFormat::Cbor,
-            DEFAULT_FLUSH_THRESHOLD,
-            DEFAULT_CHUNK_SIZE,
-        )
+        Self::with_options(program, args, EventSerializationFormat::Cbor, DEFAULT_FLUSH_THRESHOLD, DEFAULT_CHUNK_SIZE)
     }
 
     /// Write the HEADERV1 prefix to the CTFS events.log if not already done.
@@ -229,11 +211,7 @@ impl CtfsTraceWriter {
         }
 
         let chunked_writer = ChunkedWriter::new(CompressionMethod::Zstd, self.unflushed_events);
-        let chunk_data = chunked_writer.write_chunked(
-            &self.event_buffer,
-            &self.event_sizes,
-            &self.event_geids,
-        )?;
+        let chunk_data = chunked_writer.write_chunked(&self.event_buffer, &self.event_sizes, &self.event_geids)?;
 
         self.ensure_header_written()?;
         if let (Some(writer), Some(handle)) = (&mut self.ctfs_writer, self.events_handle) {
@@ -358,9 +336,7 @@ impl TraceWriter for CtfsTraceWriter {
                     let remaining = sink.drain();
                     if !remaining.is_empty() {
                         self.ensure_header_written()?;
-                        if let (Some(writer), Some(handle)) =
-                            (&mut self.ctfs_writer, self.events_handle)
-                        {
+                        if let (Some(writer), Some(handle)) = (&mut self.ctfs_writer, self.events_handle) {
                             writer.write(handle, &remaining)?;
                         }
                     }
@@ -431,20 +407,11 @@ mod tests {
         let path = dir.path().join("trace");
 
         // Use CBOR mode with a small flush threshold (1 KiB) to force multiple flushes.
-        let mut writer = CtfsTraceWriter::with_options(
-            "test",
-            &[],
-            EventSerializationFormat::Cbor,
-            1024,
-            DEFAULT_CHUNK_SIZE,
-        );
+        let mut writer = CtfsTraceWriter::with_options("test", &[], EventSerializationFormat::Cbor, 1024, DEFAULT_CHUNK_SIZE);
         writer.begin_writing_trace_events(&path).unwrap();
 
         // Register a path event first (so Step events reference a valid path).
-        AbstractTraceWriter::add_event(
-            &mut writer,
-            TraceLowLevelEvent::Path(std::path::PathBuf::from("/test/file.rs")),
-        );
+        AbstractTraceWriter::add_event(&mut writer, TraceLowLevelEvent::Path(std::path::PathBuf::from("/test/file.rs")));
 
         // Write 200 step events -- each serializes to ~10-15 bytes of CBOR,
         // so 200 events should be ~2-3 KiB, triggering at least 1-2 flushes.
@@ -465,9 +432,7 @@ mod tests {
 
         // Now read back all events and verify correctness.
         let ct_path = path.with_extension("ct");
-        let mut reader = codetracer_trace_reader::create_trace_reader(
-            codetracer_trace_reader::TraceEventsFileFormat::Ctfs,
-        );
+        let mut reader = codetracer_trace_reader::create_trace_reader(codetracer_trace_reader::TraceEventsFileFormat::Ctfs);
         let events = reader.load_trace_events(&ct_path).unwrap();
 
         // Count step events.
@@ -514,10 +479,7 @@ mod tests {
         );
         writer.begin_writing_trace_events(&path).unwrap();
 
-        AbstractTraceWriter::add_event(
-            &mut writer,
-            TraceLowLevelEvent::Path(std::path::PathBuf::from("/test/file.rs")),
-        );
+        AbstractTraceWriter::add_event(&mut writer, TraceLowLevelEvent::Path(std::path::PathBuf::from("/test/file.rs")));
 
         let num_events = 200;
         for i in 0..num_events {
@@ -535,9 +497,7 @@ mod tests {
 
         // Read back and verify.
         let ct_path = path.with_extension("ct");
-        let mut reader = codetracer_trace_reader::create_trace_reader(
-            codetracer_trace_reader::TraceEventsFileFormat::Ctfs,
-        );
+        let mut reader = codetracer_trace_reader::create_trace_reader(codetracer_trace_reader::TraceEventsFileFormat::Ctfs);
         let events = reader.load_trace_events(&ct_path).unwrap();
 
         let step_events: Vec<_> = events

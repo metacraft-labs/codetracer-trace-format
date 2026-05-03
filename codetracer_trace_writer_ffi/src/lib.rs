@@ -17,7 +17,7 @@ use std::path::Path;
 
 use codetracer_trace_types::{EventLogKind, Line, TypeKind, ValueRecord};
 use codetracer_trace_writer::trace_writer::TraceWriter;
-use codetracer_trace_writer::{create_trace_writer, TraceEventsFileFormat};
+use codetracer_trace_writer::{TraceEventsFileFormat, create_trace_writer};
 use num_traits::FromPrimitive;
 
 // ---------------------------------------------------------------------------
@@ -169,10 +169,7 @@ fn w(handle: &mut TraceWriterHandle) -> &mut dyn TraceWriter {
 /// [`trace_writer_free`].  Returns `NULL` on failure (check
 /// [`trace_writer_last_error`]).
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn trace_writer_new(
-    program: *const c_char,
-    format: FfiTraceFormat,
-) -> *mut TraceWriterHandle {
+pub unsafe extern "C" fn trace_writer_new(program: *const c_char, format: FfiTraceFormat) -> *mut TraceWriterHandle {
     let prog = unsafe { cstr_to_str(program) };
     let writer = create_trace_writer(prog, &[], to_format(format));
     Box::into_raw(Box::new(TraceWriterHandle { inner: writer }))
@@ -191,10 +188,7 @@ pub unsafe extern "C" fn trace_writer_free(handle: *mut TraceWriterHandle) {
 // ---------------------------------------------------------------------------
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn trace_writer_begin_metadata(
-    handle: *mut TraceWriterHandle,
-    path: *const c_char,
-) -> bool {
+pub unsafe extern "C" fn trace_writer_begin_metadata(handle: *mut TraceWriterHandle, path: *const c_char) -> bool {
     if handle.is_null() {
         set_error("NULL handle");
         return false;
@@ -226,10 +220,7 @@ pub unsafe extern "C" fn trace_writer_finish_metadata(handle: *mut TraceWriterHa
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn trace_writer_begin_events(
-    handle: *mut TraceWriterHandle,
-    path: *const c_char,
-) -> bool {
+pub unsafe extern "C" fn trace_writer_begin_events(handle: *mut TraceWriterHandle, path: *const c_char) -> bool {
     if handle.is_null() {
         set_error("NULL handle");
         return false;
@@ -261,10 +252,7 @@ pub unsafe extern "C" fn trace_writer_finish_events(handle: *mut TraceWriterHand
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn trace_writer_begin_paths(
-    handle: *mut TraceWriterHandle,
-    path: *const c_char,
-) -> bool {
+pub unsafe extern "C" fn trace_writer_begin_paths(handle: *mut TraceWriterHandle, path: *const c_char) -> bool {
     if handle.is_null() {
         set_error("NULL handle");
         return false;
@@ -300,11 +288,7 @@ pub unsafe extern "C" fn trace_writer_finish_paths(handle: *mut TraceWriterHandl
 // ---------------------------------------------------------------------------
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn trace_writer_start(
-    handle: *mut TraceWriterHandle,
-    path: *const c_char,
-    line: i64,
-) {
+pub unsafe extern "C" fn trace_writer_start(handle: *mut TraceWriterHandle, path: *const c_char, line: i64) {
     if handle.is_null() {
         return;
     }
@@ -318,10 +302,7 @@ pub unsafe extern "C" fn trace_writer_start(
 /// the time [`trace_writer_new`] is called.  Call this before
 /// [`trace_writer_finish_metadata`] to record a different directory.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn trace_writer_set_workdir(
-    handle: *mut TraceWriterHandle,
-    workdir: *const c_char,
-) {
+pub unsafe extern "C" fn trace_writer_set_workdir(handle: *mut TraceWriterHandle, workdir: *const c_char) {
     if handle.is_null() {
         return;
     }
@@ -330,11 +311,7 @@ pub unsafe extern "C" fn trace_writer_set_workdir(
 }
 
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn trace_writer_register_step(
-    handle: *mut TraceWriterHandle,
-    path: *const c_char,
-    line: i64,
-) {
+pub unsafe extern "C" fn trace_writer_register_step(handle: *mut TraceWriterHandle, path: *const c_char, line: i64) {
     if handle.is_null() {
         return;
     }
@@ -354,22 +331,13 @@ pub unsafe extern "C" fn trace_writer_ensure_function_id(
         return usize::MAX;
     }
     let h = unsafe { &mut *handle };
-    let fid = TraceWriter::ensure_function_id(
-        w(h),
-        unsafe { cstr_to_str(name) },
-        Path::new(unsafe { cstr_to_str(path) }),
-        Line(line),
-    );
+    let fid = TraceWriter::ensure_function_id(w(h), unsafe { cstr_to_str(name) }, Path::new(unsafe { cstr_to_str(path) }), Line(line));
     fid.0
 }
 
 /// Register a type and return its ID.  Returns `usize::MAX` on error.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn trace_writer_ensure_type_id(
-    handle: *mut TraceWriterHandle,
-    kind: FfiTypeKind,
-    lang_type: *const c_char,
-) -> usize {
+pub unsafe extern "C" fn trace_writer_ensure_type_id(handle: *mut TraceWriterHandle, kind: FfiTypeKind, lang_type: *const c_char) -> usize {
     if handle.is_null() {
         return usize::MAX;
     }
@@ -383,10 +351,7 @@ pub unsafe extern "C" fn trace_writer_ensure_type_id(
 /// `trace_writer_register_variable_with_full_value` for each arg before
 /// this function.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn trace_writer_register_call(
-    handle: *mut TraceWriterHandle,
-    function_id: usize,
-) {
+pub unsafe extern "C" fn trace_writer_register_call(handle: *mut TraceWriterHandle, function_id: usize) {
     if handle.is_null() {
         return;
     }
@@ -416,9 +381,7 @@ pub unsafe extern "C" fn trace_writer_register_return_int(
         return;
     }
     let h = unsafe { &mut *handle };
-    let type_id = TraceWriter::ensure_type_id(w(h), to_type_kind(type_kind), unsafe {
-        cstr_to_str(type_name)
-    });
+    let type_id = TraceWriter::ensure_type_id(w(h), to_type_kind(type_kind), unsafe { cstr_to_str(type_name) });
     TraceWriter::register_return(w(h), ValueRecord::Int { i: value, type_id });
 }
 
@@ -434,9 +397,7 @@ pub unsafe extern "C" fn trace_writer_register_return_raw(
         return;
     }
     let h = unsafe { &mut *handle };
-    let type_id = TraceWriter::ensure_type_id(w(h), to_type_kind(type_kind), unsafe {
-        cstr_to_str(type_name)
-    });
+    let type_id = TraceWriter::ensure_type_id(w(h), to_type_kind(type_kind), unsafe { cstr_to_str(type_name) });
     TraceWriter::register_return(
         w(h),
         ValueRecord::Raw {
@@ -459,14 +420,8 @@ pub unsafe extern "C" fn trace_writer_register_variable_int(
         return;
     }
     let h = unsafe { &mut *handle };
-    let type_id = TraceWriter::ensure_type_id(w(h), to_type_kind(type_kind), unsafe {
-        cstr_to_str(type_name)
-    });
-    TraceWriter::register_variable_with_full_value(
-        w(h),
-        unsafe { cstr_to_str(name) },
-        ValueRecord::Int { i: value, type_id },
-    );
+    let type_id = TraceWriter::ensure_type_id(w(h), to_type_kind(type_kind), unsafe { cstr_to_str(type_name) });
+    TraceWriter::register_variable_with_full_value(w(h), unsafe { cstr_to_str(name) }, ValueRecord::Int { i: value, type_id });
 }
 
 /// Register a variable with a string (raw) value representation.
@@ -482,9 +437,7 @@ pub unsafe extern "C" fn trace_writer_register_variable_raw(
         return;
     }
     let h = unsafe { &mut *handle };
-    let type_id = TraceWriter::ensure_type_id(w(h), to_type_kind(type_kind), unsafe {
-        cstr_to_str(type_name)
-    });
+    let type_id = TraceWriter::ensure_type_id(w(h), to_type_kind(type_kind), unsafe { cstr_to_str(type_name) });
     TraceWriter::register_variable_with_full_value(
         w(h),
         unsafe { cstr_to_str(name) },
@@ -511,12 +464,9 @@ pub unsafe extern "C" fn trace_writer_register_special_event(
         return;
     }
     let h = unsafe { &mut *handle };
-    TraceWriter::register_special_event(
-        w(h),
-        to_event_log_kind(kind),
-        unsafe { cstr_to_str(metadata) },
-        unsafe { cstr_to_str(content) },
-    );
+    TraceWriter::register_special_event(w(h), to_event_log_kind(kind), unsafe { cstr_to_str(metadata) }, unsafe {
+        cstr_to_str(content)
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -553,22 +503,12 @@ mod tests {
         unsafe { trace_writer_register_step(handle, source.as_ptr(), 2) };
 
         let fn_name = CString::new("main").unwrap();
-        let fid = unsafe {
-            trace_writer_ensure_function_id(handle, fn_name.as_ptr(), source.as_ptr(), 1)
-        };
+        let fid = unsafe { trace_writer_ensure_function_id(handle, fn_name.as_ptr(), source.as_ptr(), 1) };
         assert_ne!(fid, usize::MAX);
 
         let var_name = CString::new("x").unwrap();
         let type_name = CString::new("i32").unwrap();
-        unsafe {
-            trace_writer_register_variable_int(
-                handle,
-                var_name.as_ptr(),
-                42,
-                FfiTypeKind::Int,
-                type_name.as_ptr(),
-            )
-        };
+        unsafe { trace_writer_register_variable_int(handle, var_name.as_ptr(), 42, FfiTypeKind::Int, type_name.as_ptr()) };
 
         // Finish writing
         assert!(unsafe { trace_writer_finish_events(handle) });

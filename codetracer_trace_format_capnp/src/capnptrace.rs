@@ -1,6 +1,6 @@
 use crate::trace_capnp::trace;
-use codetracer_trace_types::{TraceLowLevelEvent, VariableId};
 use capnp::serialize_packed;
+use codetracer_trace_types::{TraceLowLevelEvent, VariableId};
 use std::str::FromStr;
 
 /// The first 5 bytes identify the file as a CodeTracer file (hex l33tsp33k - C0DE72ACE2 for "CodeTracer").

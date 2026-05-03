@@ -5,8 +5,9 @@ use std::{
 };
 
 use crate::{
-    TraceEventsFileFormat, trace_writer::TraceWriter,
+    TraceEventsFileFormat,
     abstract_trace_writer::{AbstractTraceWriter, AbstractTraceWriterData},
+    trace_writer::TraceWriter,
 };
 use codetracer_trace_format_capnp::capnptrace::write_trace;
 use codetracer_trace_types::TraceLowLevelEvent;

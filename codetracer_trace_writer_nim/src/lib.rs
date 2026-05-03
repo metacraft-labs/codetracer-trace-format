@@ -189,6 +189,16 @@ extern "C" {
         out_line: *mut u64,
     ) -> i32;
 
+    /// Resolve a contiguous step range to parallel (path_id, line) buffers.
+    /// Returns the number of entries written, or u64::MAX on error.
+    fn ct_reader_step_locations(
+        h: *mut std::ffi::c_void,
+        start_n: u64,
+        count: u64,
+        out_path_ids: *mut u64,
+        out_lines: *mut u64,
+    ) -> u64;
+
     /// Number of variable values at step N.
     fn ct_reader_step_value_count(h: *mut std::ffi::c_void, n: u64) -> u64;
 
@@ -1531,6 +1541,49 @@ impl NimTraceReaderHandle {
             Err(last_error().into())
         } else {
             Ok((path_id, line))
+        }
+    }
+
+    /// Resolve steps `[start_n, start_n + count)` to `(path_id, line)`.
+    ///
+    /// The output slices must be at least `count` entries long.  The Nim
+    /// reader clamps the result to the remaining step count and returns the
+    /// number of entries actually written.  Starting past the end of the trace
+    /// is a successful zero-length read.
+    pub fn step_locations(
+        &self,
+        start_n: u64,
+        count: u64,
+        path_ids: &mut [u64],
+        lines: &mut [u64],
+    ) -> Result<u64, Box<dyn Error>> {
+        let count_usize = usize::try_from(count)
+            .map_err(|_| "step_locations count does not fit usize")?;
+        if path_ids.len() < count_usize || lines.len() < count_usize {
+            return Err(format!(
+                "step_locations buffers too small: count={count}, path_ids={}, lines={}",
+                path_ids.len(),
+                lines.len()
+            )
+            .into());
+        }
+        if count == 0 {
+            return Ok(0);
+        }
+
+        let written = unsafe {
+            ct_reader_step_locations(
+                self.handle,
+                start_n,
+                count,
+                path_ids.as_mut_ptr(),
+                lines.as_mut_ptr(),
+            )
+        };
+        if written == u64::MAX {
+            Err(last_error().into())
+        } else {
+            Ok(written)
         }
     }
 

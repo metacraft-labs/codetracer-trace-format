@@ -4,6 +4,7 @@ use std::io::{Read, Write};
 pub const MAGIC: [u8; 5] = [0xC0, 0xDE, 0x72, 0xAC, 0xE2];
 pub const VERSION: u8 = 3;
 pub const VERSION_V2: u8 = 2;
+pub const VERSION_V4: u8 = 4;
 pub const HEADER_SIZE: usize = 8;
 pub const EXTENDED_HEADER_SIZE: usize = 8;
 
@@ -109,15 +110,23 @@ impl Header {
         }
         let mut ver = [0u8; 1];
         r.read_exact(&mut ver)?;
-        // Accept both v2 and v3
-        if ver[0] != VERSION && ver[0] != VERSION_V2 {
+        // Accept v2, v3, and v4.
+        if ver[0] != VERSION && ver[0] != VERSION_V2 && ver[0] != VERSION_V4 {
             return Err(CtfsError::InvalidVersion(ver[0]));
         }
         let mut tag_bytes = [0u8; 2];
         r.read_exact(&mut tag_bytes)?;
-        // For v2 files, bytes 6-7 were reserved (0x00), which maps to None/None
-        let compression = CompressionMethod::from_byte(tag_bytes[0]);
-        let encryption = EncryptionMethod::from_byte(tag_bytes[1]);
+        // V4 changed the header layout:
+        //   v2/v3: byte 6 = compression, byte 7 = encryption
+        //   v4:    byte 6 = encryption,  byte 7 = max_shards
+        // V4 files produced by the Nim writer currently use no compression,
+        // so we default to None.
+        let (compression, encryption) = if ver[0] >= VERSION_V4 {
+            (CompressionMethod::None, EncryptionMethod::from_byte(tag_bytes[0]))
+        } else {
+            // For v2 files, bytes 6-7 were reserved (0x00), which maps to None/None
+            (CompressionMethod::from_byte(tag_bytes[0]), EncryptionMethod::from_byte(tag_bytes[1]))
+        };
         Ok(Header {
             id,
             version: ver[0],

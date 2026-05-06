@@ -1,9 +1,9 @@
 use std::{fs, path::Path};
 
 use codetracer_ctfs::trace_storage::{
-    DataState, FinalizeState, LifecycleState, ManagedFinalizeRequest, ManagedTraceSender, ManagedUploadKind, ManagedUploadObject,
-    ManagedUploadReceipt, MaterializedLanguage, SenderError, SenderHealth, SharedSenderBackend, StorageMode, TraceSource, TraceStorageConfig,
-    TraceStorageManifest, UploadState, TRACE_STORAGE_SCHEMA,
+    CodetracerCiSenderBackend, CodetracerCiSenderConfig, DataState, FinalizeState, LifecycleState, ManagedFinalizeRequest, ManagedTraceSender,
+    ManagedUploadKind, ManagedUploadObject, ManagedUploadReceipt, MaterializedLanguage, SenderError, SenderHealth, SharedSenderBackend, StorageMode,
+    TraceSource, TraceStorageConfig, TraceStorageManifest, UploadState, TRACE_STORAGE_SCHEMA,
 };
 use serde_json::json;
 
@@ -438,6 +438,61 @@ fn test_shared_sender_retries_and_finalize_is_idempotent() {
     assert!(sender.state().finalize.finalized);
     assert_eq!(sender.backend().uploads.len(), 2);
     assert_eq!(sender.backend().finalized, ["finalize-m32"]);
+}
+
+#[test]
+fn test_codetracer_ci_backend_refuses_complete_finalize_without_complete_mcr_slices() {
+    let config = CodetracerCiSenderConfig {
+        base_url: "http://127.0.0.1:9".to_string(),
+        tenant_id: "tenant-a".to_string(),
+        bearer_token: "token".to_string(),
+        platform: "native".to_string(),
+        recording_mode: None,
+        service_name: "checkout".to_string(),
+        instance_id: Some("ct-mcr".to_string()),
+    };
+    let mut backend = CodetracerCiSenderBackend::new(config);
+
+    let single_manifest = TraceStorageManifest::from_json(&fixture("manifest.single_ctfs.json")).unwrap();
+    let single_request = ManagedFinalizeRequest {
+        total_slices: 1,
+        total_events: 10,
+        manifest: single_manifest,
+        idempotency_key: "finalize-m32-single".to_string(),
+    };
+    let error = backend.finalize(&single_request).unwrap_err();
+    assert!(!error.retryable);
+    assert!(error.message.contains("complete MCR slice metadata"));
+
+    let mut split_manifest = TraceStorageManifest::from_json(&fixture("manifest.split_ctfs.json")).unwrap();
+    let TraceSource::SplitCtfs { segments } = &mut split_manifest.source else {
+        panic!("fixture should be split_ctfs");
+    };
+    segments.pop();
+    let incomplete_request = ManagedFinalizeRequest {
+        total_slices: 2,
+        total_events: 200,
+        manifest: split_manifest,
+        idempotency_key: "finalize-m32-incomplete".to_string(),
+    };
+    let error = backend.finalize(&incomplete_request).unwrap_err();
+    assert!(!error.retryable);
+    assert!(error.message.contains("expected 2 slices, got 1"));
+
+    let mut missing_hash_manifest = TraceStorageManifest::from_json(&fixture("manifest.split_ctfs.json")).unwrap();
+    let TraceSource::SplitCtfs { segments } = &mut missing_hash_manifest.source else {
+        panic!("fixture should be split_ctfs");
+    };
+    segments[0].file.sha256.clear();
+    let missing_hash_request = ManagedFinalizeRequest {
+        total_slices: 2,
+        total_events: 200,
+        manifest: missing_hash_manifest,
+        idempotency_key: "finalize-m32-missing-hash".to_string(),
+    };
+    let error = backend.finalize(&missing_hash_request).unwrap_err();
+    assert!(!error.retryable);
+    assert!(error.message.contains("missing content hash"));
 }
 
 #[test]

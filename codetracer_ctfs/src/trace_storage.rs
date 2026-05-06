@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
+use std::path::Path;
+use std::time::Duration;
 
 pub const TRACE_STORAGE_SCHEMA: &str = "codetracer.trace-storage.v1";
 
@@ -345,6 +348,394 @@ pub trait SharedSenderBackend {
     fn upload_manifest(&mut self, object: &ManagedUploadObject) -> Result<ManagedUploadReceipt, SenderError>;
     fn finalize(&mut self, request: &ManagedFinalizeRequest) -> Result<(), SenderError>;
     fn health(&self) -> SenderHealth;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CodetracerCiSenderConfig {
+    pub base_url: String,
+    pub tenant_id: String,
+    pub bearer_token: String,
+    pub platform: String,
+    pub recording_mode: Option<String>,
+    pub service_name: String,
+    pub instance_id: Option<String>,
+}
+
+impl CodetracerCiSenderConfig {
+    pub fn from_env() -> Result<Self, SenderError> {
+        let base_url = env_required("CODETRACER_MANAGED_UPLOAD_URL")?;
+        let tenant_id = env_required("CODETRACER_MANAGED_UPLOAD_TENANT")?;
+        let bearer_token = env_required("CODETRACER_MANAGED_UPLOAD_TOKEN")?;
+        let service_name = std::env::var("CODETRACER_MANAGED_UPLOAD_SERVICE")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| "unknown-service".to_string());
+        Ok(Self {
+            base_url,
+            tenant_id,
+            bearer_token,
+            platform: std::env::var("CODETRACER_MANAGED_UPLOAD_PLATFORM").unwrap_or_else(|_| "native".to_string()),
+            recording_mode: std::env::var("CODETRACER_MANAGED_UPLOAD_RECORDING_MODE").ok(),
+            service_name,
+            instance_id: std::env::var("CODETRACER_MANAGED_UPLOAD_INSTANCE").ok(),
+        })
+    }
+}
+
+fn env_required(key: &str) -> Result<String, SenderError> {
+    std::env::var(key)
+        .ok()
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| SenderError::fatal(format!("{key} is required for managed upload")))
+}
+
+#[derive(Debug, Clone)]
+struct UploadSession {
+    session_id: String,
+    s3_key_prefix: String,
+    storage_pool_id: Option<String>,
+    storage_server_id: Option<String>,
+    storage_endpoint_uri: Option<String>,
+}
+
+#[derive(Debug)]
+pub struct CodetracerCiSenderBackend {
+    config: CodetracerCiSenderConfig,
+    agent: ureq::Agent,
+    session: Option<UploadSession>,
+}
+
+impl CodetracerCiSenderBackend {
+    pub fn new(config: CodetracerCiSenderConfig) -> Self {
+        Self {
+            config,
+            agent: ureq::AgentBuilder::new().timeout(Duration::from_secs(10)).build(),
+            session: None,
+        }
+    }
+
+    fn ensure_session(&mut self) -> Result<UploadSession, SenderError> {
+        if let Some(session) = &self.session {
+            return Ok(session.clone());
+        }
+
+        let service_identity = serde_json::json!({
+            "serviceName": self.config.service_name,
+        });
+        let mut body = serde_json::json!({
+            "platform": self.config.platform,
+            "serviceIdentity": service_identity,
+        });
+        if let Some(instance_id) = &self.config.instance_id {
+            body["instanceIdentity"] = serde_json::json!({
+                "instanceId": instance_id,
+            });
+        }
+        if let Some(recording_mode) = &self.config.recording_mode {
+            body["recordingMode"] = serde_json::json!(recording_mode);
+        }
+
+        let url = format!("{}/api/v1/tenants/{}/traces/upload-session", self.base_url(), self.config.tenant_id);
+        let value = self
+            .authed_post(&url)
+            .send_json(body)
+            .map_err(sender_error_from_ureq)?
+            .into_json::<serde_json::Value>()
+            .map_err(|error| SenderError::retryable(format!("invalid upload-session response: {error}")))?;
+
+        let session = UploadSession {
+            session_id: json_string(&value, "sessionId")?,
+            s3_key_prefix: json_string(&value, "s3KeyPrefix")?,
+            storage_pool_id: json_opt_string(&value, "storagePoolId"),
+            storage_server_id: json_opt_string(&value, "storageServerId"),
+            storage_endpoint_uri: json_opt_string(&value, "storageEndpointUri"),
+        };
+        self.session = Some(session.clone());
+        Ok(session)
+    }
+
+    fn upload(&mut self, object: &ManagedUploadObject, content_type: &str) -> Result<ManagedUploadReceipt, SenderError> {
+        let session = self.ensure_session()?;
+        let object_key = self.object_key_for_session(&session, object);
+        let bytes = fs::read(&object.local_path).map_err(|error| SenderError::retryable(format!("failed to read {}: {error}", object.local_path)))?;
+        if object.content_length != bytes.len() as u64 {
+            return Err(SenderError::fatal(format!(
+                "content length mismatch for {}: manifest={} actual={}",
+                object.local_path,
+                object.content_length,
+                bytes.len()
+            )));
+        }
+
+        let put_url = format!(
+            "{}/api/v1/observability/storage-policy/tenants/{}/local-storage/objects/{}",
+            self.base_url(),
+            self.config.tenant_id,
+            urlencoding::encode(&object_key)
+        );
+        self.authed_put(&put_url)
+            .set("Content-Type", content_type)
+            .set("Content-Length", &bytes.len().to_string())
+            .send_bytes(&bytes)
+            .map_err(sender_error_from_ureq)?;
+
+        Ok(ManagedUploadReceipt {
+            object_key,
+            storage_pool_id: session.storage_pool_id.unwrap_or_default(),
+            storage_server_id: session.storage_server_id.unwrap_or_default(),
+            storage_endpoint_uri: session.storage_endpoint_uri.unwrap_or_default(),
+        })
+    }
+
+    fn object_key_for_session(&self, session: &UploadSession, object: &ManagedUploadObject) -> String {
+        if object.object_key.starts_with(&session.s3_key_prefix) {
+            return object.object_key.clone();
+        }
+        let name = Path::new(&object.object_key)
+            .file_name()
+            .or_else(|| Path::new(&object.local_path).file_name())
+            .and_then(|value| value.to_str())
+            .unwrap_or("artifact.bin");
+        format!("{}/{}", session.s3_key_prefix.trim_end_matches('/'), name)
+    }
+
+    fn base_url(&self) -> String {
+        self.config.base_url.trim_end_matches('/').to_string()
+    }
+
+    fn authed_post(&self, url: &str) -> ureq::Request {
+        self.agent.post(url).set("Authorization", &format!("Bearer {}", self.config.bearer_token))
+    }
+
+    fn authed_put(&self, url: &str) -> ureq::Request {
+        self.agent.put(url).set("Authorization", &format!("Bearer {}", self.config.bearer_token))
+    }
+}
+
+impl SharedSenderBackend for CodetracerCiSenderBackend {
+    fn upload_slice(&mut self, object: &ManagedUploadObject) -> Result<ManagedUploadReceipt, SenderError> {
+        self.upload(object, "application/vnd.codetracer.ctfs")
+    }
+
+    fn upload_materialized_artifact(&mut self, object: &ManagedUploadObject) -> Result<ManagedUploadReceipt, SenderError> {
+        self.upload(object, "application/vnd.codetracer.materialized-trace+json")
+    }
+
+    fn upload_manifest(&mut self, object: &ManagedUploadObject) -> Result<ManagedUploadReceipt, SenderError> {
+        self.upload(object, "application/vnd.codetracer.recording-manifest+json")
+    }
+
+    fn finalize(&mut self, request: &ManagedFinalizeRequest) -> Result<(), SenderError> {
+        validate_complete_finalize_request(request)?;
+        let session = self.ensure_session()?;
+        let manifest = monolith_recording_manifest(request, &self.config, &session);
+        let manifest_s3_key = manifest.get("manifestS3Key").and_then(|value| value.as_str()).unwrap_or("");
+        let body = serde_json::json!({
+            "totalSlices": request.total_slices,
+            "totalEvents": request.total_events,
+            "manifestS3Key": manifest_s3_key,
+            "recordingManifest": manifest,
+        });
+        let url = format!("{}/api/v1/traces/{}/finalize", self.base_url(), session.session_id);
+        self.authed_post(&url).send_json(body).map(|_| ()).map_err(sender_error_from_ureq)
+    }
+
+    fn health(&self) -> SenderHealth {
+        let url = format!("{}/healthz", self.base_url());
+        match self.agent.get(&url).call() {
+            Ok(_) => SenderHealth {
+                healthy: true,
+                message: "codetracer-ci reachable".to_string(),
+            },
+            Err(error) => SenderHealth {
+                healthy: false,
+                message: error.to_string(),
+            },
+        }
+    }
+}
+
+fn validate_complete_finalize_request(request: &ManagedFinalizeRequest) -> Result<(), SenderError> {
+    match &request.manifest.source {
+        TraceSource::MaterializedArtifact { artifact, .. } => {
+            validate_complete_object(artifact, "materialized trace artifact")?;
+            Ok(())
+        }
+        TraceSource::SplitCtfs { segments } => {
+            if request.total_slices == 0 || segments.is_empty() {
+                return Err(SenderError::fatal("refusing complete finalize without MCR slice metadata"));
+            }
+            if segments.len() != request.total_slices as usize {
+                return Err(SenderError::fatal(format!(
+                    "refusing complete finalize with incomplete MCR slice metadata: expected {} slices, got {}",
+                    request.total_slices,
+                    segments.len()
+                )));
+            }
+            for (expected_index, segment) in segments.iter().enumerate() {
+                if segment.index != expected_index as u32 {
+                    return Err(SenderError::fatal(format!(
+                        "refusing complete finalize with out-of-order MCR slice metadata: expected index {}, got {}",
+                        expected_index, segment.index
+                    )));
+                }
+                validate_complete_object(&segment.file, "MCR slice")?;
+            }
+            Ok(())
+        }
+        TraceSource::SingleCtfs { .. } | TraceSource::ShardedSplitCtfs { .. } => {
+            Err(SenderError::fatal("refusing complete finalize without complete MCR slice metadata"))
+        }
+    }
+}
+
+fn validate_complete_object(object: &PlacedObject, label: &str) -> Result<(), SenderError> {
+    if object.object_id.trim().is_empty() {
+        return Err(SenderError::fatal(format!("refusing complete finalize with {label} missing object key")));
+    }
+    if object.uri.trim().is_empty() {
+        return Err(SenderError::fatal(format!("refusing complete finalize with {label} missing storage key")));
+    }
+    if object.size_bytes == 0 {
+        return Err(SenderError::fatal(format!(
+            "refusing complete finalize with {label} missing content length"
+        )));
+    }
+    if object.sha256.trim().is_empty() {
+        return Err(SenderError::fatal(format!(
+            "refusing complete finalize with {label} missing content hash"
+        )));
+    }
+    if object.upload != UploadState::Uploaded {
+        return Err(SenderError::fatal(format!("refusing complete finalize with {label} not uploaded")));
+    }
+    Ok(())
+}
+
+fn sender_error_from_ureq(error: ureq::Error) -> SenderError {
+    match &error {
+        ureq::Error::Status(code, response) if *code >= 400 && *code < 500 && *code != 408 && *code != 429 => {
+            let message = response.status_text().to_string();
+            SenderError::fatal(format!("codetracer-ci rejected upload: HTTP {code} {message}"))
+        }
+        ureq::Error::Status(code, response) => {
+            let message = response.status_text().to_string();
+            SenderError::retryable(format!("codetracer-ci transient upload failure: HTTP {code} {message}"))
+        }
+        ureq::Error::Transport(_) => SenderError::retryable(format!("codetracer-ci transport failure: {error}")),
+    }
+}
+
+fn json_string(value: &serde_json::Value, key: &str) -> Result<String, SenderError> {
+    value
+        .get(key)
+        .and_then(|value| value.as_str())
+        .map(ToString::to_string)
+        .ok_or_else(|| SenderError::retryable(format!("upload-session response missing {key}")))
+}
+
+fn json_opt_string(value: &serde_json::Value, key: &str) -> Option<String> {
+    value.get(key).and_then(|value| value.as_str()).map(ToString::to_string)
+}
+
+fn monolith_recording_manifest(request: &ManagedFinalizeRequest, config: &CodetracerCiSenderConfig, session: &UploadSession) -> serde_json::Value {
+    let now = "1970-01-01T00:00:00Z";
+    let service = serde_json::json!({
+        "serviceName": request.manifest.service.service_name,
+        "serviceNamespace": serde_json::Value::Null,
+        "serviceVersion": serde_json::Value::Null,
+    });
+    let instance = serde_json::json!({
+        "instanceId": request.manifest.service.instance_id,
+        "instanceName": serde_json::Value::Null,
+        "hostName": serde_json::Value::Null,
+    });
+    let manifest_key = format!("{}/manifest.json", session.s3_key_prefix.trim_end_matches('/'));
+
+    match &request.manifest.source {
+        TraceSource::MaterializedArtifact {
+            language: _,
+            artifact,
+            replay_start,
+        } => serde_json::json!({
+            "kind": "materialized_trace",
+            "uploadCompletionState": "complete",
+            "serviceIdentity": service,
+            "instanceIdentity": instance,
+            "timeRange": {},
+            "retentionStatus": "available",
+            "missingSliceKeys": [],
+            "mcrSlices": [],
+            "materializedTraceArtifacts": [{
+                "artifactKey": artifact.uri.trim_start_matches("local://"),
+                "artifactKind": "materialized_trace_v1",
+                "uploadCompletionState": "complete",
+                "retentionStatus": "available",
+                "contentLength": artifact.size_bytes,
+                "contentHash": artifact.sha256,
+                "replayStart": {
+                    "geid": replay_start.geid,
+                    "traceId": replay_start.trace_id,
+                    "spanId": replay_start.span_id,
+                    "wallTimeUnixNs": replay_start.timestamp_unix_nanos
+                }
+            }],
+            "totalSlices": 0,
+            "totalEvents": request.total_events,
+            "createdAt": now,
+            "finalizedAt": now,
+            "manifestS3Key": manifest_key,
+            "recordingMode": config.recording_mode,
+        }),
+        TraceSource::SplitCtfs { segments } => serde_json::json!({
+            "kind": "mcr_slices",
+            "uploadCompletionState": "complete",
+            "serviceIdentity": service,
+            "instanceIdentity": instance,
+            "timeRange": {},
+            "retentionStatus": "available",
+            "missingSliceKeys": [],
+            "mcrSlices": segments.iter().map(|segment| serde_json::json!({
+                "key": segment.file.object_id,
+                "objectKey": segment.file.object_id,
+                "index": segment.index,
+                "order": segment.index,
+                "sliceIndex": segment.index,
+                "sliceKey": segment.file.uri.trim_start_matches("local://"),
+                "uploadCompletionState": "complete",
+                "retentionStatus": "available",
+                "eventCount": segment.geid_end.saturating_sub(segment.geid_start),
+                "sizeBytes": segment.file.size_bytes,
+                "contentLength": segment.file.size_bytes,
+                "sha256": segment.file.sha256,
+                "contentHash": segment.file.sha256,
+            })).collect::<Vec<_>>(),
+            "materializedTraceArtifacts": [],
+            "totalSlices": request.total_slices,
+            "totalEvents": request.total_events,
+            "createdAt": now,
+            "finalizedAt": now,
+            "manifestS3Key": manifest_key,
+            "recordingMode": config.recording_mode,
+        }),
+        _ => serde_json::json!({
+            "kind": "mcr_slices",
+            "uploadCompletionState": "complete",
+            "serviceIdentity": service,
+            "instanceIdentity": instance,
+            "timeRange": {},
+            "retentionStatus": "available",
+            "missingSliceKeys": [],
+            "mcrSlices": [],
+            "materializedTraceArtifacts": [],
+            "totalSlices": request.total_slices,
+            "totalEvents": request.total_events,
+            "createdAt": now,
+            "finalizedAt": now,
+            "manifestS3Key": manifest_key,
+            "recordingMode": config.recording_mode,
+        }),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

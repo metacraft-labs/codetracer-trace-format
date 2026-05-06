@@ -1,0 +1,38 @@
+{
+  "schema": "codetracer.trace-storage.v1",
+  "recording_id": "rec-ruby",
+  "service": {
+    "service_name": "checkout-api",
+    "environment": "staging",
+    "instance_id": "checkout-api-7f8d",
+    "tenant_id": "tenant-a"
+  },
+  "source": {
+    "kind": "materialized_artifact",
+    "language": "ruby",
+    "artifact": {
+      "object_id": "ruby-artifact",
+      "uri": "artifact://store-b/rec-ruby/trace.json",
+      "size_bytes": 6144,
+      "sha256": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "placement": { "pool": "artifacts-hot", "server_id": "store-b" },
+      "upload": "uploaded",
+      "data_state": "retained"
+    },
+    "replay_start": {
+      "trace_id": "trace-ruby",
+      "span_id": "span-ruby",
+      "geid": null,
+      "timestamp_unix_nanos": 1778061660000000000
+    }
+  },
+  "lifecycle": "finalized",
+  "retry": { "attempt": 0, "next_retry_at": null, "last_error": null },
+  "finalize": {
+    "finalized": true,
+    "finalized_at": "2026-05-06T10:04:00Z",
+    "idempotency_key": "finalize-rec-ruby"
+  },
+  "retention": "retained",
+  "replication": { "target_replicas": 2, "completed_replicas": 1 }
+}

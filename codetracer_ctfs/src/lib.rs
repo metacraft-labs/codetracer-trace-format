@@ -10,6 +10,7 @@ pub mod mmap_info;
 pub mod platform_info;
 pub(crate) mod pread_compat;
 pub mod reader;
+pub mod trace_storage;
 pub mod writer;
 
 pub use base40::{base40_decode, base40_encode};

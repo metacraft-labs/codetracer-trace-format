@@ -1,0 +1,80 @@
+{
+  "schema": "codetracer.trace-storage.v1",
+  "service": {
+    "service_name": "checkout-api",
+    "environment": "staging",
+    "instance_id": "checkout-api-7f8d",
+    "tenant_id": "tenant-a"
+  },
+  "mode": {
+    "direct_storage": {
+      "control_plane_url": "https://ci.example.test/trace-storage"
+    }
+  },
+  "storage_servers": [
+    {
+      "id": "store-a",
+      "pool": "ctfs-hot",
+      "endpoint": {
+        "scheme": "https",
+        "base_url": "https://store-a.example.test"
+      },
+      "credential_ref": {
+        "provider": "env",
+        "key": "CODETRACER_STORE_A_TOKEN"
+      }
+    },
+    {
+      "id": "store-b",
+      "pool": "artifacts-hot",
+      "endpoint": {
+        "scheme": "https",
+        "base_url": "https://store-b.example.test"
+      },
+      "credential_ref": {
+        "provider": "env",
+        "key": "CODETRACER_STORE_B_TOKEN"
+      }
+    }
+  ],
+  "pools": [
+    {
+      "id": "ctfs-hot",
+      "purpose": "ctfs",
+      "server_ids": ["store-a", "store-b"]
+    },
+    {
+      "id": "artifacts-hot",
+      "purpose": "materialized_artifact",
+      "server_ids": ["store-b"]
+    },
+    {
+      "id": "manifest-hot",
+      "purpose": "manifest",
+      "server_ids": ["store-a"]
+    }
+  ],
+  "split_policy": {
+    "enabled": true,
+    "max_segment_bytes": 67108864,
+    "checkpoint_aligned": true
+  },
+  "shard_policy": {
+    "enabled": true,
+    "shard_count": 4,
+    "block_range_bytes": 8388608
+  },
+  "materialized_artifact_policy": {
+    "pool": "artifacts-hot",
+    "max_artifact_bytes": 104857600
+  },
+  "replication": {
+    "min_replicas": 1,
+    "target_replicas": 2,
+    "placement": "distinct_servers"
+  },
+  "retention": {
+    "retained_for_days": 30,
+    "delete_after_days": 90
+  }
+}

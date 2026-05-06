@@ -1,0 +1,80 @@
+{
+  "schema": "codetracer.trace-storage.v1",
+  "service": {
+    "service_name": "checkout-api",
+    "environment": "production",
+    "instance_id": "checkout-api-managed-1",
+    "tenant_id": "tenant-managed"
+  },
+  "mode": {
+    "managed_upload": {
+      "control_plane_url": "https://ci.example.test/managed-upload"
+    }
+  },
+  "storage_servers": [
+    {
+      "id": "managed-store-a",
+      "pool": "ctfs-managed",
+      "endpoint": {
+        "scheme": "https",
+        "base_url": "https://managed-store-a.example.test"
+      },
+      "credential_ref": {
+        "provider": "vault",
+        "key": "managed/store-a/token"
+      }
+    },
+    {
+      "id": "managed-store-b",
+      "pool": "artifacts-managed",
+      "endpoint": {
+        "scheme": "https",
+        "base_url": "https://managed-store-b.example.test"
+      },
+      "credential_ref": {
+        "provider": "vault",
+        "key": "managed/store-b/token"
+      }
+    }
+  ],
+  "pools": [
+    {
+      "id": "ctfs-managed",
+      "purpose": "ctfs",
+      "server_ids": ["managed-store-a", "managed-store-b"]
+    },
+    {
+      "id": "artifacts-managed",
+      "purpose": "materialized_artifact",
+      "server_ids": ["managed-store-b"]
+    },
+    {
+      "id": "manifest-managed",
+      "purpose": "manifest",
+      "server_ids": ["managed-store-a"]
+    }
+  ],
+  "split_policy": {
+    "enabled": true,
+    "max_segment_bytes": 33554432,
+    "checkpoint_aligned": true
+  },
+  "shard_policy": {
+    "enabled": true,
+    "shard_count": 8,
+    "block_range_bytes": 4194304
+  },
+  "materialized_artifact_policy": {
+    "pool": "artifacts-managed",
+    "max_artifact_bytes": 52428800
+  },
+  "replication": {
+    "min_replicas": 2,
+    "target_replicas": 3,
+    "placement": "same_pool"
+  },
+  "retention": {
+    "retained_for_days": 14,
+    "delete_after_days": 45
+  }
+}

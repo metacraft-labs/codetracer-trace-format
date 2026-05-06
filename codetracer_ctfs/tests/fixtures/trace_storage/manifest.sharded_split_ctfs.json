@@ -1,0 +1,56 @@
+{
+  "schema": "codetracer.trace-storage.v1",
+  "recording_id": "rec-sharded",
+  "service": {
+    "service_name": "checkout-api",
+    "environment": "staging",
+    "instance_id": "checkout-api-7f8d",
+    "tenant_id": "tenant-a"
+  },
+  "source": {
+    "kind": "sharded_split_ctfs",
+    "segments": [
+      {
+        "index": 0,
+        "geid_start": 1,
+        "geid_end": 100,
+        "shards": [
+          {
+            "shard_index": 0,
+            "block_start": 0,
+            "block_end": 63,
+            "replicas": [
+              {
+                "object_id": "shard-0-a",
+                "uri": "ctfs://store-a/rec-sharded/segment-0000/shard-0000.cts",
+                "size_bytes": 1024,
+                "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+                "placement": { "pool": "ctfs-hot", "server_id": "store-a" },
+                "upload": "uploaded",
+                "data_state": "retained"
+              },
+              {
+                "object_id": "shard-0-b",
+                "uri": "ctfs://store-b/rec-sharded/segment-0000/shard-0000.cts",
+                "size_bytes": 1024,
+                "sha256": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+                "placement": { "pool": "ctfs-hot", "server_id": "store-b" },
+                "upload": "uploaded",
+                "data_state": "retained"
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "lifecycle": "finalized",
+  "retry": { "attempt": 0, "next_retry_at": null, "last_error": null },
+  "finalize": {
+    "finalized": true,
+    "finalized_at": "2026-05-06T10:02:00Z",
+    "idempotency_key": "finalize-rec-sharded"
+  },
+  "retention": "retained",
+  "replication": { "target_replicas": 2, "completed_replicas": 2 }
+}

@@ -1,0 +1,38 @@
+{
+  "schema": "codetracer.trace-storage.v1",
+  "recording_id": "rec-javascript",
+  "service": {
+    "service_name": "checkout-api",
+    "environment": "staging",
+    "instance_id": "checkout-api-7f8d",
+    "tenant_id": "tenant-a"
+  },
+  "source": {
+    "kind": "materialized_artifact",
+    "language": "javascript",
+    "artifact": {
+      "object_id": "javascript-artifact",
+      "uri": "artifact://store-b/rec-javascript/trace.json",
+      "size_bytes": 7168,
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "placement": { "pool": "artifacts-hot", "server_id": "store-b" },
+      "upload": "uploaded",
+      "data_state": "retained"
+    },
+    "replay_start": {
+      "trace_id": "trace-javascript",
+      "span_id": "span-javascript",
+      "geid": null,
+      "timestamp_unix_nanos": 1778061720000000000
+    }
+  },
+  "lifecycle": "finalized",
+  "retry": { "attempt": 0, "next_retry_at": null, "last_error": null },
+  "finalize": {
+    "finalized": true,
+    "finalized_at": "2026-05-06T10:05:00Z",
+    "idempotency_key": "finalize-rec-javascript"
+  },
+  "retention": "retained",
+  "replication": { "target_replicas": 2, "completed_replicas": 1 }
+}

@@ -1,0 +1,31 @@
+{
+  "schema": "codetracer.trace-storage.v1",
+  "recording_id": "rec-single",
+  "service": {
+    "service_name": "checkout-api",
+    "environment": "staging",
+    "instance_id": "checkout-api-7f8d",
+    "tenant_id": "tenant-a"
+  },
+  "source": {
+    "kind": "single_ctfs",
+    "file": {
+      "object_id": "ctfs-single",
+      "uri": "ctfs://store-a/rec-single/trace.ct",
+      "size_bytes": 4096,
+      "sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "placement": { "pool": "ctfs-hot", "server_id": "store-a" },
+      "upload": "uploaded",
+      "data_state": "retained"
+    }
+  },
+  "lifecycle": "finalized",
+  "retry": { "attempt": 0, "next_retry_at": null, "last_error": null },
+  "finalize": {
+    "finalized": true,
+    "finalized_at": "2026-05-06T10:00:00Z",
+    "idempotency_key": "finalize-rec-single"
+  },
+  "retention": "retained",
+  "replication": { "target_replicas": 2, "completed_replicas": 1 }
+}

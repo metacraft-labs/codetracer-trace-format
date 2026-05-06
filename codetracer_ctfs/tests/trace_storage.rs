@@ -2,8 +2,9 @@ use std::{fs, path::Path};
 
 use codetracer_ctfs::trace_storage::{
     CodetracerCiSenderBackend, CodetracerCiSenderConfig, DataState, FinalizeState, LifecycleState, ManagedFinalizeRequest, ManagedTraceSender,
-    ManagedUploadKind, ManagedUploadObject, ManagedUploadReceipt, MaterializedLanguage, SenderError, SenderHealth, SharedSenderBackend, StorageMode,
-    TraceSource, TraceStorageConfig, TraceStorageManifest, UploadState, TRACE_STORAGE_SCHEMA,
+    ManagedUploadKind, ManagedUploadObject, ManagedUploadReceipt, MaterializedLanguage, PlacedObject, Placement, ReplayStart, ReplicationState,
+    RetryState, SenderError, SenderHealth, ServiceIdentity, SharedSenderBackend, StorageMode, TraceSource, TraceStorageConfig, TraceStorageManifest,
+    UploadState, TRACE_STORAGE_SCHEMA,
 };
 use serde_json::json;
 
@@ -438,6 +439,101 @@ fn test_shared_sender_retries_and_finalize_is_idempotent() {
     assert!(sender.state().finalize.finalized);
     assert_eq!(sender.backend().uploads.len(), 2);
     assert_eq!(sender.backend().finalized, ["finalize-m32"]);
+}
+
+#[test]
+fn test_shared_sender_uploads_complete_materialized_artifact_set_before_finalize() {
+    let mut sender = ManagedTraceSender::new(TestManagedBackend::default(), "materialized-finalize");
+    let objects = vec![
+        materialized_upload_object("checkout/materialized-trace-v1.json", "materialized_trace_v1"),
+        materialized_upload_object("checkout/correlation-index.json", "correlation_index_v1"),
+        materialized_upload_object("checkout/artifact-set.json", "materialized_artifact_set_v1"),
+    ];
+    let receipts = sender.upload_materialized_artifacts(objects).unwrap();
+    assert_eq!(receipts.len(), 3);
+
+    let placed = receipts
+        .iter()
+        .map(|receipt| PlacedObject {
+            object_id: receipt.object_key.clone(),
+            uri: format!("{}/{}", receipt.storage_endpoint_uri, receipt.object_key),
+            size_bytes: 128,
+            sha256: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc".to_string(),
+            placement: Placement {
+                pool: receipt.storage_pool_id.clone(),
+                server_id: receipt.storage_server_id.clone(),
+            },
+            upload: UploadState::Uploaded,
+            data_state: DataState::Retained,
+        })
+        .collect::<Vec<_>>();
+    let manifest = TraceStorageManifest {
+        schema: TRACE_STORAGE_SCHEMA.to_string(),
+        recording_id: "checkout".to_string(),
+        service: ServiceIdentity {
+            service_name: "checkout".to_string(),
+            environment: "test".to_string(),
+            instance_id: "checkout-1".to_string(),
+            tenant_id: "tenant-a".to_string(),
+        },
+        source: TraceSource::MaterializedArtifact {
+            language: MaterializedLanguage::Python,
+            artifact: placed[0].clone(),
+            artifacts: placed,
+            replay_start: ReplayStart {
+                trace_id: "trace".to_string(),
+                span_id: "span".to_string(),
+                geid: Some(1),
+                timestamp_unix_nanos: Some(2),
+            },
+        },
+        lifecycle: LifecycleState::Finalized,
+        retry: RetryState {
+            attempt: 0,
+            next_retry_at: None,
+            last_error: None,
+        },
+        finalize: FinalizeState {
+            finalized: true,
+            finalized_at: Some("2026-05-06T00:00:00Z".to_string()),
+            idempotency_key: "materialized-finalize".to_string(),
+        },
+        retention: DataState::Retained,
+        replication: ReplicationState {
+            target_replicas: 1,
+            completed_replicas: 1,
+        },
+    };
+
+    sender
+        .finalize(ManagedFinalizeRequest {
+            total_slices: 0,
+            total_events: 0,
+            manifest,
+            idempotency_key: "materialized-finalize".to_string(),
+        })
+        .unwrap();
+    assert_eq!(
+        sender.backend().uploads,
+        [
+            "checkout/materialized-trace-v1.json",
+            "checkout/correlation-index.json",
+            "checkout/artifact-set.json"
+        ]
+    );
+    assert_eq!(sender.backend().finalized, ["materialized-finalize"]);
+}
+
+fn materialized_upload_object(object_key: &str, artifact_kind: &str) -> ManagedUploadObject {
+    ManagedUploadObject {
+        object_key: object_key.to_string(),
+        local_path: format!("/tmp/{object_key}"),
+        content_length: 128,
+        sha256: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc".to_string(),
+        kind: ManagedUploadKind::MaterializedArtifact {
+            artifact_kind: artifact_kind.to_string(),
+        },
+    }
 }
 
 #[test]

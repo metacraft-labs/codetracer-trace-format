@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::Path;
@@ -172,6 +173,8 @@ pub enum TraceSource {
     MaterializedArtifact {
         language: MaterializedLanguage,
         artifact: PlacedObject,
+        #[serde(default)]
+        artifacts: Vec<PlacedObject>,
         replay_start: ReplayStart,
     },
 }
@@ -307,6 +310,18 @@ pub struct ManagedUploadReceipt {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedMaterializedUpload {
+    pub receipt: ManagedUploadReceipt,
+    pub content_length: u64,
+    pub sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedMaterializedUploadSet {
+    pub uploads: Vec<ManagedMaterializedUpload>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ManagedFinalizeRequest {
     pub total_slices: u32,
     pub total_events: u64,
@@ -379,6 +394,13 @@ impl CodetracerCiSenderConfig {
             service_name,
             instance_id: std::env::var("CODETRACER_MANAGED_UPLOAD_INSTANCE").ok(),
         })
+    }
+
+    pub fn from_env_for_platform(platform: impl Into<String>) -> Result<Self, SenderError> {
+        let mut config = Self::from_env()?;
+        config.platform = platform.into();
+        config.recording_mode = Some("materialized".to_string());
+        Ok(config)
     }
 }
 
@@ -555,10 +577,245 @@ impl SharedSenderBackend for CodetracerCiSenderBackend {
     }
 }
 
+pub fn upload_materialized_artifact_from_env(trace_dir: impl AsRef<Path>, language: &str) -> Result<ManagedMaterializedUpload, SenderError> {
+    let uploads = upload_materialized_artifacts_from_env(trace_dir, language)?.uploads;
+    uploads
+        .into_iter()
+        .next()
+        .ok_or_else(|| SenderError::fatal("materialized upload set was empty"))
+}
+
+pub fn upload_materialized_artifacts_from_env(trace_dir: impl AsRef<Path>, language: &str) -> Result<ManagedMaterializedUploadSet, SenderError> {
+    let trace_dir = trace_dir.as_ref();
+    let config = CodetracerCiSenderConfig::from_env_for_platform(language)?;
+    let service = if config.service_name.trim().is_empty() {
+        language.to_string()
+    } else {
+        config.service_name.clone()
+    };
+    let artifacts = materialized_artifact_set(trace_dir, language, &service)?;
+    let mut sender = ManagedTraceSender::new(CodetracerCiSenderBackend::new(config), format!("{language}-materialized-finalize"));
+    let upload_objects = artifacts
+        .iter()
+        .map(|artifact| ManagedUploadObject {
+            object_key: artifact.object_key.clone(),
+            local_path: artifact.local_path.to_string_lossy().to_string(),
+            content_length: artifact.content_length,
+            sha256: artifact.sha256.clone(),
+            kind: ManagedUploadKind::MaterializedArtifact {
+                artifact_kind: artifact.artifact_kind.clone(),
+            },
+        })
+        .collect::<Vec<_>>();
+    let receipts = sender.upload_materialized_artifacts(upload_objects)?;
+    let mut uploads = Vec::with_capacity(receipts.len());
+    let mut placed = Vec::with_capacity(receipts.len());
+
+    for (artifact, receipt) in artifacts.into_iter().zip(receipts.into_iter()) {
+        placed.push(placed_object_from_materialized_upload(
+            &receipt,
+            artifact.content_length,
+            &artifact.sha256,
+        ));
+        uploads.push(ManagedMaterializedUpload {
+            receipt,
+            content_length: artifact.content_length,
+            sha256: artifact.sha256,
+        });
+    }
+
+    let primary = placed
+        .first()
+        .cloned()
+        .ok_or_else(|| SenderError::fatal("refusing to finalize empty materialized artifact set"))?;
+    let idempotency_key = format!("{language}-materialized-finalize");
+    let manifest = TraceStorageManifest {
+        schema: TRACE_STORAGE_SCHEMA.to_string(),
+        recording_id: service.clone(),
+        service: ServiceIdentity {
+            service_name: service,
+            environment: "managed-upload".to_string(),
+            instance_id: std::env::var("CODETRACER_MANAGED_UPLOAD_INSTANCE").unwrap_or_else(|_| format!("{language}-recorder")),
+            tenant_id: std::env::var("CODETRACER_MANAGED_UPLOAD_TENANT").unwrap_or_default(),
+        },
+        source: TraceSource::MaterializedArtifact {
+            language: parse_materialized_language(language)?,
+            artifact: primary,
+            artifacts: placed,
+            replay_start: ReplayStart {
+                trace_id: String::new(),
+                span_id: String::new(),
+                geid: None,
+                timestamp_unix_nanos: None,
+            },
+        },
+        lifecycle: LifecycleState::Finalized,
+        retry: RetryState {
+            attempt: 0,
+            next_retry_at: None,
+            last_error: None,
+        },
+        finalize: FinalizeState {
+            finalized: true,
+            finalized_at: Some("1970-01-01T00:00:00Z".to_string()),
+            idempotency_key: idempotency_key.clone(),
+        },
+        retention: DataState::Retained,
+        replication: ReplicationState {
+            target_replicas: 1,
+            completed_replicas: 1,
+        },
+    };
+    sender.finalize(ManagedFinalizeRequest {
+        total_slices: 0,
+        total_events: 0,
+        manifest,
+        idempotency_key,
+    })?;
+
+    Ok(ManagedMaterializedUploadSet { uploads })
+}
+
+#[derive(Debug, Clone)]
+struct MaterializedLocalArtifact {
+    object_key: String,
+    local_path: std::path::PathBuf,
+    content_length: u64,
+    sha256: String,
+    artifact_kind: String,
+}
+
+fn materialized_artifact_set(trace_dir: &Path, language: &str, service: &str) -> Result<Vec<MaterializedLocalArtifact>, SenderError> {
+    let primary_path = materialized_artifact_path(trace_dir)?;
+    let mut files = vec![(
+        "materialized-trace-v1.json".to_string(),
+        primary_path,
+        "materialized_trace_v1".to_string(),
+    )];
+
+    for name in ["correlation-index.json", "correlation-index-v1.json"] {
+        let path = trace_dir.join(name);
+        if path.exists() {
+            files.push(("correlation-index.json".to_string(), path, "correlation_index_v1".to_string()));
+            break;
+        }
+    }
+
+    let artifact_set_path = ensure_artifact_set(trace_dir, language, &files)?;
+    files.push((
+        "artifact-set.json".to_string(),
+        artifact_set_path,
+        "materialized_artifact_set_v1".to_string(),
+    ));
+
+    files
+        .into_iter()
+        .map(|(object_name, local_path, artifact_kind)| {
+            let bytes = fs::read(&local_path)
+                .map_err(|error| SenderError::retryable(format!("failed to read materialized artifact {}: {error}", local_path.display())))?;
+            if bytes.is_empty() {
+                return Err(SenderError::fatal(format!(
+                    "refusing to upload empty materialized artifact: {}",
+                    local_path.display()
+                )));
+            }
+            let mut hasher = Sha256::new();
+            hasher.update(&bytes);
+            Ok(MaterializedLocalArtifact {
+                object_key: format!("{service}/{object_name}"),
+                local_path,
+                content_length: bytes.len() as u64,
+                sha256: format!("{:x}", hasher.finalize()),
+                artifact_kind,
+            })
+        })
+        .collect()
+}
+
+fn ensure_artifact_set(trace_dir: &Path, language: &str, files: &[(String, std::path::PathBuf, String)]) -> Result<std::path::PathBuf, SenderError> {
+    let path = trace_dir.join("artifact-set.json");
+    let artifacts = files
+        .iter()
+        .map(|(name, local_path, kind)| {
+            serde_json::json!({
+                "artifactKey": name,
+                "artifactKind": kind,
+                "localPath": local_path.file_name().and_then(|value| value.to_str()).unwrap_or(name),
+            })
+        })
+        .collect::<Vec<_>>();
+    let body = serde_json::json!({
+        "kind": "materialized_artifact_set",
+        "schema": "codetracer.materialized-artifact-set.v1",
+        "language": language,
+        "artifacts": artifacts,
+    });
+    let bytes =
+        serde_json::to_vec_pretty(&body).map_err(|error| SenderError::fatal(format!("failed to encode materialized artifact set: {error}")))?;
+    fs::write(&path, bytes).map_err(|error| SenderError::retryable(format!("failed to write {}: {error}", path.display())))?;
+    Ok(path)
+}
+
+fn placed_object_from_materialized_upload(receipt: &ManagedUploadReceipt, content_length: u64, sha256: &str) -> PlacedObject {
+    PlacedObject {
+        object_id: receipt.object_key.clone(),
+        uri: format!("{}/{}", receipt.storage_endpoint_uri, receipt.object_key),
+        size_bytes: content_length,
+        sha256: sha256.to_string(),
+        placement: Placement {
+            pool: receipt.storage_pool_id.clone(),
+            server_id: receipt.storage_server_id.clone(),
+        },
+        upload: UploadState::Uploaded,
+        data_state: DataState::Retained,
+    }
+}
+
+fn parse_materialized_language(language: &str) -> Result<MaterializedLanguage, SenderError> {
+    match language {
+        "python" => Ok(MaterializedLanguage::Python),
+        "ruby" => Ok(MaterializedLanguage::Ruby),
+        "javascript" | "js" => Ok(MaterializedLanguage::Javascript),
+        other => Err(SenderError::fatal(format!(
+            "unsupported materialized language for managed upload: {other}"
+        ))),
+    }
+}
+
+fn materialized_artifact_path(trace_dir: &Path) -> Result<std::path::PathBuf, SenderError> {
+    let preferred = trace_dir.join("trace.json");
+    if preferred.exists() {
+        return Ok(preferred);
+    }
+    let ctfs = trace_dir.join("trace.ct");
+    if ctfs.exists() {
+        return Ok(ctfs);
+    }
+    let entries = fs::read_dir(trace_dir)
+        .map_err(|error| SenderError::retryable(format!("failed to inspect materialized trace directory {}: {error}", trace_dir.display())))?;
+    for entry in entries {
+        let path = entry
+            .map_err(|error| SenderError::retryable(format!("failed to inspect trace entry: {error}")))?
+            .path();
+        if path.extension().and_then(|value| value.to_str()) == Some("ct") {
+            return Ok(path);
+        }
+    }
+    Ok(preferred)
+}
+
 fn validate_complete_finalize_request(request: &ManagedFinalizeRequest) -> Result<(), SenderError> {
     match &request.manifest.source {
-        TraceSource::MaterializedArtifact { artifact, .. } => {
+        TraceSource::MaterializedArtifact { artifact, artifacts, .. } => {
             validate_complete_object(artifact, "materialized trace artifact")?;
+            if artifacts.is_empty() {
+                return Err(SenderError::fatal(
+                    "refusing complete finalize without materialized artifact set metadata",
+                ));
+            }
+            for entry in artifacts {
+                validate_complete_object(entry, "materialized artifact set entry")?;
+            }
             Ok(())
         }
         TraceSource::SplitCtfs { segments } => {
@@ -638,6 +895,14 @@ fn json_opt_string(value: &serde_json::Value, key: &str) -> Option<String> {
     value.get(key).and_then(|value| value.as_str()).map(ToString::to_string)
 }
 
+fn materialized_artifact_kind(object_id: &str) -> &'static str {
+    match Path::new(object_id).file_name().and_then(|value| value.to_str()) {
+        Some("correlation-index.json" | "correlation-index-v1.json") => "correlation_index_v1",
+        Some("artifact-set.json" | "artifact-set-v1.json") => "materialized_artifact_set_v1",
+        _ => "materialized_trace_v1",
+    }
+}
+
 fn monolith_recording_manifest(request: &ManagedFinalizeRequest, config: &CodetracerCiSenderConfig, session: &UploadSession) -> serde_json::Value {
     let now = "1970-01-01T00:00:00Z";
     let service = serde_json::json!({
@@ -656,37 +921,45 @@ fn monolith_recording_manifest(request: &ManagedFinalizeRequest, config: &Codetr
         TraceSource::MaterializedArtifact {
             language: _,
             artifact,
+            artifacts,
             replay_start,
-        } => serde_json::json!({
-            "kind": "materialized_trace",
-            "uploadCompletionState": "complete",
-            "serviceIdentity": service,
-            "instanceIdentity": instance,
-            "timeRange": {},
-            "retentionStatus": "available",
-            "missingSliceKeys": [],
-            "mcrSlices": [],
-            "materializedTraceArtifacts": [{
-                "artifactKey": artifact.uri.trim_start_matches("local://"),
-                "artifactKind": "materialized_trace_v1",
+        } => {
+            let manifest_artifacts = if artifacts.is_empty() {
+                vec![artifact.clone()]
+            } else {
+                artifacts.clone()
+            };
+            serde_json::json!({
+                "kind": "materialized_trace",
                 "uploadCompletionState": "complete",
+                "serviceIdentity": service,
+                "instanceIdentity": instance,
+                "timeRange": {},
                 "retentionStatus": "available",
-                "contentLength": artifact.size_bytes,
-                "contentHash": artifact.sha256,
-                "replayStart": {
-                    "geid": replay_start.geid,
-                    "traceId": replay_start.trace_id,
-                    "spanId": replay_start.span_id,
-                    "wallTimeUnixNs": replay_start.timestamp_unix_nanos
-                }
-            }],
-            "totalSlices": 0,
-            "totalEvents": request.total_events,
-            "createdAt": now,
-            "finalizedAt": now,
-            "manifestS3Key": manifest_key,
-            "recordingMode": config.recording_mode,
-        }),
+                "missingSliceKeys": [],
+                "mcrSlices": [],
+                "materializedTraceArtifacts": manifest_artifacts.iter().map(|entry| serde_json::json!({
+                    "artifactKey": entry.uri.trim_start_matches("local://"),
+                    "artifactKind": materialized_artifact_kind(&entry.object_id),
+                    "uploadCompletionState": "complete",
+                    "retentionStatus": "available",
+                    "contentLength": entry.size_bytes,
+                    "contentHash": entry.sha256,
+                    "replayStart": {
+                        "geid": replay_start.geid,
+                        "traceId": replay_start.trace_id,
+                        "spanId": replay_start.span_id,
+                        "wallTimeUnixNs": replay_start.timestamp_unix_nanos
+                    }
+                })).collect::<Vec<_>>(),
+                "totalSlices": 0,
+                "totalEvents": request.total_events,
+                "createdAt": now,
+                "finalizedAt": now,
+                "manifestS3Key": manifest_key,
+                "recordingMode": config.recording_mode,
+            })
+        }
         TraceSource::SplitCtfs { segments } => serde_json::json!({
             "kind": "mcr_slices",
             "uploadCompletionState": "complete",
@@ -803,6 +1076,14 @@ impl<B: SharedSenderBackend> ManagedTraceSender<B> {
 
     pub fn upload_materialized_artifact(&mut self, object: ManagedUploadObject) -> Result<ManagedUploadReceipt, SenderError> {
         self.upload_object(object, |backend, object| backend.upload_materialized_artifact(object))
+    }
+
+    pub fn upload_materialized_artifacts(&mut self, objects: Vec<ManagedUploadObject>) -> Result<Vec<ManagedUploadReceipt>, SenderError> {
+        let mut receipts = Vec::with_capacity(objects.len());
+        for object in objects {
+            receipts.push(self.upload_materialized_artifact(object)?);
+        }
+        Ok(receipts)
     }
 
     pub fn upload_manifest(&mut self, object: ManagedUploadObject) -> Result<ManagedUploadReceipt, SenderError> {

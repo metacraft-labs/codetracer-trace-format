@@ -2,7 +2,16 @@ fn main() {
     // Link against the pre-built Nim static library.
     // Users must set CODETRACER_NIM_LIB_DIR to the directory containing
     // libcodetracer_trace_writer.a, or it defaults to the sibling repo.
-    let lib_dir = std::env::var("CODETRACER_NIM_LIB_DIR").unwrap_or_else(|_| "../../codetracer-trace-format-nim".to_string());
+    let lib_dir = std::env::var("CODETRACER_NIM_LIB_DIR").unwrap_or_else(|_| {
+        let manifest_dir = std::path::PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set by Cargo"));
+        manifest_dir
+            .parent()
+            .and_then(|path| path.parent())
+            .map(|path| path.join("codetracer-trace-format-nim"))
+            .unwrap_or_else(|| std::path::PathBuf::from("../../codetracer-trace-format-nim"))
+            .to_string_lossy()
+            .to_string()
+    });
     println!("cargo:rustc-link-search=native={}", lib_dir);
     println!("cargo:rustc-link-lib=static=codetracer_trace_writer");
 

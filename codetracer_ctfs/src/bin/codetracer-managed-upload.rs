@@ -3,8 +3,7 @@ use std::fs;
 use std::process;
 
 use codetracer_ctfs::trace_storage::{
-    CodetracerCiSenderBackend, CodetracerCiSenderConfig, ManagedTraceSender, ManagedUploadKind,
-    ManagedUploadObject,
+    CodetracerCiSenderBackend, CodetracerCiSenderConfig, ManagedTraceSender, ManagedUploadKind, ManagedUploadObject,
 };
 
 fn main() {

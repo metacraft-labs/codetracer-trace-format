@@ -11,5 +11,9 @@ ureq = { version = "2.12", features = ["json"] }
 urlencoding = "2.1"
 zstd = "0.13"
 
+[[bin]]
+name = "codetracer-managed-upload"
+path = "src/bin/codetracer-managed-upload.rs"
+
 [dev-dependencies]
 tempfile = "3"

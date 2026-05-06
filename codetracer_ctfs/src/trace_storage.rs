@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::{BTreeMap, BTreeSet};
 
 pub const TRACE_STORAGE_SCHEMA: &str = "codetracer.trace-storage.v1";
 
@@ -276,6 +277,223 @@ pub struct FinalizeState {
 pub struct ReplicationState {
     pub target_replicas: u8,
     pub completed_replicas: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ManagedUploadKind {
+    McrSlice { slice_index: u32 },
+    MaterializedArtifact { artifact_kind: String },
+    Manifest,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedUploadObject {
+    pub object_key: String,
+    pub local_path: String,
+    pub content_length: u64,
+    pub sha256: String,
+    pub kind: ManagedUploadKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedUploadReceipt {
+    pub object_key: String,
+    pub storage_pool_id: String,
+    pub storage_server_id: String,
+    pub storage_endpoint_uri: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedFinalizeRequest {
+    pub total_slices: u32,
+    pub total_events: u64,
+    pub manifest: TraceStorageManifest,
+    pub idempotency_key: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SenderHealth {
+    pub healthy: bool,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SenderError {
+    pub retryable: bool,
+    pub message: String,
+}
+
+impl SenderError {
+    pub fn retryable(message: impl Into<String>) -> Self {
+        Self {
+            retryable: true,
+            message: message.into(),
+        }
+    }
+
+    pub fn fatal(message: impl Into<String>) -> Self {
+        Self {
+            retryable: false,
+            message: message.into(),
+        }
+    }
+}
+
+pub trait SharedSenderBackend {
+    fn upload_slice(&mut self, object: &ManagedUploadObject) -> Result<ManagedUploadReceipt, SenderError>;
+    fn upload_materialized_artifact(&mut self, object: &ManagedUploadObject) -> Result<ManagedUploadReceipt, SenderError>;
+    fn upload_manifest(&mut self, object: &ManagedUploadObject) -> Result<ManagedUploadReceipt, SenderError>;
+    fn finalize(&mut self, request: &ManagedFinalizeRequest) -> Result<(), SenderError>;
+    fn health(&self) -> SenderHealth;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SenderObjectState {
+    pub object: ManagedUploadObject,
+    pub receipt: Option<ManagedUploadReceipt>,
+    pub upload: UploadState,
+    pub retry: RetryState,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SenderFinalizeState {
+    pub finalized: bool,
+    pub idempotency_key: String,
+    pub attempts: u32,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ManagedSenderState {
+    pub objects: BTreeMap<String, SenderObjectState>,
+    pub finalize: SenderFinalizeState,
+}
+
+pub struct ManagedTraceSender<B: SharedSenderBackend> {
+    backend: B,
+    state: ManagedSenderState,
+    finalized_keys: BTreeSet<String>,
+}
+
+impl<B: SharedSenderBackend> ManagedTraceSender<B> {
+    pub fn new(backend: B, idempotency_key: impl Into<String>) -> Self {
+        Self {
+            backend,
+            state: ManagedSenderState {
+                objects: BTreeMap::new(),
+                finalize: SenderFinalizeState {
+                    finalized: false,
+                    idempotency_key: idempotency_key.into(),
+                    attempts: 0,
+                },
+            },
+            finalized_keys: BTreeSet::new(),
+        }
+    }
+
+    pub fn state(&self) -> &ManagedSenderState {
+        &self.state
+    }
+
+    pub fn backend(&self) -> &B {
+        &self.backend
+    }
+
+    pub fn backend_mut(&mut self) -> &mut B {
+        &mut self.backend
+    }
+
+    pub fn health(&self) -> SenderHealth {
+        self.backend.health()
+    }
+
+    pub fn upload_slice(&mut self, object: ManagedUploadObject) -> Result<ManagedUploadReceipt, SenderError> {
+        self.upload_object(object, |backend, object| backend.upload_slice(object))
+    }
+
+    pub fn upload_materialized_artifact(&mut self, object: ManagedUploadObject) -> Result<ManagedUploadReceipt, SenderError> {
+        self.upload_object(object, |backend, object| backend.upload_materialized_artifact(object))
+    }
+
+    pub fn upload_manifest(&mut self, object: ManagedUploadObject) -> Result<ManagedUploadReceipt, SenderError> {
+        self.upload_object(object, |backend, object| backend.upload_manifest(object))
+    }
+
+    pub fn retry_pending(&mut self) -> Result<Vec<ManagedUploadReceipt>, SenderError> {
+        let pending: Vec<ManagedUploadObject> = self
+            .state
+            .objects
+            .values()
+            .filter(|entry| entry.upload == UploadState::RetryableFailure)
+            .map(|entry| entry.object.clone())
+            .collect();
+        let mut receipts = Vec::with_capacity(pending.len());
+        for object in pending {
+            let receipt = match object.kind {
+                ManagedUploadKind::McrSlice { .. } => self.upload_slice(object)?,
+                ManagedUploadKind::MaterializedArtifact { .. } => self.upload_materialized_artifact(object)?,
+                ManagedUploadKind::Manifest => self.upload_manifest(object)?,
+            };
+            receipts.push(receipt);
+        }
+        Ok(receipts)
+    }
+
+    pub fn finalize(&mut self, request: ManagedFinalizeRequest) -> Result<(), SenderError> {
+        self.state.finalize.attempts += 1;
+        if self.state.finalize.finalized && self.finalized_keys.contains(&request.idempotency_key) {
+            return Ok(());
+        }
+        self.backend.finalize(&request)?;
+        self.state.finalize.finalized = true;
+        self.state.finalize.idempotency_key = request.idempotency_key.clone();
+        self.finalized_keys.insert(request.idempotency_key);
+        Ok(())
+    }
+
+    fn upload_object(
+        &mut self,
+        object: ManagedUploadObject,
+        upload: impl FnOnce(&mut B, &ManagedUploadObject) -> Result<ManagedUploadReceipt, SenderError>,
+    ) -> Result<ManagedUploadReceipt, SenderError> {
+        if let Some(existing) = self.state.objects.get(&object.object_key) {
+            if existing.upload == UploadState::Uploaded {
+                return Ok(existing.receipt.clone().expect("uploaded object has receipt"));
+            }
+        }
+
+        self.state.objects.entry(object.object_key.clone()).or_insert_with(|| SenderObjectState {
+            object: object.clone(),
+            receipt: None,
+            upload: UploadState::Pending,
+            retry: RetryState {
+                attempt: 0,
+                next_retry_at: None,
+                last_error: None,
+            },
+        });
+        self.state.objects.get_mut(&object.object_key).expect("object state exists").upload = UploadState::Uploading;
+
+        match upload(&mut self.backend, &object) {
+            Ok(receipt) => {
+                let entry = self.state.objects.get_mut(&object.object_key).expect("object state exists");
+                entry.receipt = Some(receipt.clone());
+                entry.upload = UploadState::Uploaded;
+                entry.retry.last_error = None;
+                Ok(receipt)
+            }
+            Err(error) => {
+                let entry = self.state.objects.get_mut(&object.object_key).expect("object state exists");
+                entry.retry.attempt += 1;
+                entry.retry.last_error = Some(error.message.clone());
+                entry.upload = if error.retryable {
+                    UploadState::RetryableFailure
+                } else {
+                    UploadState::FatalFailure
+                };
+                Err(error)
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

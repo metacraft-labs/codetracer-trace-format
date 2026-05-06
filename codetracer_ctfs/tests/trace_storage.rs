@@ -1,8 +1,9 @@
 use std::{fs, path::Path};
 
 use codetracer_ctfs::trace_storage::{
-    DataState, FinalizeState, LifecycleState, MaterializedLanguage, StorageMode, TraceSource, TraceStorageConfig, TraceStorageManifest, UploadState,
-    TRACE_STORAGE_SCHEMA,
+    DataState, FinalizeState, LifecycleState, ManagedFinalizeRequest, ManagedTraceSender, ManagedUploadKind, ManagedUploadObject,
+    ManagedUploadReceipt, MaterializedLanguage, SenderError, SenderHealth, SharedSenderBackend, StorageMode, TraceSource, TraceStorageConfig,
+    TraceStorageManifest, UploadState, TRACE_STORAGE_SCHEMA,
 };
 use serde_json::json;
 
@@ -327,6 +328,160 @@ fn test_recorders_use_shared_storage_config_without_private_parsers() {
             }
         }
     }
+}
+
+#[derive(Default)]
+struct TestManagedBackend {
+    fail_next_uploads: usize,
+    fail_next_finalize: usize,
+    uploads: Vec<String>,
+    finalized: Vec<String>,
+}
+
+impl SharedSenderBackend for TestManagedBackend {
+    fn upload_slice(&mut self, object: &ManagedUploadObject) -> Result<ManagedUploadReceipt, SenderError> {
+        self.upload("slice", object)
+    }
+
+    fn upload_materialized_artifact(&mut self, object: &ManagedUploadObject) -> Result<ManagedUploadReceipt, SenderError> {
+        self.upload("materialized", object)
+    }
+
+    fn upload_manifest(&mut self, object: &ManagedUploadObject) -> Result<ManagedUploadReceipt, SenderError> {
+        self.upload("manifest", object)
+    }
+
+    fn finalize(&mut self, request: &ManagedFinalizeRequest) -> Result<(), SenderError> {
+        if self.fail_next_finalize > 0 {
+            self.fail_next_finalize -= 1;
+            return Err(SenderError::retryable("transient finalize failure"));
+        }
+        self.finalized.push(request.idempotency_key.clone());
+        Ok(())
+    }
+
+    fn health(&self) -> SenderHealth {
+        SenderHealth {
+            healthy: true,
+            message: "test backend healthy".to_string(),
+        }
+    }
+}
+
+impl TestManagedBackend {
+    fn upload(&mut self, label: &str, object: &ManagedUploadObject) -> Result<ManagedUploadReceipt, SenderError> {
+        if self.fail_next_uploads > 0 {
+            self.fail_next_uploads -= 1;
+            return Err(SenderError::retryable(format!("transient {label} failure")));
+        }
+        self.uploads.push(object.object_key.clone());
+        Ok(ManagedUploadReceipt {
+            object_key: object.object_key.clone(),
+            storage_pool_id: "shared-local".to_string(),
+            storage_server_id: "local-storage-1".to_string(),
+            storage_endpoint_uri: "local://codetracer-ci/storage-service".to_string(),
+        })
+    }
+}
+
+#[test]
+fn test_shared_sender_retries_and_finalize_is_idempotent() {
+    let mut sender = ManagedTraceSender::new(
+        TestManagedBackend {
+            fail_next_uploads: 2,
+            fail_next_finalize: 1,
+            ..TestManagedBackend::default()
+        },
+        "finalize-m32",
+    );
+
+    let slice = ManagedUploadObject {
+        object_key: "traces/tenant-a/recording-a/slice_0000.ct".to_string(),
+        local_path: "/tmp/slice_0000.ct".to_string(),
+        content_length: 128,
+        sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+        kind: ManagedUploadKind::McrSlice { slice_index: 0 },
+    };
+    let materialized = ManagedUploadObject {
+        object_key: "traces/tenant-a/recording-b/python-materialized-trace-v1.json".to_string(),
+        local_path: "/tmp/python/materialized-trace-v1.json".to_string(),
+        content_length: 256,
+        sha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
+        kind: ManagedUploadKind::MaterializedArtifact {
+            artifact_kind: "materialized_trace_v1".to_string(),
+        },
+    };
+
+    assert!(sender.upload_slice(slice.clone()).unwrap_err().retryable);
+    assert_eq!(sender.state().objects[&slice.object_key].upload, UploadState::RetryableFailure);
+    assert!(Path::new(&sender.state().objects[&slice.object_key].object.local_path).is_absolute());
+
+    assert!(sender.upload_materialized_artifact(materialized.clone()).unwrap_err().retryable);
+    assert_eq!(sender.state().objects[&materialized.object_key].upload, UploadState::RetryableFailure);
+
+    let receipts = sender.retry_pending().unwrap();
+    assert_eq!(receipts.len(), 2);
+    assert_eq!(sender.state().objects[&slice.object_key].upload, UploadState::Uploaded);
+    assert_eq!(sender.state().objects[&materialized.object_key].upload, UploadState::Uploaded);
+
+    let manifest = TraceStorageManifest::from_json(&fixture("manifest.split_ctfs.json")).unwrap();
+    let finalize = ManagedFinalizeRequest {
+        total_slices: 1,
+        total_events: 10,
+        manifest,
+        idempotency_key: "finalize-m32".to_string(),
+    };
+    assert!(sender.finalize(finalize.clone()).unwrap_err().retryable);
+    sender.finalize(finalize.clone()).unwrap();
+    sender.finalize(finalize).unwrap();
+
+    assert!(sender.state().finalize.finalized);
+    assert_eq!(sender.backend().uploads.len(), 2);
+    assert_eq!(sender.backend().finalized, ["finalize-m32"]);
+}
+
+#[test]
+fn test_no_recorder_private_sender_or_static_config_parser() {
+    test_recorders_use_shared_storage_config_without_private_parsers();
+
+    let workspace = Path::new("..");
+    let recorder_roots = [
+        "../codetracer-native-recorder",
+        "../codetracer-python-recorder",
+        "../codetracer-ruby-recorder",
+        "../codetracer-js-recorder",
+    ];
+    let forbidden = [
+        "struct ManagedTraceSender",
+        "class ManagedTraceSender",
+        "type ManagedTraceSender",
+        "trait SharedSenderBackend",
+        "interface SharedSenderBackend",
+        "requestSliceUploadUrl(",
+        "finalizeUploadSession(",
+    ];
+    for root in recorder_roots {
+        for entry in walk_files(workspace.join(root)) {
+            let Some(ext) = entry.extension().and_then(|value| value.to_str()) else {
+                continue;
+            };
+            if !matches!(ext, "rs" | "nim" | "py" | "rb" | "ts" | "js") {
+                continue;
+            }
+            let text = fs::read_to_string(&entry).unwrap();
+            for token in forbidden {
+                assert!(
+                    !text.contains(token),
+                    "{} must not define private managed sender lifecycle/static API parser token {token}",
+                    entry.display()
+                );
+            }
+        }
+    }
+
+    let shared = fs::read_to_string(workspace.join("codetracer_ctfs/src/trace_storage.rs")).unwrap();
+    assert!(shared.contains("trait SharedSenderBackend"));
+    assert!(shared.contains("ManagedTraceSender"));
 }
 
 fn walk_files(root: impl AsRef<Path>) -> Vec<std::path::PathBuf> {

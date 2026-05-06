@@ -1,5 +1,6 @@
 use std::{fs, path::Path};
 
+use codetracer_ctfs::trace_storage::LogicalCtfsBlockReader;
 use codetracer_ctfs::trace_storage::{
     CodetracerCiSenderBackend, CodetracerCiSenderConfig, DataState, FinalizeState, LifecycleState, ManagedFinalizeRequest, ManagedTraceSender,
     ManagedUploadKind, ManagedUploadObject, ManagedUploadReceipt, MaterializedLanguage, PlacedObject, Placement, ReplayStart, ReplicationState,
@@ -100,6 +101,82 @@ fn test_shared_manifest_models_all_trace_source_variants() {
 
         let reparsed = TraceStorageManifest::from_json(&manifest.to_json_pretty().unwrap()).unwrap();
         assert_eq!(reparsed, manifest, "{label}");
+    }
+}
+
+#[test]
+fn test_manifest_models_split_files_and_block_shards_orthogonally() {
+    let single = TraceStorageManifest::from_json(&fixture("manifest.single_ctfs.json")).unwrap();
+    let split = TraceStorageManifest::from_json(&fixture("manifest.split_ctfs.json")).unwrap();
+    let sharded_single = sharded_manifest("single-sharded", 1);
+    let sharded_split = sharded_manifest("split-sharded", 2);
+
+    assert_eq!(single.source.segment_count(), 1);
+    assert_eq!(split.source.segment_count(), 2);
+    assert_eq!(sharded_single.source.segment_count(), 1);
+    assert_eq!(sharded_split.source.segment_count(), 2);
+
+    let cases = [
+        (&single, 0, 7, "ctfs-single"),
+        (&split, 1, 7, "ctfs-split-1"),
+        (&sharded_single, 0, 7, "single-sharded-segment-0-shard-low-a"),
+        (&sharded_split, 1, 70, "split-sharded-segment-1-shard-high-a"),
+    ];
+    for (manifest, segment, block, expected_object) in cases {
+        let location = manifest.source.resolve_logical_ctfs_block(segment, block).unwrap();
+        assert_eq!(location.segment_index, segment);
+        assert_eq!(location.block_id, block);
+        assert_eq!(location.replicas[0].object_id, expected_object);
+    }
+
+    let mut reader = TestLogicalReader {
+        fail_first_object_id: Some("split-sharded-segment-1-shard-high-a".to_string()),
+        calls: Vec::new(),
+    };
+    let block = sharded_split.read_logical_ctfs_block(1, 70, &mut reader).unwrap();
+    assert_eq!(block, logical_block_bytes("split-sharded-segment-1-shard-high-b", 70));
+    assert_eq!(
+        reader.calls,
+        [
+            ("split-sharded-segment-1-shard-high-a".to_string(), 70),
+            ("split-sharded-segment-1-shard-high-b".to_string(), 70)
+        ]
+    );
+
+    let materialized = TraceStorageManifest::from_json(&fixture("manifest.python_materialized.json")).unwrap();
+    assert!(materialized.source.resolve_logical_ctfs_block(0, 0).is_err());
+}
+
+#[test]
+fn test_shared_manifest_models_materialized_artifacts_without_ctfs_shards() {
+    for (file, language) in [
+        ("manifest.python_materialized.json", MaterializedLanguage::Python),
+        ("manifest.ruby_materialized.json", MaterializedLanguage::Ruby),
+        ("manifest.javascript_materialized.json", MaterializedLanguage::Javascript),
+    ] {
+        let manifest = TraceStorageManifest::from_json(&fixture(file)).unwrap();
+        assert_eq!(manifest.source.segment_count(), 0);
+        match &manifest.source {
+            TraceSource::MaterializedArtifact {
+                language: parsed,
+                artifact,
+                artifacts,
+                ..
+            } => {
+                assert_eq!(*parsed, language);
+                assert_eq!(artifact.placement.pool, "artifacts-hot");
+                assert_eq!(artifact.data_state, DataState::Retained);
+                assert!(artifacts.is_empty(), "{file} fixture intentionally has no CTFS or shard artifact list");
+            }
+            _ => panic!("{file} should be a materialized source"),
+        }
+        let json = manifest.to_json_pretty().unwrap();
+        assert!(!json.contains("shards"));
+        assert!(!json.contains("geid_start"));
+        assert!(!json.contains("block_start"));
+        let reparsed = TraceStorageManifest::from_json(&json).unwrap();
+        assert_eq!(reparsed.replication.target_replicas, manifest.replication.target_replicas);
+        assert_eq!(reparsed.retention, DataState::Retained);
     }
 }
 
@@ -536,6 +613,99 @@ fn materialized_upload_object(object_key: &str, artifact_kind: &str) -> ManagedU
     }
 }
 
+struct TestLogicalReader {
+    fail_first_object_id: Option<String>,
+    calls: Vec<(String, u64)>,
+}
+
+impl LogicalCtfsBlockReader for TestLogicalReader {
+    fn read_block(&mut self, object: &PlacedObject, block_id: u64) -> Result<Vec<u8>, SenderError> {
+        self.calls.push((object.object_id.clone(), block_id));
+        if self.fail_first_object_id.as_deref() == Some(object.object_id.as_str()) {
+            self.fail_first_object_id = None;
+            return Err(SenderError::retryable("replica unavailable"));
+        }
+        Ok(logical_block_bytes(&object.object_id, block_id))
+    }
+}
+
+fn logical_block_bytes(object_id: &str, block_id: u64) -> Vec<u8> {
+    format!("{object_id}:{block_id}").into_bytes()
+}
+
+fn sharded_manifest(recording_id: &str, segment_count: u32) -> TraceStorageManifest {
+    let segments = (0..segment_count)
+        .map(|segment_index| codetracer_ctfs::trace_storage::ShardedCtfsSegment {
+            index: segment_index,
+            geid_start: 1 + u64::from(segment_index) * 100,
+            geid_end: 100 + u64::from(segment_index) * 100,
+            shards: vec![
+                codetracer_ctfs::trace_storage::CtfsShard {
+                    shard_index: 0,
+                    block_start: 0,
+                    block_end: 63,
+                    replicas: vec![
+                        placed_shard(recording_id, segment_index, "low", "a"),
+                        placed_shard(recording_id, segment_index, "low", "b"),
+                    ],
+                },
+                codetracer_ctfs::trace_storage::CtfsShard {
+                    shard_index: 1,
+                    block_start: 64,
+                    block_end: 127,
+                    replicas: vec![
+                        placed_shard(recording_id, segment_index, "high", "a"),
+                        placed_shard(recording_id, segment_index, "high", "b"),
+                    ],
+                },
+            ],
+        })
+        .collect();
+    TraceStorageManifest {
+        schema: TRACE_STORAGE_SCHEMA.to_string(),
+        recording_id: recording_id.to_string(),
+        service: ServiceIdentity {
+            service_name: "checkout-api".to_string(),
+            environment: "test".to_string(),
+            instance_id: "checkout-1".to_string(),
+            tenant_id: "tenant-a".to_string(),
+        },
+        source: TraceSource::ShardedSplitCtfs { segments },
+        lifecycle: LifecycleState::Finalized,
+        retry: RetryState {
+            attempt: 0,
+            next_retry_at: None,
+            last_error: None,
+        },
+        finalize: FinalizeState {
+            finalized: true,
+            finalized_at: Some("2026-05-06T00:00:00Z".to_string()),
+            idempotency_key: format!("finalize-{recording_id}"),
+        },
+        retention: DataState::Retained,
+        replication: ReplicationState {
+            target_replicas: 2,
+            completed_replicas: 2,
+        },
+    }
+}
+
+fn placed_shard(recording_id: &str, segment_index: u32, range: &str, replica: &str) -> PlacedObject {
+    let object_id = format!("{recording_id}-segment-{segment_index}-shard-{range}-{replica}");
+    PlacedObject {
+        object_id: object_id.clone(),
+        uri: format!("ctfs://store-{replica}/{recording_id}/{object_id}.cts"),
+        size_bytes: 4096,
+        sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+        placement: Placement {
+            pool: "ctfs-hot".to_string(),
+            server_id: format!("store-{replica}"),
+        },
+        upload: UploadState::Uploaded,
+        data_state: DataState::Retained,
+    }
+}
+
 #[test]
 fn test_codetracer_ci_backend_refuses_complete_finalize_without_complete_mcr_slices() {
     let config = CodetracerCiSenderConfig {
@@ -551,14 +721,14 @@ fn test_codetracer_ci_backend_refuses_complete_finalize_without_complete_mcr_sli
 
     let single_manifest = TraceStorageManifest::from_json(&fixture("manifest.single_ctfs.json")).unwrap();
     let single_request = ManagedFinalizeRequest {
-        total_slices: 1,
+        total_slices: 2,
         total_events: 10,
         manifest: single_manifest,
         idempotency_key: "finalize-m32-single".to_string(),
     };
     let error = backend.finalize(&single_request).unwrap_err();
     assert!(!error.retryable);
-    assert!(error.message.contains("complete MCR slice metadata"));
+    assert!(error.message.contains("exactly one slice"));
 
     let mut split_manifest = TraceStorageManifest::from_json(&fixture("manifest.split_ctfs.json")).unwrap();
     let TraceSource::SplitCtfs { segments } = &mut split_manifest.source else {

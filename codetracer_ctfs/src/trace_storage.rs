@@ -179,6 +179,95 @@ pub enum TraceSource {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LogicalCtfsBlockLocation<'a> {
+    pub segment_index: u32,
+    pub block_id: u64,
+    pub replicas: Vec<&'a PlacedObject>,
+}
+
+impl TraceSource {
+    pub fn segment_count(&self) -> usize {
+        match self {
+            TraceSource::SingleCtfs { .. } => 1,
+            TraceSource::SplitCtfs { segments } => segments.len(),
+            TraceSource::ShardedSplitCtfs { segments } => segments.len(),
+            TraceSource::MaterializedArtifact { .. } => 0,
+        }
+    }
+
+    pub fn resolve_logical_ctfs_block(&self, segment_index: u32, block_id: u64) -> Result<LogicalCtfsBlockLocation<'_>, SenderError> {
+        match self {
+            TraceSource::SingleCtfs { file } => {
+                if segment_index != 0 {
+                    return Err(SenderError::fatal(format!("single CTFS trace has no segment {segment_index}")));
+                }
+                Ok(LogicalCtfsBlockLocation {
+                    segment_index,
+                    block_id,
+                    replicas: vec![file],
+                })
+            }
+            TraceSource::SplitCtfs { segments } => {
+                let segment = segments
+                    .iter()
+                    .find(|segment| segment.index == segment_index)
+                    .ok_or_else(|| SenderError::fatal(format!("split CTFS trace has no segment {segment_index}")))?;
+                Ok(LogicalCtfsBlockLocation {
+                    segment_index,
+                    block_id,
+                    replicas: vec![&segment.file],
+                })
+            }
+            TraceSource::ShardedSplitCtfs { segments } => {
+                let segment = segments
+                    .iter()
+                    .find(|segment| segment.index == segment_index)
+                    .ok_or_else(|| SenderError::fatal(format!("sharded CTFS trace has no segment {segment_index}")))?;
+                let shard = segment
+                    .shards
+                    .iter()
+                    .find(|shard| block_id >= shard.block_start && block_id <= shard.block_end)
+                    .ok_or_else(|| SenderError::fatal(format!("sharded CTFS segment {segment_index} has no shard for block {block_id}")))?;
+                if shard.replicas.is_empty() {
+                    return Err(SenderError::fatal(format!(
+                        "sharded CTFS segment {segment_index} block {block_id} has no replicas"
+                    )));
+                }
+                Ok(LogicalCtfsBlockLocation {
+                    segment_index,
+                    block_id,
+                    replicas: shard.replicas.iter().collect(),
+                })
+            }
+            TraceSource::MaterializedArtifact { .. } => Err(SenderError::fatal("materialized trace artifacts do not expose CTFS block locations")),
+        }
+    }
+}
+
+pub trait LogicalCtfsBlockReader {
+    fn read_block(&mut self, object: &PlacedObject, block_id: u64) -> Result<Vec<u8>, SenderError>;
+}
+
+impl TraceStorageManifest {
+    pub fn read_logical_ctfs_block(
+        &self,
+        segment_index: u32,
+        block_id: u64,
+        reader: &mut impl LogicalCtfsBlockReader,
+    ) -> Result<Vec<u8>, SenderError> {
+        let location = self.source.resolve_logical_ctfs_block(segment_index, block_id)?;
+        let mut last_error = None;
+        for replica in location.replicas {
+            match reader.read_block(replica, block_id) {
+                Ok(bytes) => return Ok(bytes),
+                Err(error) => last_error = Some(error),
+            }
+        }
+        Err(last_error.unwrap_or_else(|| SenderError::retryable("no CTFS block replicas were readable")))
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MaterializedLanguage {
@@ -818,6 +907,12 @@ fn validate_complete_finalize_request(request: &ManagedFinalizeRequest) -> Resul
             }
             Ok(())
         }
+        TraceSource::SingleCtfs { file } => {
+            if request.total_slices != 1 {
+                return Err(SenderError::fatal("single CTFS finalize must report exactly one slice"));
+            }
+            validate_complete_object(file, "single CTFS file")
+        }
         TraceSource::SplitCtfs { segments } => {
             if request.total_slices == 0 || segments.is_empty() {
                 return Err(SenderError::fatal("refusing complete finalize without MCR slice metadata"));
@@ -840,8 +935,49 @@ fn validate_complete_finalize_request(request: &ManagedFinalizeRequest) -> Resul
             }
             Ok(())
         }
-        TraceSource::SingleCtfs { .. } | TraceSource::ShardedSplitCtfs { .. } => {
-            Err(SenderError::fatal("refusing complete finalize without complete MCR slice metadata"))
+        TraceSource::ShardedSplitCtfs { segments } => {
+            if request.total_slices == 0 || segments.is_empty() {
+                return Err(SenderError::fatal("refusing complete finalize without sharded MCR segment metadata"));
+            }
+            if segments.len() != request.total_slices as usize {
+                return Err(SenderError::fatal(format!(
+                    "refusing complete finalize with incomplete sharded MCR segment metadata: expected {} segments, got {}",
+                    request.total_slices,
+                    segments.len()
+                )));
+            }
+            for (expected_index, segment) in segments.iter().enumerate() {
+                if segment.index != expected_index as u32 {
+                    return Err(SenderError::fatal(format!(
+                        "refusing complete finalize with out-of-order sharded MCR segment metadata: expected index {}, got {}",
+                        expected_index, segment.index
+                    )));
+                }
+                if segment.shards.is_empty() {
+                    return Err(SenderError::fatal(format!(
+                        "refusing complete finalize with sharded MCR segment {} missing shard metadata",
+                        segment.index
+                    )));
+                }
+                for shard in &segment.shards {
+                    if shard.block_end < shard.block_start {
+                        return Err(SenderError::fatal(format!(
+                            "refusing complete finalize with invalid shard block range {}..{}",
+                            shard.block_start, shard.block_end
+                        )));
+                    }
+                    if shard.replicas.is_empty() {
+                        return Err(SenderError::fatal(format!(
+                            "refusing complete finalize with segment {} shard {} missing replicas",
+                            segment.index, shard.shard_index
+                        )));
+                    }
+                    for replica in &shard.replicas {
+                        validate_complete_object(replica, "MCR shard replica")?;
+                    }
+                }
+            }
+            Ok(())
         }
     }
 }
@@ -982,6 +1118,48 @@ fn monolith_recording_manifest(request: &ManagedFinalizeRequest, config: &Codetr
                 "contentLength": segment.file.size_bytes,
                 "sha256": segment.file.sha256,
                 "contentHash": segment.file.sha256,
+            })).collect::<Vec<_>>(),
+            "materializedTraceArtifacts": [],
+            "totalSlices": request.total_slices,
+            "totalEvents": request.total_events,
+            "createdAt": now,
+            "finalizedAt": now,
+            "manifestS3Key": manifest_key,
+            "recordingMode": config.recording_mode,
+        }),
+        TraceSource::ShardedSplitCtfs { segments } => serde_json::json!({
+            "kind": "mcr_slices",
+            "uploadCompletionState": "complete",
+            "serviceIdentity": service,
+            "instanceIdentity": instance,
+            "timeRange": {
+                "geidStart": segments.iter().map(|segment| segment.geid_start).min(),
+                "geidEnd": segments.iter().map(|segment| segment.geid_end).max(),
+            },
+            "retentionStatus": "available",
+            "missingSliceKeys": [],
+            "mcrSlices": [],
+            "shardedMcrSegments": segments.iter().map(|segment| serde_json::json!({
+                "segmentIndex": segment.index,
+                "order": segment.index,
+                "geidStart": segment.geid_start,
+                "geidEnd": segment.geid_end,
+                "shards": segment.shards.iter().map(|shard| serde_json::json!({
+                    "shardIndex": shard.shard_index,
+                    "blockStart": shard.block_start,
+                    "blockEnd": shard.block_end,
+                    "replicas": shard.replicas.iter().enumerate().map(|(replica_index, replica)| serde_json::json!({
+                        "replicaIndex": replica_index,
+                        "objectKey": replica.uri.trim_start_matches("local://"),
+                        "storagePoolId": replica.placement.pool,
+                        "storageServerId": replica.placement.server_id,
+                        "storageEndpointUri": replica.uri,
+                        "contentLength": replica.size_bytes,
+                        "contentHash": replica.sha256,
+                        "uploadCompletionState": "complete",
+                        "retentionStatus": "available",
+                    })).collect::<Vec<_>>(),
+                })).collect::<Vec<_>>(),
             })).collect::<Vec<_>>(),
             "materializedTraceArtifacts": [],
             "totalSlices": request.total_slices,

@@ -682,6 +682,124 @@ pub trait DirectStorageTransport {
     fn health(&self) -> SenderHealth;
 }
 
+#[derive(Debug)]
+pub struct HttpDirectStorageTransport {
+    control_plane_base_url: String,
+    tenant_id: String,
+    organization_id: Option<String>,
+    agent: ureq::Agent,
+}
+
+impl HttpDirectStorageTransport {
+    pub fn new(control_plane_base_url: impl Into<String>, tenant_id: impl Into<String>, organization_id: Option<String>) -> Self {
+        Self {
+            control_plane_base_url: control_plane_base_url.into().trim_end_matches('/').to_string(),
+            tenant_id: tenant_id.into(),
+            organization_id,
+            agent: ureq::AgentBuilder::new().timeout(Duration::from_secs(10)).build(),
+        }
+    }
+
+    pub fn from_trace_storage_config(config: &TraceStorageConfig) -> Result<Self, SenderError> {
+        let control_plane_base_url = match &config.mode {
+            StorageMode::DirectStorage { control_plane_url } => control_plane_url.clone(),
+            StorageMode::ManagedUpload { .. } => {
+                return Err(SenderError::fatal("HttpDirectStorageTransport requires direct_storage mode"));
+            }
+        };
+        Ok(Self::new(
+            control_plane_base_url,
+            config.service.tenant_id.clone(),
+            config.organization_id.clone().or_else(|| config.service.organization_id.clone()),
+        ))
+    }
+}
+
+impl DirectStorageTransport for HttpDirectStorageTransport {
+    fn upload_direct(&mut self, server: &StorageServer, object: &ManagedUploadObject, bytes: &[u8]) -> Result<ManagedUploadReceipt, SenderError> {
+        let url = format!(
+            "{}/objects/{}",
+            server.endpoint.base_url.trim_end_matches('/'),
+            urlencoding::encode(&object.object_key)
+        );
+        self.agent
+            .put(&url)
+            .set("Content-Type", content_type_for_upload_kind(&object.kind))
+            .set("Content-Length", &bytes.len().to_string())
+            .send_bytes(bytes)
+            .map_err(sender_error_from_ureq)?;
+
+        Ok(ManagedUploadReceipt {
+            object_key: object.object_key.clone(),
+            storage_pool_id: server.pool.clone(),
+            storage_server_id: server.id.clone(),
+            storage_endpoint_uri: server.endpoint.base_url.trim_end_matches('/').to_string(),
+        })
+    }
+
+    fn report_direct_finalize(&mut self, request: &ManagedFinalizeRequest, lease: &EnterpriseLeaseGrant) -> Result<(), SenderError> {
+        let session = UploadSession {
+            session_id: request.manifest.recording_id.clone(),
+            s3_key_prefix: format!("traces/{}/{}", self.tenant_id, request.manifest.recording_id),
+            storage_pool_id: None,
+            storage_server_id: None,
+            storage_endpoint_uri: None,
+        };
+        let config = CodetracerCiSenderConfig {
+            base_url: self.control_plane_base_url.clone(),
+            tenant_id: self.tenant_id.clone(),
+            bearer_token: String::new(),
+            platform: "native".to_string(),
+            recording_mode: Some("observability".to_string()),
+            service_name: request.manifest.service.service_name.clone(),
+            instance_id: Some(request.manifest.service.instance_id.clone()),
+        };
+        let recording_manifest = monolith_recording_manifest(request, &config, &session);
+        let manifest_s3_key = recording_manifest.get("manifestS3Key").and_then(|value| value.as_str()).unwrap_or("");
+        let body = serde_json::json!({
+            "tenantId": self.tenant_id,
+            "organizationId": self.organization_id,
+            "leaseId": lease.lease_id,
+            "traceIdentity": request.manifest.recording_id,
+            "totalSlices": request.total_slices,
+            "totalEvents": request.total_events,
+            "manifestS3Key": manifest_s3_key,
+            "recordingManifest": recording_manifest,
+        });
+        let url = format!(
+            "{}/api/v1/direct-storage/traces/{}/finalize",
+            self.control_plane_base_url, request.manifest.recording_id
+        );
+        self.agent
+            .post(&url)
+            .set("X-CodeTracer-Enterprise-Lease-Id", &lease.lease_id)
+            .send_json(body)
+            .map(|_| ())
+            .map_err(sender_error_from_ureq)
+    }
+
+    fn health(&self) -> SenderHealth {
+        match self.agent.get(&format!("{}/healthz", self.control_plane_base_url)).call() {
+            Ok(_) => SenderHealth {
+                healthy: true,
+                message: "direct storage control plane reachable".to_string(),
+            },
+            Err(error) => SenderHealth {
+                healthy: false,
+                message: error.to_string(),
+            },
+        }
+    }
+}
+
+fn content_type_for_upload_kind(kind: &ManagedUploadKind) -> &'static str {
+    match kind {
+        ManagedUploadKind::McrSlice { .. } => "application/vnd.codetracer.ctfs",
+        ManagedUploadKind::MaterializedArtifact { .. } => "application/vnd.codetracer.materialized-trace+json",
+        ManagedUploadKind::Manifest => "application/vnd.codetracer.recording-manifest+json",
+    }
+}
+
 pub struct DirectStorageSenderBackend<T: DirectStorageTransport, L: EnterpriseLeaseChecker> {
     config: TraceStorageConfig,
     transport: T,
@@ -1365,6 +1483,23 @@ fn materialized_artifact_kind(object_id: &str) -> &'static str {
     }
 }
 
+fn object_key_for_placed_object(object: &PlacedObject) -> String {
+    if object.object_id.trim().is_empty() {
+        object.uri.trim_start_matches("local://").to_string()
+    } else {
+        object.object_id.clone()
+    }
+}
+
+fn storage_endpoint_uri_for_placed_object(object: &PlacedObject) -> String {
+    let uri = object.uri.trim_end_matches('/');
+    let object_key = object_key_for_placed_object(object);
+    let object_key = object_key.trim_start_matches('/');
+    let suffix = format!("/{object_key}");
+
+    uri.strip_suffix(&suffix).unwrap_or(uri).to_string()
+}
+
 fn monolith_recording_manifest(request: &ManagedFinalizeRequest, config: &CodetracerCiSenderConfig, session: &UploadSession) -> serde_json::Value {
     let now = "1970-01-01T00:00:00Z";
     let service = serde_json::json!({
@@ -1476,10 +1611,10 @@ fn monolith_recording_manifest(request: &ManagedFinalizeRequest, config: &Codetr
                     "blockEnd": shard.block_end,
                     "replicas": shard.replicas.iter().enumerate().map(|(replica_index, replica)| serde_json::json!({
                         "replicaIndex": replica_index,
-                        "objectKey": replica.uri.trim_start_matches("local://"),
+                        "objectKey": object_key_for_placed_object(replica),
                         "storagePoolId": replica.placement.pool,
                         "storageServerId": replica.placement.server_id,
-                        "storageEndpointUri": replica.uri,
+                        "storageEndpointUri": storage_endpoint_uri_for_placed_object(replica),
                         "contentLength": replica.size_bytes,
                         "contentHash": replica.sha256,
                         "uploadCompletionState": "complete",

@@ -3,16 +3,18 @@ use std::{
     io::{Read, Write},
     net::TcpListener,
     path::Path,
+    sync::mpsc,
     thread,
+    time::Duration,
 };
 
 use codetracer_ctfs::trace_storage::LogicalCtfsBlockReader;
 use codetracer_ctfs::trace_storage::{
     CodetracerCiSenderBackend, CodetracerCiSenderConfig, DataState, DirectStorageSenderBackend, DirectStorageTransport, EnterpriseLeaseGrant,
-    FinalizeState, HttpEnterpriseLeaseChecker, LifecycleState, ManagedFinalizeRequest, ManagedTraceSender, ManagedUploadKind, ManagedUploadObject,
-    ManagedUploadReceipt, MaterializedLanguage, PlacedObject, Placement, ReplayStart, ReplicationState, RetryState, SenderError, SenderHealth,
-    ServiceIdentity, SharedSenderBackend, StorageMode, StorageServer, TraceSource, TraceStorageConfig, TraceStorageManifest, UploadState,
-    TRACE_STORAGE_SCHEMA,
+    FinalizeState, HttpDirectStorageTransport, HttpEnterpriseLeaseChecker, LifecycleState, ManagedFinalizeRequest, ManagedTraceSender,
+    ManagedUploadKind, ManagedUploadObject, ManagedUploadReceipt, MaterializedLanguage, PlacedObject, Placement, ReplayStart, ReplicationState,
+    RetryState, SenderError, SenderHealth, ServiceIdentity, SharedSenderBackend, StorageMode, StorageServer, TraceSource, TraceStorageConfig,
+    TraceStorageManifest, UploadState, TRACE_STORAGE_SCHEMA,
 };
 use serde_json::json;
 
@@ -584,6 +586,61 @@ fn test_direct_storage_valid_enterprise_lease_allows_mcr_and_materialized_upload
     server.join().unwrap();
 }
 
+#[test]
+fn test_http_direct_storage_transport_uploads_bytes_and_reports_metadata() {
+    let (lease_url, lease_server) = start_fake_lease_server(200);
+    let (storage_base_url, storage_rx, storage_server) = start_fake_storage_node();
+    let (control_base_url, control_rx, control_plane) = start_fake_direct_finalize_control_plane(storage_base_url.clone());
+    std::env::set_var("CODETRACER_ENTERPRISE_LEASE_TOKEN", "test-token");
+
+    let mut config = TraceStorageConfig::from_json(&fixture("storage_config.full.json")).unwrap();
+    config.enterprise_lease.as_mut().unwrap().endpoint_url = lease_url;
+    if let StorageMode::DirectStorage { control_plane_url } = &mut config.mode {
+        *control_plane_url = control_base_url.clone();
+    }
+    config.storage_servers[0].endpoint.base_url = storage_base_url.clone();
+    config.organization_id = Some("org-direct-http".to_string());
+    config.service.tenant_id = "tenant-direct-http".to_string();
+    config.service.organization_id = Some("org-direct-http".to_string());
+
+    let transport = HttpDirectStorageTransport::from_trace_storage_config(&config).unwrap();
+    let mut sender = DirectStorageSenderBackend::new(config, transport, HttpEnterpriseLeaseChecker::new()).unwrap();
+
+    let mcr = tempfile::NamedTempFile::new().unwrap();
+    fs::write(mcr.path(), b"mcr-http-bytes").unwrap();
+    let object = ManagedUploadObject {
+        object_key: "traces/tenant-direct-http/recording-http/slice_0000.ct".to_string(),
+        local_path: mcr.path().to_string_lossy().to_string(),
+        content_length: 14,
+        sha256: "abababababababababababababababababababababababababababababababab".to_string(),
+        kind: ManagedUploadKind::McrSlice { slice_index: 0 },
+    };
+
+    let receipt = sender.upload_slice(&object).unwrap();
+    assert_eq!(receipt.object_key, object.object_key);
+    assert_eq!(storage_rx.recv_timeout(Duration::from_secs(2)).unwrap(), b"mcr-http-bytes");
+
+    sender
+        .finalize(&ManagedFinalizeRequest {
+            total_slices: 1,
+            total_events: 7,
+            manifest: direct_http_sharded_manifest(&receipt),
+            idempotency_key: "finalize-http-direct".to_string(),
+        })
+        .unwrap();
+    let finalize_body = control_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert!(finalize_body.contains(r#""tenantId":"tenant-direct-http""#));
+    assert!(finalize_body.contains(r#""organizationId":"org-direct-http""#));
+    assert!(finalize_body.contains(r#""leaseId":"lease-m38""#));
+    assert!(finalize_body.contains(r#""recording_id"#) || finalize_body.contains(r#""recordingManifest""#));
+    assert!(finalize_body.contains("traces/tenant-direct-http/recording-http/slice_0000.ct"));
+    assert!(finalize_body.contains("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"));
+
+    lease_server.join().unwrap();
+    storage_server.join().unwrap();
+    control_plane.join().unwrap();
+}
+
 fn start_fake_lease_server(status: u16) -> (String, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}/api/v1/license/sessions/checkout", listener.local_addr().unwrap());
@@ -606,6 +663,142 @@ fn start_fake_lease_server(status: u16) -> (String, thread::JoinHandle<()>) {
         stream.write_all(response.as_bytes()).unwrap();
     });
     (url, handle)
+}
+
+fn start_fake_storage_node() -> (String, mpsc::Receiver<Vec<u8>>, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (tx, rx) = mpsc::channel();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let (request_text, body) = read_http_request(&mut stream);
+        assert!(request_text.contains("PUT /objects/traces%2Ftenant-direct-http%2Frecording-http%2Fslice_0000.ct"));
+        tx.send(body).unwrap();
+        stream
+            .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            .unwrap();
+    });
+    (url, rx, handle)
+}
+
+fn start_fake_direct_finalize_control_plane(expected_storage_endpoint_uri: String) -> (String, mpsc::Receiver<String>, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (tx, rx) = mpsc::channel();
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let (request_text, body) = read_http_request(&mut stream);
+        assert!(request_text.contains("POST /api/v1/direct-storage/traces/recording-http/finalize"));
+        assert!(request_text.contains("X-CodeTracer-Enterprise-Lease-Id: lease-m38"));
+        let body_text = String::from_utf8(body).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&body_text).unwrap();
+        let replica = &value["recordingManifest"]["shardedMcrSegments"][0]["shards"][0]["replicas"][0];
+        assert_eq!(
+            replica["objectKey"].as_str().unwrap(),
+            "traces/tenant-direct-http/recording-http/slice_0000.ct"
+        );
+        assert!(
+            replica["objectKey"]
+                .as_str()
+                .unwrap()
+                .starts_with("traces/tenant-direct-http/recording-http/"),
+            "direct finalize objectKey must be scoped under the selected upload session"
+        );
+        assert_eq!(
+            replica["storageEndpointUri"].as_str().unwrap(),
+            expected_storage_endpoint_uri.trim_end_matches('/')
+        );
+        assert_eq!(replica["storagePoolId"].as_str().unwrap(), "ctfs-hot");
+        assert_eq!(replica["storageServerId"].as_str().unwrap(), "store-a");
+        tx.send(body_text).unwrap();
+        stream
+            .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            .unwrap();
+    });
+    (url, rx, handle)
+}
+
+fn read_http_request(stream: &mut impl Read) -> (String, Vec<u8>) {
+    let mut bytes = Vec::new();
+    let mut buffer = [0_u8; 4096];
+    loop {
+        let read = stream.read(&mut buffer).unwrap();
+        if read == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&buffer[..read]);
+        if let Some(header_end) = find_subsequence(&bytes, b"\r\n\r\n") {
+            let header = String::from_utf8_lossy(&bytes[..header_end]).to_string();
+            let content_length = header
+                .lines()
+                .find_map(|line| line.strip_prefix("Content-Length: "))
+                .and_then(|value| value.trim().parse::<usize>().ok())
+                .unwrap_or(0);
+            let body_start = header_end + 4;
+            if bytes.len() >= body_start + content_length {
+                return (header, bytes[body_start..body_start + content_length].to_vec());
+            }
+        }
+    }
+    (String::from_utf8_lossy(&bytes).to_string(), Vec::new())
+}
+
+fn find_subsequence(bytes: &[u8], needle: &[u8]) -> Option<usize> {
+    bytes.windows(needle.len()).position(|window| window == needle)
+}
+
+fn direct_http_sharded_manifest(receipt: &ManagedUploadReceipt) -> TraceStorageManifest {
+    TraceStorageManifest {
+        schema: TRACE_STORAGE_SCHEMA.to_string(),
+        recording_id: "recording-http".to_string(),
+        service: ServiceIdentity {
+            service_name: "checkout-http-direct".to_string(),
+            environment: "test".to_string(),
+            instance_id: "checkout-http-direct-1".to_string(),
+            tenant_id: "tenant-direct-http".to_string(),
+            organization_id: Some("org-direct-http".to_string()),
+        },
+        source: TraceSource::ShardedSplitCtfs {
+            segments: vec![codetracer_ctfs::trace_storage::ShardedCtfsSegment {
+                index: 0,
+                geid_start: 1,
+                geid_end: 2,
+                shards: vec![codetracer_ctfs::trace_storage::CtfsShard {
+                    shard_index: 0,
+                    block_start: 0,
+                    block_end: 7,
+                    replicas: vec![PlacedObject {
+                        object_id: receipt.object_key.clone(),
+                        uri: format!("{}/{}", receipt.storage_endpoint_uri, receipt.object_key),
+                        size_bytes: 14,
+                        sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
+                        placement: Placement {
+                            pool: receipt.storage_pool_id.clone(),
+                            server_id: receipt.storage_server_id.clone(),
+                        },
+                        upload: UploadState::Uploaded,
+                        data_state: DataState::Retained,
+                    }],
+                }],
+            }],
+        },
+        lifecycle: LifecycleState::Finalized,
+        retry: RetryState {
+            attempt: 0,
+            next_retry_at: None,
+            last_error: None,
+        },
+        finalize: FinalizeState {
+            finalized: true,
+            finalized_at: Some("2026-05-07T12:00:00Z".to_string()),
+            idempotency_key: "finalize-http-direct".to_string(),
+        },
+        retention: DataState::Retained,
+        replication: ReplicationState {
+            target_replicas: 1,
+            completed_replicas: 1,
+        },
+    }
 }
 
 #[test]

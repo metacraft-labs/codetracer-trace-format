@@ -1,11 +1,18 @@
-use std::{fs, path::Path};
+use std::{
+    fs,
+    io::{Read, Write},
+    net::TcpListener,
+    path::Path,
+    thread,
+};
 
 use codetracer_ctfs::trace_storage::LogicalCtfsBlockReader;
 use codetracer_ctfs::trace_storage::{
-    CodetracerCiSenderBackend, CodetracerCiSenderConfig, DataState, FinalizeState, LifecycleState, ManagedFinalizeRequest, ManagedTraceSender,
-    ManagedUploadKind, ManagedUploadObject, ManagedUploadReceipt, MaterializedLanguage, PlacedObject, Placement, ReplayStart, ReplicationState,
-    RetryState, SenderError, SenderHealth, ServiceIdentity, SharedSenderBackend, StorageMode, TraceSource, TraceStorageConfig, TraceStorageManifest,
-    UploadState, TRACE_STORAGE_SCHEMA,
+    CodetracerCiSenderBackend, CodetracerCiSenderConfig, DataState, DirectStorageSenderBackend, DirectStorageTransport, EnterpriseLeaseGrant,
+    FinalizeState, HttpEnterpriseLeaseChecker, LifecycleState, ManagedFinalizeRequest, ManagedTraceSender, ManagedUploadKind, ManagedUploadObject,
+    ManagedUploadReceipt, MaterializedLanguage, PlacedObject, Placement, ReplayStart, ReplicationState, RetryState, SenderError, SenderHealth,
+    ServiceIdentity, SharedSenderBackend, StorageMode, StorageServer, TraceSource, TraceStorageConfig, TraceStorageManifest, UploadState,
+    TRACE_STORAGE_SCHEMA,
 };
 use serde_json::json;
 
@@ -17,6 +24,11 @@ fn fixture(name: &str) -> String {
 fn test_shared_trace_storage_config_roundtrip() {
     let config = TraceStorageConfig::from_json(&fixture("storage_config.full.json")).unwrap();
     assert_eq!(config.schema, TRACE_STORAGE_SCHEMA);
+    config.validate().unwrap();
+    assert_eq!(config.organization_id.as_deref(), Some("org-enterprise-a"));
+    let lease = config.enterprise_lease.as_ref().unwrap();
+    assert_eq!(lease.organization_id, "org-enterprise-a");
+    assert_eq!(lease.credential_ref.key, "CODETRACER_ENTERPRISE_LEASE_TOKEN");
     match &config.mode {
         StorageMode::DirectStorage { control_plane_url } => {
             assert_eq!(control_plane_url, "https://ci.example.test/trace-storage")
@@ -40,9 +52,20 @@ fn test_shared_trace_storage_config_roundtrip() {
 }
 
 #[test]
+fn test_direct_storage_config_requires_enterprise_lease() {
+    let mut config = TraceStorageConfig::from_json(&fixture("storage_config.full.json")).unwrap();
+    config.enterprise_lease = None;
+
+    let error = config.validate().unwrap_err();
+    assert!(!error.retryable);
+    assert!(error.message.contains("enterprise_lease"));
+}
+
+#[test]
 fn test_shared_trace_storage_config_roundtrip_managed_upload() {
     let config = TraceStorageConfig::from_json(&fixture("storage_config.managed_upload.json")).unwrap();
     assert_eq!(config.schema, TRACE_STORAGE_SCHEMA);
+    config.validate().unwrap();
     match &config.mode {
         StorageMode::ManagedUpload { control_plane_url } => {
             assert_eq!(control_plane_url, "https://ci.example.test/managed-upload")
@@ -462,6 +485,129 @@ impl TestManagedBackend {
     }
 }
 
+#[derive(Default)]
+struct TestDirectTransport {
+    uploaded: Vec<(String, String, Vec<u8>)>,
+    finalized_with_lease: Vec<String>,
+}
+
+impl DirectStorageTransport for TestDirectTransport {
+    fn upload_direct(&mut self, server: &StorageServer, object: &ManagedUploadObject, bytes: &[u8]) -> Result<ManagedUploadReceipt, SenderError> {
+        self.uploaded.push((server.id.clone(), object.object_key.clone(), bytes.to_vec()));
+        Ok(ManagedUploadReceipt {
+            object_key: object.object_key.clone(),
+            storage_pool_id: server.pool.clone(),
+            storage_server_id: server.id.clone(),
+            storage_endpoint_uri: server.endpoint.base_url.clone(),
+        })
+    }
+
+    fn report_direct_finalize(&mut self, _request: &ManagedFinalizeRequest, lease: &EnterpriseLeaseGrant) -> Result<(), SenderError> {
+        self.finalized_with_lease.push(lease.lease_id.clone());
+        Ok(())
+    }
+
+    fn health(&self) -> SenderHealth {
+        SenderHealth {
+            healthy: true,
+            message: "direct transport healthy".to_string(),
+        }
+    }
+}
+
+#[test]
+fn test_direct_storage_requires_enterprise_lease_before_any_storage_write() {
+    let (lease_url, server) = start_fake_lease_server(403);
+    std::env::set_var("CODETRACER_ENTERPRISE_LEASE_TOKEN", "test-token");
+
+    let mut config = TraceStorageConfig::from_json(&fixture("storage_config.full.json")).unwrap();
+    config.enterprise_lease.as_mut().unwrap().endpoint_url = lease_url;
+    let mut sender = DirectStorageSenderBackend::new(config, TestDirectTransport::default(), HttpEnterpriseLeaseChecker::new()).unwrap();
+    let temp = tempfile::NamedTempFile::new().unwrap();
+    fs::write(temp.path(), b"trace-bytes").unwrap();
+    let object = ManagedUploadObject {
+        object_key: "recording-a/slice_0000.ct".to_string(),
+        local_path: temp.path().to_string_lossy().to_string(),
+        content_length: 11,
+        sha256: "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd".to_string(),
+        kind: ManagedUploadKind::McrSlice { slice_index: 0 },
+    };
+
+    let error = sender.upload_slice(&object).unwrap_err();
+    assert!(!error.retryable);
+    assert!(error.message.contains("Enterprise lease checkout rejected"));
+    assert!(
+        sender.transport().uploaded.is_empty(),
+        "storage writes must not happen before a valid lease"
+    );
+    server.join().unwrap();
+}
+
+#[test]
+fn test_direct_storage_valid_enterprise_lease_allows_mcr_and_materialized_uploads() {
+    let (lease_url, server) = start_fake_lease_server(200);
+    std::env::set_var("CODETRACER_ENTERPRISE_LEASE_TOKEN", "test-token");
+
+    let mut config = TraceStorageConfig::from_json(&fixture("storage_config.full.json")).unwrap();
+    config.enterprise_lease.as_mut().unwrap().endpoint_url = lease_url;
+    let mut sender = DirectStorageSenderBackend::new(config, TestDirectTransport::default(), HttpEnterpriseLeaseChecker::new()).unwrap();
+
+    let mcr = tempfile::NamedTempFile::new().unwrap();
+    fs::write(mcr.path(), b"mcr-bytes").unwrap();
+    let materialized = tempfile::NamedTempFile::new().unwrap();
+    fs::write(materialized.path(), b"materialized-bytes").unwrap();
+
+    sender
+        .upload_slice(&ManagedUploadObject {
+            object_key: "recording-a/slice_0000.ct".to_string(),
+            local_path: mcr.path().to_string_lossy().to_string(),
+            content_length: 9,
+            sha256: "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee".to_string(),
+            kind: ManagedUploadKind::McrSlice { slice_index: 0 },
+        })
+        .unwrap();
+    sender
+        .upload_materialized_artifact(&ManagedUploadObject {
+            object_key: "recording-a/materialized-trace-v1.json".to_string(),
+            local_path: materialized.path().to_string_lossy().to_string(),
+            content_length: 18,
+            sha256: "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff".to_string(),
+            kind: ManagedUploadKind::MaterializedArtifact {
+                artifact_kind: "materialized_trace_v1".to_string(),
+            },
+        })
+        .unwrap();
+
+    assert_eq!(sender.transport().uploaded.len(), 2);
+    assert_eq!(sender.transport().uploaded[0].0, "store-a");
+    assert_eq!(sender.transport().uploaded[1].0, "store-b");
+    server.join().unwrap();
+}
+
+fn start_fake_lease_server(status: u16) -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/api/v1/license/sessions/checkout", listener.local_addr().unwrap());
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = [0_u8; 4096];
+        let read = stream.read(&mut request).unwrap();
+        let request_text = String::from_utf8_lossy(&request[..read]);
+        assert!(request_text.contains("POST /api/v1/license/sessions/checkout"));
+        assert!(request_text.contains("Authorization: Bearer test-token"));
+        let (status_line, body) = if status == 200 {
+            ("HTTP/1.1 200 OK", r#"{"leaseId":"lease-m38","expiresAt":"2026-05-07T12:00:00Z"}"#)
+        } else {
+            ("HTTP/1.1 403 Forbidden", r#"{"code":"not_enterprise"}"#)
+        };
+        let response = format!(
+            "{status_line}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            body.len()
+        );
+        stream.write_all(response.as_bytes()).unwrap();
+    });
+    (url, handle)
+}
+
 #[test]
 fn test_shared_sender_retries_and_finalize_is_idempotent() {
     let mut sender = ManagedTraceSender::new(
@@ -552,6 +698,7 @@ fn test_shared_sender_uploads_complete_materialized_artifact_set_before_finalize
             environment: "test".to_string(),
             instance_id: "checkout-1".to_string(),
             tenant_id: "tenant-a".to_string(),
+            organization_id: None,
         },
         source: TraceSource::MaterializedArtifact {
             language: MaterializedLanguage::Python,
@@ -669,6 +816,7 @@ fn sharded_manifest(recording_id: &str, segment_count: u32) -> TraceStorageManif
             environment: "test".to_string(),
             instance_id: "checkout-1".to_string(),
             tenant_id: "tenant-a".to_string(),
+            organization_id: None,
         },
         source: TraceSource::ShardedSplitCtfs { segments },
         lifecycle: LifecycleState::Finalized,

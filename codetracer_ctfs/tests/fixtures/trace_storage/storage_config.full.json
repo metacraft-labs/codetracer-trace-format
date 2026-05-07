@@ -4,12 +4,27 @@
     "service_name": "checkout-api",
     "environment": "staging",
     "instance_id": "checkout-api-7f8d",
-    "tenant_id": "tenant-a"
+    "tenant_id": "tenant-a",
+    "organization_id": "org-enterprise-a"
   },
+  "organization_id": "org-enterprise-a",
   "mode": {
     "direct_storage": {
       "control_plane_url": "https://ci.example.test/trace-storage"
     }
+  },
+  "enterprise_lease": {
+    "endpoint_url": "https://ci.example.test/api/v1/license/sessions/checkout",
+    "credential_ref": {
+      "provider": "env",
+      "key": "CODETRACER_ENTERPRISE_LEASE_TOKEN"
+    },
+    "organization_id": "org-enterprise-a",
+    "client_session_id": "m38-direct-storage-slice",
+    "session_kind": "recording",
+    "product_name": "CodeTracer On-Prem",
+    "workload_identity": "checkout-api",
+    "trace_identity": "checkout-api-7f8d"
   },
   "storage_servers": [
     {

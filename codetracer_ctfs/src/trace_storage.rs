@@ -14,6 +14,10 @@ pub struct TraceStorageConfig {
     pub service: ServiceIdentity,
     pub mode: StorageMode,
     #[serde(default)]
+    pub organization_id: Option<String>,
+    #[serde(default)]
+    pub enterprise_lease: Option<EnterpriseLeaseConfig>,
+    #[serde(default)]
     pub storage_servers: Vec<StorageServer>,
     #[serde(default)]
     pub pools: Vec<StoragePool>,
@@ -32,6 +36,86 @@ impl TraceStorageConfig {
     pub fn to_json_pretty(&self) -> serde_json::Result<String> {
         serde_json::to_string_pretty(self)
     }
+
+    pub fn validate(&self) -> Result<(), SenderError> {
+        if self.schema != TRACE_STORAGE_SCHEMA {
+            return Err(SenderError::fatal(format!("unsupported trace-storage schema: {}", self.schema)));
+        }
+        if self.service.tenant_id.trim().is_empty() {
+            return Err(SenderError::fatal("trace-storage config requires service.tenant_id"));
+        }
+        if matches!(self.mode, StorageMode::DirectStorage { .. }) {
+            self.validate_direct_storage()?;
+        }
+        validate_positive("split_policy.max_segment_bytes", self.split_policy.max_segment_bytes)?;
+        validate_positive("shard_policy.block_range_bytes", self.shard_policy.block_range_bytes)?;
+        if self.shard_policy.enabled && self.shard_policy.shard_count == 0 {
+            return Err(SenderError::fatal("enabled shard_policy requires shard_count > 0"));
+        }
+        if self.replication.min_replicas == 0 || self.replication.target_replicas < self.replication.min_replicas {
+            return Err(SenderError::fatal("replication requires 0 < min_replicas <= target_replicas"));
+        }
+        if self.retention.delete_after_days < self.retention.retained_for_days {
+            return Err(SenderError::fatal(
+                "retention.delete_after_days must be greater than or equal to retained_for_days",
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_direct_storage(&self) -> Result<(), SenderError> {
+        let Some(lease) = &self.enterprise_lease else {
+            return Err(SenderError::fatal("direct_storage requires enterprise_lease configuration"));
+        };
+        lease.validate()?;
+        if self.storage_servers.is_empty() {
+            return Err(SenderError::fatal("direct_storage requires at least one storage server"));
+        }
+        let server_ids = self
+            .storage_servers
+            .iter()
+            .map(|server| {
+                if server.id.trim().is_empty() {
+                    return Err(SenderError::fatal("storage server id must not be empty"));
+                }
+                if server.endpoint.base_url.trim().is_empty() {
+                    return Err(SenderError::fatal(format!("storage server {} endpoint is empty", server.id)));
+                }
+                Ok(server.id.as_str())
+            })
+            .collect::<Result<BTreeSet<_>, _>>()?;
+        for pool in &self.pools {
+            if pool.server_ids.is_empty() {
+                return Err(SenderError::fatal(format!("storage pool {} must contain server_ids", pool.id)));
+            }
+            for server_id in &pool.server_ids {
+                if !server_ids.contains(server_id.as_str()) {
+                    return Err(SenderError::fatal(format!(
+                        "storage pool {} references unknown server {}",
+                        pool.id, server_id
+                    )));
+                }
+            }
+        }
+        self.require_pool(StoragePoolPurpose::Ctfs, "ctfs")?;
+        self.require_pool(StoragePoolPurpose::MaterializedArtifact, "materialized artifact")?;
+        self.require_pool(StoragePoolPurpose::Manifest, "manifest")?;
+        if !self.pools.iter().any(|pool| pool.id == self.materialized_artifact_policy.pool) {
+            return Err(SenderError::fatal(format!(
+                "materialized artifact policy references unknown pool {}",
+                self.materialized_artifact_policy.pool
+            )));
+        }
+        Ok(())
+    }
+
+    fn require_pool(&self, purpose: StoragePoolPurpose, label: &str) -> Result<(), SenderError> {
+        if self.pools.iter().any(|pool| pool.purpose == purpose) {
+            Ok(())
+        } else {
+            Err(SenderError::fatal(format!("direct_storage requires a {label} storage pool")))
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -48,6 +132,53 @@ pub struct ServiceIdentity {
     pub environment: String,
     pub instance_id: String,
     pub tenant_id: String,
+    #[serde(default)]
+    pub organization_id: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct EnterpriseLeaseConfig {
+    pub endpoint_url: String,
+    pub credential_ref: CredentialRef,
+    pub organization_id: String,
+    pub client_session_id: String,
+    #[serde(default = "default_recording_session_kind")]
+    pub session_kind: String,
+    #[serde(default)]
+    pub product_name: Option<String>,
+    #[serde(default)]
+    pub workload_identity: Option<String>,
+    #[serde(default)]
+    pub trace_identity: Option<String>,
+}
+
+impl EnterpriseLeaseConfig {
+    pub fn validate(&self) -> Result<(), SenderError> {
+        if self.endpoint_url.trim().is_empty() {
+            return Err(SenderError::fatal("enterprise_lease.endpoint_url is required"));
+        }
+        if self.organization_id.trim().is_empty() {
+            return Err(SenderError::fatal("enterprise_lease.organization_id is required"));
+        }
+        if self.client_session_id.trim().is_empty() {
+            return Err(SenderError::fatal("enterprise_lease.client_session_id is required"));
+        }
+        if !matches!(self.session_kind.as_str(), "recording" | "replay") {
+            return Err(SenderError::fatal(format!(
+                "unsupported enterprise_lease.session_kind: {}",
+                self.session_kind
+            )));
+        }
+        if self.credential_ref.key.trim().is_empty() {
+            return Err(SenderError::fatal("enterprise_lease.credential_ref.key is required"));
+        }
+        Ok(())
+    }
+}
+
+fn default_recording_session_kind() -> String {
+    "recording".to_string()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -454,6 +585,200 @@ pub trait SharedSenderBackend {
     fn health(&self) -> SenderHealth;
 }
 
+fn validate_positive(label: &str, value: u64) -> Result<(), SenderError> {
+    if value == 0 {
+        Err(SenderError::fatal(format!("{label} must be greater than zero")))
+    } else {
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EnterpriseLeaseGrant {
+    pub lease_id: String,
+    pub expires_at: String,
+}
+
+pub trait EnterpriseLeaseChecker {
+    fn checkout(&mut self, lease: &EnterpriseLeaseConfig) -> Result<EnterpriseLeaseGrant, SenderError>;
+}
+
+#[derive(Debug)]
+pub struct HttpEnterpriseLeaseChecker {
+    agent: ureq::Agent,
+}
+
+impl Default for HttpEnterpriseLeaseChecker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl HttpEnterpriseLeaseChecker {
+    pub fn new() -> Self {
+        Self {
+            agent: ureq::AgentBuilder::new().timeout(Duration::from_secs(10)).build(),
+        }
+    }
+}
+
+impl EnterpriseLeaseChecker for HttpEnterpriseLeaseChecker {
+    fn checkout(&mut self, lease: &EnterpriseLeaseConfig) -> Result<EnterpriseLeaseGrant, SenderError> {
+        lease.validate()?;
+        let token = resolve_credential(&lease.credential_ref)?;
+        let body = serde_json::json!({
+            "organizationId": lease.organization_id,
+            "clientSessionId": lease.client_session_id,
+            "sessionKind": lease.session_kind,
+            "productName": lease.product_name,
+            "workloadIdentity": lease.workload_identity,
+            "traceIdentity": lease.trace_identity,
+        });
+        let response = self
+            .agent
+            .post(&lease.endpoint_url)
+            .set("Authorization", &format!("Bearer {token}"))
+            .send_json(body)
+            .map_err(lease_error_from_ureq)?
+            .into_json::<serde_json::Value>()
+            .map_err(|error| SenderError::retryable(format!("invalid Enterprise lease checkout response: {error}")))?;
+        Ok(EnterpriseLeaseGrant {
+            lease_id: json_string(&response, "leaseId")?,
+            expires_at: json_string(&response, "expiresAt")?,
+        })
+    }
+}
+
+fn resolve_credential(credential_ref: &CredentialRef) -> Result<String, SenderError> {
+    match credential_ref.provider.as_str() {
+        "env" => std::env::var(&credential_ref.key)
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| SenderError::fatal(format!("{} is required for Enterprise lease checkout", credential_ref.key))),
+        other => Err(SenderError::fatal(format!(
+            "unsupported credential provider for Enterprise lease checkout: {other}"
+        ))),
+    }
+}
+
+fn lease_error_from_ureq(error: ureq::Error) -> SenderError {
+    match &error {
+        ureq::Error::Status(code, response) if *code >= 400 && *code < 500 && *code != 408 && *code != 429 => {
+            SenderError::fatal(format!("Enterprise lease checkout rejected: HTTP {code} {}", response.status_text()))
+        }
+        ureq::Error::Status(code, response) => SenderError::retryable(format!(
+            "Enterprise lease checkout transient failure: HTTP {code} {}",
+            response.status_text()
+        )),
+        ureq::Error::Transport(_) => SenderError::retryable(format!("Enterprise lease checkout transport failure: {error}")),
+    }
+}
+
+pub trait DirectStorageTransport {
+    fn upload_direct(&mut self, server: &StorageServer, object: &ManagedUploadObject, bytes: &[u8]) -> Result<ManagedUploadReceipt, SenderError>;
+
+    fn report_direct_finalize(&mut self, request: &ManagedFinalizeRequest, lease: &EnterpriseLeaseGrant) -> Result<(), SenderError>;
+
+    fn health(&self) -> SenderHealth;
+}
+
+pub struct DirectStorageSenderBackend<T: DirectStorageTransport, L: EnterpriseLeaseChecker> {
+    config: TraceStorageConfig,
+    transport: T,
+    lease_checker: L,
+    lease: Option<EnterpriseLeaseGrant>,
+}
+
+impl<T: DirectStorageTransport, L: EnterpriseLeaseChecker> DirectStorageSenderBackend<T, L> {
+    pub fn new(config: TraceStorageConfig, transport: T, lease_checker: L) -> Result<Self, SenderError> {
+        config.validate()?;
+        if !matches!(config.mode, StorageMode::DirectStorage { .. }) {
+            return Err(SenderError::fatal("DirectStorageSenderBackend requires direct_storage mode"));
+        }
+        Ok(Self {
+            config,
+            transport,
+            lease_checker,
+            lease: None,
+        })
+    }
+
+    pub fn transport(&self) -> &T {
+        &self.transport
+    }
+
+    fn ensure_enterprise_lease(&mut self) -> Result<EnterpriseLeaseGrant, SenderError> {
+        if let Some(lease) = &self.lease {
+            return Ok(lease.clone());
+        }
+        let lease_config = self
+            .config
+            .enterprise_lease
+            .as_ref()
+            .ok_or_else(|| SenderError::fatal("direct_storage requires enterprise_lease configuration"))?;
+        let grant = self.lease_checker.checkout(lease_config)?;
+        self.lease = Some(grant.clone());
+        Ok(grant)
+    }
+
+    fn upload(&mut self, object: &ManagedUploadObject, purpose: StoragePoolPurpose) -> Result<ManagedUploadReceipt, SenderError> {
+        self.ensure_enterprise_lease()?;
+        let bytes = fs::read(&object.local_path).map_err(|error| SenderError::retryable(format!("failed to read {}: {error}", object.local_path)))?;
+        if object.content_length != bytes.len() as u64 {
+            return Err(SenderError::fatal(format!(
+                "content length mismatch for {}: manifest={} actual={}",
+                object.local_path,
+                object.content_length,
+                bytes.len()
+            )));
+        }
+        let server = self.select_server(purpose)?.clone();
+        self.transport.upload_direct(&server, object, &bytes)
+    }
+
+    fn select_server(&self, purpose: StoragePoolPurpose) -> Result<&StorageServer, SenderError> {
+        let pool = self
+            .config
+            .pools
+            .iter()
+            .find(|pool| pool.purpose == purpose)
+            .ok_or_else(|| SenderError::fatal(format!("no storage pool configured for {:?}", purpose)))?;
+        let server_id = pool
+            .server_ids
+            .first()
+            .ok_or_else(|| SenderError::fatal(format!("storage pool {} has no servers", pool.id)))?;
+        self.config
+            .storage_servers
+            .iter()
+            .find(|server| &server.id == server_id)
+            .ok_or_else(|| SenderError::fatal(format!("storage pool {} references unknown server {}", pool.id, server_id)))
+    }
+}
+
+impl<T: DirectStorageTransport, L: EnterpriseLeaseChecker> SharedSenderBackend for DirectStorageSenderBackend<T, L> {
+    fn upload_slice(&mut self, object: &ManagedUploadObject) -> Result<ManagedUploadReceipt, SenderError> {
+        self.upload(object, StoragePoolPurpose::Ctfs)
+    }
+
+    fn upload_materialized_artifact(&mut self, object: &ManagedUploadObject) -> Result<ManagedUploadReceipt, SenderError> {
+        self.upload(object, StoragePoolPurpose::MaterializedArtifact)
+    }
+
+    fn upload_manifest(&mut self, object: &ManagedUploadObject) -> Result<ManagedUploadReceipt, SenderError> {
+        self.upload(object, StoragePoolPurpose::Manifest)
+    }
+
+    fn finalize(&mut self, request: &ManagedFinalizeRequest) -> Result<(), SenderError> {
+        validate_complete_finalize_request(request)?;
+        let lease = self.ensure_enterprise_lease()?;
+        self.transport.report_direct_finalize(request, &lease)
+    }
+
+    fn health(&self) -> SenderHealth {
+        self.transport.health()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CodetracerCiSenderConfig {
     pub base_url: String,
@@ -726,6 +1051,7 @@ pub fn upload_materialized_artifacts_from_env(trace_dir: impl AsRef<Path>, langu
             environment: "managed-upload".to_string(),
             instance_id: std::env::var("CODETRACER_MANAGED_UPLOAD_INSTANCE").unwrap_or_else(|_| format!("{language}-recorder")),
             tenant_id: std::env::var("CODETRACER_MANAGED_UPLOAD_TENANT").unwrap_or_default(),
+            organization_id: None,
         },
         source: TraceSource::MaterializedArtifact {
             language: parse_materialized_language(language)?,

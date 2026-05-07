@@ -1209,16 +1209,29 @@ pub fn upload_materialized_artifacts_from_env(trace_dir: impl AsRef<Path>, langu
     Ok(ManagedMaterializedUploadSet { uploads })
 }
 
+/// One materialized artifact to upload, located on the local filesystem and
+/// already SHA-256 hashed. Used both by the managed-upload helper and by the
+/// shared `codetracer-managed-upload direct-materialized-finalize` subcommand
+/// so the live recorder and the direct-storage helper agree on which files
+/// belong to a materialized trace and how they should be keyed.
 #[derive(Debug, Clone)]
-struct MaterializedLocalArtifact {
-    object_key: String,
-    local_path: std::path::PathBuf,
-    content_length: u64,
-    sha256: String,
-    artifact_kind: String,
+pub struct MaterializedLocalArtifact {
+    pub object_key: String,
+    pub local_path: std::path::PathBuf,
+    pub content_length: u64,
+    pub sha256: String,
+    pub artifact_kind: String,
 }
 
-fn materialized_artifact_set(trace_dir: &Path, language: &str, service: &str) -> Result<Vec<MaterializedLocalArtifact>, SenderError> {
+/// Scan `trace_dir` for the materialized recorder's artifact set (primary
+/// `trace.{json,ct}`, optional correlation index, plus a generated
+/// `artifact-set.json` manifest pointing at both) and hash each entry.
+///
+/// Exposed so the `direct-materialized-finalize` helper subcommand can reuse
+/// the exact same artifact discovery the managed-upload path uses; the live
+/// Python/Ruby/JS recorders therefore stream the same logical bytes whether
+/// the deployment is configured for managed-upload or direct-storage.
+pub fn materialized_artifact_set(trace_dir: &Path, language: &str, service: &str) -> Result<Vec<MaterializedLocalArtifact>, SenderError> {
     let primary_path = materialized_artifact_path(trace_dir)?;
     let mut files = vec![(
         "materialized-trace-v1.json".to_string(),
@@ -1304,7 +1317,12 @@ fn placed_object_from_materialized_upload(receipt: &ManagedUploadReceipt, conten
     }
 }
 
-fn parse_materialized_language(language: &str) -> Result<MaterializedLanguage, SenderError> {
+/// Map the human-readable recorder language tag onto the
+/// `MaterializedLanguage` enum embedded in the shared trace-storage manifest.
+///
+/// Public so the direct-storage finalize helper accepts the same language
+/// vocabulary as the managed-upload helper.
+pub fn parse_materialized_language(language: &str) -> Result<MaterializedLanguage, SenderError> {
     match language {
         "python" => Ok(MaterializedLanguage::Python),
         "ruby" => Ok(MaterializedLanguage::Ruby),
@@ -1535,20 +1553,38 @@ fn monolith_recording_manifest(request: &ManagedFinalizeRequest, config: &Codetr
                 "retentionStatus": "available",
                 "missingSliceKeys": [],
                 "mcrSlices": [],
-                "materializedTraceArtifacts": manifest_artifacts.iter().map(|entry| serde_json::json!({
-                    "artifactKey": entry.uri.trim_start_matches("local://"),
-                    "artifactKind": materialized_artifact_kind(&entry.object_id),
-                    "uploadCompletionState": "complete",
-                    "retentionStatus": "available",
-                    "contentLength": entry.size_bytes,
-                    "contentHash": entry.sha256,
-                    "replayStart": {
-                        "geid": replay_start.geid,
-                        "traceId": replay_start.trace_id,
-                        "spanId": replay_start.span_id,
-                        "wallTimeUnixNs": replay_start.timestamp_unix_nanos
-                    }
-                })).collect::<Vec<_>>(),
+                "materializedTraceArtifacts": manifest_artifacts.iter().map(|entry| {
+                    // Prefer the raw object key (object_id) for `artifactKey` because
+                    // codetracer-ci's direct-storage finalize validator pairs the
+                    // reported placement (storage pool/server/endpoint) with the same
+                    // object key it expects to find on the storage node. When the
+                    // placement is empty (e.g. legacy managed-upload receipts that
+                    // only populated `uri`), fall back to the URI minus the
+                    // `local://` shim so older fixtures keep working.
+                    let artifact_key = if entry.object_id.trim().is_empty() {
+                        entry.uri.trim_start_matches("local://").to_string()
+                    } else {
+                        entry.object_id.clone()
+                    };
+                    let endpoint_uri = storage_endpoint_uri_for_placed_object(entry);
+                    serde_json::json!({
+                        "artifactKey": artifact_key,
+                        "artifactKind": materialized_artifact_kind(&entry.object_id),
+                        "uploadCompletionState": "complete",
+                        "retentionStatus": "available",
+                        "contentLength": entry.size_bytes,
+                        "contentHash": entry.sha256,
+                        "storagePoolId": entry.placement.pool,
+                        "storageServerId": entry.placement.server_id,
+                        "storageEndpointUri": endpoint_uri,
+                        "replayStart": {
+                            "geid": replay_start.geid,
+                            "traceId": replay_start.trace_id,
+                            "spanId": replay_start.span_id,
+                            "wallTimeUnixNs": replay_start.timestamp_unix_nanos
+                        }
+                    })
+                }).collect::<Vec<_>>(),
                 "totalSlices": 0,
                 "totalEvents": request.total_events,
                 "createdAt": now,

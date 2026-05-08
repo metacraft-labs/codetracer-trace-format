@@ -770,6 +770,18 @@ impl DirectStorageTransport for HttpDirectStorageTransport {
             "{}/api/v1/direct-storage/traces/{}/finalize",
             self.control_plane_base_url, request.manifest.recording_id
         );
+        // M39 / M40 NixOS tests call this from inside Incus and only see
+        // the helper's stderr. Dump the JSON we're about to POST so a
+        // 400 with an empty body (model-binder rejection) is debuggable
+        // from the test log without an additional pcap run. Gated on
+        // CODETRACER_MANAGED_UPLOAD_DEBUG so the chatty diagnostic
+        // doesn't appear in production runs.
+        if std::env::var("CODETRACER_MANAGED_UPLOAD_DEBUG").is_ok() {
+            eprintln!(
+                "[codetracer-managed-upload] POST {url} body={}",
+                serde_json::to_string(&body).unwrap_or_else(|_| "<unserializable>".to_string())
+            );
+        }
         self.agent
             .post(&url)
             .set("X-CodeTracer-Enterprise-Lease-Id", &lease.lease_id)
@@ -1468,16 +1480,33 @@ fn validate_complete_object(object: &PlacedObject, label: &str) -> Result<(), Se
 }
 
 fn sender_error_from_ureq(error: ureq::Error) -> SenderError {
-    match &error {
-        ureq::Error::Status(code, response) if *code >= 400 && *code < 500 && *code != 408 && *code != 429 => {
+    match error {
+        ureq::Error::Status(code, response) if (400..500).contains(&code) && code != 408 && code != 429 => {
             let message = response.status_text().to_string();
-            SenderError::fatal(format!("codetracer-ci rejected upload: HTTP {code} {message}"))
+            // Always log the body-read attempt so M39 / M40 NixOS tests
+            // can distinguish "endpoint returned 400 with no body" from
+            // "ureq couldn't read the body" from "body was a problem+json
+            // envelope" — important for diagnosing upload-rejection
+            // reasons inside the codetracer-managed-upload subprocess.
+            let body_excerpt = match response.into_string() {
+                Ok(text) if text.is_empty() => " body=<empty>".to_string(),
+                Ok(text) => format!(" body={text}"),
+                Err(read_err) => format!(" body=<read-error: {read_err}>"),
+            };
+            SenderError::fatal(format!("codetracer-ci rejected upload: HTTP {code} {message}{body_excerpt}"))
         }
         ureq::Error::Status(code, response) => {
             let message = response.status_text().to_string();
-            SenderError::retryable(format!("codetracer-ci transient upload failure: HTTP {code} {message}"))
+            let body_excerpt = match response.into_string() {
+                Ok(text) if text.is_empty() => " body=<empty>".to_string(),
+                Ok(text) => format!(" body={text}"),
+                Err(read_err) => format!(" body=<read-error: {read_err}>"),
+            };
+            SenderError::retryable(format!("codetracer-ci transient upload failure: HTTP {code} {message}{body_excerpt}"))
         }
-        ureq::Error::Transport(_) => SenderError::retryable(format!("codetracer-ci transport failure: {error}")),
+        ureq::Error::Transport(transport) => {
+            SenderError::retryable(format!("codetracer-ci transport failure: {transport}"))
+        }
     }
 }
 

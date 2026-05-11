@@ -15,6 +15,17 @@ fn main() {
     println!("cargo:rustc-link-search=native={}", lib_dir);
     println!("cargo:rustc-link-lib=static=codetracer_trace_writer");
 
+    // Re-link whenever the static lib changes.  Without this, cargo treats
+    // the .a as opaque and reuses the previous link, so dependents silently
+    // ship a stale Nim writer when codetracer-trace-format-nim is rebuilt.
+    // (Discovered after the May-10 meta.dat v2 schema update: the .a was
+    // rebuilt but cargo refused to relink, so recorders kept emitting v1
+    // bundles even after rebuilding the lib.)
+    let static_lib = std::path::PathBuf::from(&lib_dir).join("libcodetracer_trace_writer.a");
+    println!("cargo:rerun-if-changed={}", static_lib.display());
+    println!("cargo:rerun-if-env-changed=CODETRACER_NIM_LIB_DIR");
+    println!("cargo:rerun-if-env-changed=ZSTD_LIB_DIR");
+
     // Find zstd library via pkg-config or ZSTD_LIB_DIR env var
     if let Ok(zstd_dir) = std::env::var("ZSTD_LIB_DIR") {
         println!("cargo:rustc-link-search=native={}", zstd_dir);

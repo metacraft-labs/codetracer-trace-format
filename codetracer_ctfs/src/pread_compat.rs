@@ -25,6 +25,15 @@ pub fn pread(file: &File, buf: &mut [u8], offset: u64) -> io::Result<usize> {
     {
         file.seek_read(buf, offset)
     }
+    // Fallback for platforms without native positional I/O (e.g. wasm32).
+    // Uses seek + read which is not atomic, but allows compilation.
+    #[cfg(not(any(unix, windows)))]
+    {
+        use std::io::{Read, Seek, SeekFrom};
+        let mut f = file;
+        f.seek(SeekFrom::Start(offset))?;
+        f.read(buf)
+    }
 }
 
 /// Write to `file` at the given byte `offset` without changing the file cursor.
@@ -37,5 +46,13 @@ pub fn pwrite(file: &File, buf: &[u8], offset: u64) -> io::Result<usize> {
     #[cfg(windows)]
     {
         file.seek_write(buf, offset)
+    }
+    // Fallback for platforms without native positional I/O (e.g. wasm32).
+    #[cfg(not(any(unix, windows)))]
+    {
+        use std::io::{Seek, SeekFrom, Write};
+        let mut f = file;
+        f.seek(SeekFrom::Start(offset))?;
+        f.write(buf)
     }
 }

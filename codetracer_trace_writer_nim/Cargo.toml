@@ -7,8 +7,9 @@ description = "TraceWriter implementation backed by the Nim codetracer-trace-for
 [dependencies]
 codetracer_trace_types = { path = "../codetracer_trace_types" }
 
-[dev-dependencies]
-tempfile = "3"
-
 [build-dependencies]
 # None needed — we use manual linking via build.rs
+
+[dev-dependencies]
+serde_json = "1.0"
+tempfile = "3"

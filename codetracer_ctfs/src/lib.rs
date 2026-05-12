@@ -10,6 +10,14 @@ pub mod mmap_info;
 pub mod platform_info;
 pub(crate) mod pread_compat;
 pub mod reader;
+// `trace_storage` performs HTTP uploads of finalized CTFS containers via
+// `ureq` + `rustls` + `ring`.  None of that stack compiles for
+// `wasm32-unknown-unknown` (ring vendors C code that requires a real
+// libc), and the module is not used by the WASM browser-replay path —
+// only by host tooling (`codetracer-managed-upload`, recorder backends).
+// Gate it on non-wasm32 targets so the WASM build can succeed without
+// pulling in the entire TLS stack.
+#[cfg(not(target_arch = "wasm32"))]
 pub mod trace_storage;
 pub mod writer;
 

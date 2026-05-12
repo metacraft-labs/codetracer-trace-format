@@ -51,6 +51,13 @@ extern "C" {
     fn trace_writer_register_return(handle: *mut std::ffi::c_void);
 
     fn trace_writer_register_return_int(handle: *mut std::ffi::c_void, value: i64, type_kind: i32, type_name: *const std::os::raw::c_char);
+    // Kept for ABI compatibility — the wrapper now routes every non-Int /
+    // non-None return value through the streaming-encoder CBOR path so
+    // typed variants (Bool, String, Float, Char, Struct, ...) survive
+    // intact.  Recorders that still want a stringified payload can call
+    // this directly, but the FFI surface keeps the binding to avoid an
+    // ABI break for out-of-tree consumers.
+    #[allow(dead_code)]
     fn trace_writer_register_return_raw(
         handle: *mut std::ffi::c_void,
         value_repr: *const std::os::raw::c_char,
@@ -65,6 +72,8 @@ extern "C" {
         type_kind: i32,
         type_name: *const std::os::raw::c_char,
     );
+    // Kept for ABI compatibility — see `trace_writer_register_return_raw`.
+    #[allow(dead_code)]
     fn trace_writer_register_variable_raw(
         handle: *mut std::ffi::c_void,
         name: *const std::os::raw::c_char,
@@ -91,9 +100,15 @@ extern "C" {
     fn ct_value_write_raw(h: *mut std::ffi::c_void, data: *const u8, len: usize, type_id: u64) -> i32;
     fn ct_value_write_error(h: *mut std::ffi::c_void, data: *const u8, len: usize, type_id: u64) -> i32;
 
+    fn ct_value_begin_struct(h: *mut std::ffi::c_void, type_id: u64, field_count: i32) -> i32;
     fn ct_value_begin_sequence(h: *mut std::ffi::c_void, type_id: u64, element_count: i32) -> i32;
     fn ct_value_begin_tuple(h: *mut std::ffi::c_void, type_id: u64, element_count: i32) -> i32;
+    fn ct_value_begin_variant(h: *mut std::ffi::c_void, discriminator: *const u8, disc_len: usize, type_id: u64) -> i32;
+    fn ct_value_begin_reference(h: *mut std::ffi::c_void, address: u64, mutable: i32, type_id: u64) -> i32;
     fn ct_value_end_compound(h: *mut std::ffi::c_void) -> i32;
+
+    fn ct_value_write_char(h: *mut std::ffi::c_void, codepoint: u32, type_id: u64) -> i32;
+    fn ct_value_write_bigint(h: *mut std::ffi::c_void, data: *const u8, len: usize, negative: i32, type_id: u64) -> i32;
 
     fn ct_value_get_bytes(h: *mut std::ffi::c_void, out_len: *mut usize) -> *const u8;
 
@@ -157,22 +172,11 @@ extern "C" {
     // ----- Structured reader accessors (no JSON parsing) -----
 
     /// Resolve step N to (path_id, line). Returns 0 on success.
-    fn ct_reader_step_location(
-        h: *mut std::ffi::c_void,
-        n: u64,
-        out_path_id: *mut u64,
-        out_line: *mut u64,
-    ) -> i32;
+    fn ct_reader_step_location(h: *mut std::ffi::c_void, n: u64, out_path_id: *mut u64, out_line: *mut u64) -> i32;
 
     /// Resolve a contiguous step range to parallel (path_id, line) buffers.
     /// Returns the number of entries written, or u64::MAX on error.
-    fn ct_reader_step_locations(
-        h: *mut std::ffi::c_void,
-        start_n: u64,
-        count: u64,
-        out_path_ids: *mut u64,
-        out_lines: *mut u64,
-    ) -> u64;
+    fn ct_reader_step_locations(h: *mut std::ffi::c_void, start_n: u64, count: u64, out_path_ids: *mut u64, out_lines: *mut u64) -> u64;
 
     /// Number of variable values at step N.
     fn ct_reader_step_value_count(h: *mut std::ffi::c_void, n: u64) -> u64;
@@ -281,8 +285,20 @@ mod tests {
         writer.ensure_function_id("compute", source_path, Line(2));
         let function_id = writer.ensure_function_id("add", source_path, Line(3));
         let int_type_id = writer.ensure_type_id(TypeKind::Int, "uint256");
-        writer.arg("x", ValueRecord::Raw { r: "0xa".to_string(), type_id: int_type_id });
-        writer.arg("y", ValueRecord::Raw { r: "0x14".to_string(), type_id: int_type_id });
+        writer.arg(
+            "x",
+            ValueRecord::Raw {
+                r: "0xa".to_string(),
+                type_id: int_type_id,
+            },
+        );
+        writer.arg(
+            "y",
+            ValueRecord::Raw {
+                r: "0x14".to_string(),
+                type_id: int_type_id,
+            },
+        );
         writer.register_call(function_id, vec![]);
         writer.register_return(NONE_VALUE);
         writer.register_return(NONE_VALUE);
@@ -320,14 +336,11 @@ mod tests {
             }
         }
 
-        let add_call_key = add_call_key.unwrap_or_else(|| {
-            panic!("expected an `add` call record; functions={function_names:?}; calls={call_jsons:?}")
-        });
+        let add_call_key =
+            add_call_key.unwrap_or_else(|| panic!("expected an `add` call record; functions={function_names:?}; calls={call_jsons:?}"));
         let raw = reader.call_json(add_call_key).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&raw).unwrap();
-        let args = parsed["args"]
-            .as_array()
-            .expect("call_json should expose args as an array");
+        let args = parsed["args"].as_array().expect("call_json should expose args as an array");
         assert_eq!(args.len(), 2, "call_json should include staged x/y args: {raw}");
 
         assert_eq!(reader.call_arg_count(add_call_key), 2);
@@ -501,7 +514,6 @@ impl StreamingValueEncoder {
         unsafe { ct_value_end_compound(self.handle) };
     }
 
-
     /// Recursively encode a value record into CBOR.
     fn encode_recursive(&mut self, value: &ValueRecord) {
         match value {
@@ -544,8 +556,61 @@ impl StreamingValueEncoder {
                 }
                 unsafe { ct_value_end_compound(self.handle) };
             }
-            // For types not yet supported by the streaming encoder, fall back to raw.
-            _ => {
+            ValueRecord::Struct { field_values, type_id } => {
+                unsafe { ct_value_begin_struct(self.handle, type_id.0 as u64, field_values.len() as i32) };
+                for elem in field_values {
+                    self.encode_recursive(elem);
+                }
+                unsafe { ct_value_end_compound(self.handle) };
+            }
+            ValueRecord::Variant { discriminator, contents, type_id } => {
+                unsafe {
+                    ct_value_begin_variant(
+                        self.handle,
+                        discriminator.as_ptr(),
+                        discriminator.len(),
+                        type_id.0 as u64,
+                    )
+                };
+                self.encode_recursive(contents);
+                unsafe { ct_value_end_compound(self.handle) };
+            }
+            ValueRecord::Reference { dereferenced, address, mutable, type_id } => {
+                unsafe {
+                    ct_value_begin_reference(
+                        self.handle,
+                        *address,
+                        if *mutable { 1 } else { 0 },
+                        type_id.0 as u64,
+                    )
+                };
+                self.encode_recursive(dereferenced);
+                unsafe { ct_value_end_compound(self.handle) };
+            }
+            ValueRecord::Char { c, type_id } => {
+                unsafe { ct_value_write_char(self.handle, *c as u32, type_id.0 as u64) };
+            }
+            ValueRecord::BigInt { b, negative, type_id } => {
+                let (ptr, len) = if b.is_empty() {
+                    (std::ptr::null(), 0usize)
+                } else {
+                    (b.as_ptr(), b.len())
+                };
+                unsafe {
+                    ct_value_write_bigint(
+                        self.handle,
+                        ptr,
+                        len,
+                        if *negative { 1 } else { 0 },
+                        type_id.0 as u64,
+                    )
+                };
+            }
+            // Cell has no streaming-encoder counterpart yet — its CBOR shape
+            // (`{ "kind":"Cell", "place": int }`) only appears in tracer-side
+            // intermediates, never in recorder output. Fall back to a raw
+            // string so the data is at least preserved for inspection.
+            ValueRecord::Cell { .. } => {
                 let (repr, _kind, _type_name) = value_record_to_raw(value);
                 unsafe { ct_value_write_raw(self.handle, repr.as_ptr(), repr.len(), 0) };
             }
@@ -732,6 +797,7 @@ impl NimTraceWriter {
 
     pub fn register_return(&mut self, return_value: ValueRecord) {
         match &return_value {
+            // Fast paths that bypass CBOR encoding for the most common shapes.
             ValueRecord::Int { i, type_id } => {
                 let type_name = str_to_cstring(&format!("type_{}", type_id.0));
                 unsafe { trace_writer_register_return_int(self.handle, *i, TypeKind::Int as i32, type_name.as_ptr()) }
@@ -739,19 +805,16 @@ impl NimTraceWriter {
             ValueRecord::None { .. } => unsafe {
                 trace_writer_register_return(self.handle);
             },
-            // Compound types benefit from the streaming encoder: instead of
-            // flattening to a raw string like "[...]", we encode the full
-            // structure to CBOR so the reader can reconstruct it.
-            ValueRecord::Sequence { .. } | ValueRecord::Tuple { .. } | ValueRecord::Struct { .. } => {
+            // Every other variant — Bool, String, Float, Char, Sequence,
+            // Tuple, Struct, Variant, Reference, BigInt, Raw, Error, Cell —
+            // is encoded to CBOR via the streaming encoder so the reader
+            // reconstructs the typed shape.  Previously most of these
+            // silently fell through to `register_return_raw`, which
+            // downgraded Bool/String/Float/Char to a stringified `Raw`
+            // value (incident: ct-print rendering `true` as `Raw{r:"true"}`).
+            _ => {
                 let cbor = self.streaming_encoder.encode(&return_value);
                 unsafe { trace_writer_register_return_cbor(self.handle, cbor.as_ptr(), cbor.len()) }
-            }
-            _ => {
-                // Leaf types: serialize to raw representation via the existing path
-                let (repr, kind, type_name) = value_record_to_raw(&return_value);
-                let c_repr = str_to_cstring(&repr);
-                let c_type = str_to_cstring(&type_name);
-                unsafe { trace_writer_register_return_raw(self.handle, c_repr.as_ptr(), kind as i32, c_type.as_ptr()) }
             }
         }
     }
@@ -759,21 +822,22 @@ impl NimTraceWriter {
     pub fn register_variable_with_full_value(&mut self, name: &str, value: ValueRecord) {
         let c_name = str_to_cstring(name);
         match &value {
+            // Fast paths that bypass CBOR encoding for the most common shapes.
             ValueRecord::Int { i, type_id } => {
                 let type_name = str_to_cstring(&format!("type_{}", type_id.0));
                 unsafe { trace_writer_register_variable_int(self.handle, c_name.as_ptr(), *i, TypeKind::Int as i32, type_name.as_ptr()) }
             }
-            // Compound types: use the streaming encoder for full structural
-            // CBOR encoding instead of flattening to "[...]" / "(...)".
-            ValueRecord::Sequence { .. } | ValueRecord::Tuple { .. } | ValueRecord::Struct { .. } => {
+            // Every other variant — Bool, String, Float, Char, Sequence,
+            // Tuple, Struct, Variant, Reference, BigInt, None, Raw, Error,
+            // Cell — is routed through the streaming encoder so the reader
+            // sees the typed CBOR shape rather than a stringified Raw.
+            // The previous `_ => register_variable_raw(...)` fallback
+            // silently downgraded Bool/String/Float/Char/etc. to Raw,
+            // which broke ct-print and any consumer that relied on the
+            // typed `kind` field of the decoded value.
+            _ => {
                 let cbor = self.streaming_encoder.encode(&value);
                 unsafe { trace_writer_register_variable_cbor(self.handle, c_name.as_ptr(), cbor.as_ptr(), cbor.len()) }
-            }
-            _ => {
-                let (repr, kind, type_name) = value_record_to_raw(&value);
-                let c_repr = str_to_cstring(&repr);
-                let c_type = str_to_cstring(&type_name);
-                unsafe { trace_writer_register_variable_raw(self.handle, c_name.as_ptr(), c_repr.as_ptr(), kind as i32, c_type.as_ptr()) }
             }
         }
     }
@@ -810,7 +874,6 @@ impl NimTraceWriter {
     pub fn register_return_cbor(&mut self, cbor: &[u8]) {
         unsafe { trace_writer_register_return_cbor(self.handle, cbor.as_ptr(), cbor.len()) }
     }
-
 
     pub fn register_special_event(&mut self, kind: EventLogKind, metadata: &str, content: &str) {
         let c_metadata = str_to_cstring(metadata);
@@ -1237,7 +1300,6 @@ pub trait TraceWriter: Send {
     /// store args inside the abstract `Call` event already).  Override
     /// in writers that need explicit per-call argument staging.
     fn register_call_arg(&mut self, _name: &str, _cbor: &[u8]) {}
-
 
     fn register_variable_name(&mut self, variable_name: &str);
     fn register_full_value(&mut self, variable_id: VariableId, value: ValueRecord);
@@ -1678,9 +1740,7 @@ impl NimTraceReaderHandle {
     pub fn step_location(&self, n: u64) -> Result<(u64, u64), Box<dyn Error>> {
         let mut path_id: u64 = 0;
         let mut line: u64 = 0;
-        let rc = unsafe {
-            ct_reader_step_location(self.handle, n, &mut path_id, &mut line)
-        };
+        let rc = unsafe { ct_reader_step_location(self.handle, n, &mut path_id, &mut line) };
         if rc != 0 {
             Err(last_error().into())
         } else {
@@ -1694,15 +1754,8 @@ impl NimTraceReaderHandle {
     /// reader clamps the result to the remaining step count and returns the
     /// number of entries actually written.  Starting past the end of the trace
     /// is a successful zero-length read.
-    pub fn step_locations(
-        &self,
-        start_n: u64,
-        count: u64,
-        path_ids: &mut [u64],
-        lines: &mut [u64],
-    ) -> Result<u64, Box<dyn Error>> {
-        let count_usize = usize::try_from(count)
-            .map_err(|_| "step_locations count does not fit usize")?;
+    pub fn step_locations(&self, start_n: u64, count: u64, path_ids: &mut [u64], lines: &mut [u64]) -> Result<u64, Box<dyn Error>> {
+        let count_usize = usize::try_from(count).map_err(|_| "step_locations count does not fit usize")?;
         if path_ids.len() < count_usize || lines.len() < count_usize {
             return Err(format!(
                 "step_locations buffers too small: count={count}, path_ids={}, lines={}",
@@ -1715,15 +1768,7 @@ impl NimTraceReaderHandle {
             return Ok(0);
         }
 
-        let written = unsafe {
-            ct_reader_step_locations(
-                self.handle,
-                start_n,
-                count,
-                path_ids.as_mut_ptr(),
-                lines.as_mut_ptr(),
-            )
-        };
+        let written = unsafe { ct_reader_step_locations(self.handle, start_n, count, path_ids.as_mut_ptr(), lines.as_mut_ptr()) };
         if written == u64::MAX {
             Err(last_error().into())
         } else {
@@ -1743,13 +1788,7 @@ impl NimTraceReaderHandle {
         let mut type_id: u64 = 0;
         let mut data_ptr: *mut u8 = std::ptr::null_mut();
         let mut data_len: usize = 0;
-        let rc = unsafe {
-            ct_reader_step_value(
-                self.handle, n, value_idx,
-                &mut varname_id, &mut type_id,
-                &mut data_ptr, &mut data_len,
-            )
-        };
+        let rc = unsafe { ct_reader_step_value(self.handle, n, value_idx, &mut varname_id, &mut type_id, &mut data_ptr, &mut data_len) };
         if rc != 0 {
             return Err(last_error().into());
         }
@@ -1774,10 +1813,14 @@ impl NimTraceReaderHandle {
         let mut children_count: u64 = 0;
         let rc = unsafe {
             ct_reader_call_fields(
-                self.handle, key,
-                &mut function_id, &mut parent_key,
-                &mut entry_step, &mut exit_step,
-                &mut depth, &mut children_count,
+                self.handle,
+                key,
+                &mut function_id,
+                &mut parent_key,
+                &mut entry_step,
+                &mut exit_step,
+                &mut depth,
+                &mut children_count,
             )
         };
         if rc != 0 {
@@ -1809,16 +1852,7 @@ impl NimTraceReaderHandle {
         let mut varname_id: u64 = 0;
         let mut data_ptr: *mut u8 = std::ptr::null_mut();
         let mut data_len: usize = 0;
-        let rc = unsafe {
-            ct_reader_call_arg(
-                self.handle,
-                key,
-                arg_idx,
-                &mut varname_id,
-                &mut data_ptr,
-                &mut data_len,
-            )
-        };
+        let rc = unsafe { ct_reader_call_arg(self.handle, key, arg_idx, &mut varname_id, &mut data_ptr, &mut data_len) };
         if rc != 0 {
             return Err(last_error().into());
         }
@@ -1839,13 +1873,7 @@ impl NimTraceReaderHandle {
         let mut step_id: u64 = 0;
         let mut data_ptr: *mut u8 = std::ptr::null_mut();
         let mut data_len: usize = 0;
-        let rc = unsafe {
-            ct_reader_event_fields(
-                self.handle, index,
-                &mut kind, &mut step_id,
-                &mut data_ptr, &mut data_len,
-            )
-        };
+        let rc = unsafe { ct_reader_event_fields(self.handle, index, &mut kind, &mut step_id, &mut data_ptr, &mut data_len) };
         if rc != 0 {
             return Err(last_error().into());
         }

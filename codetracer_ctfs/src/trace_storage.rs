@@ -1504,9 +1504,7 @@ fn sender_error_from_ureq(error: ureq::Error) -> SenderError {
             };
             SenderError::retryable(format!("codetracer-ci transient upload failure: HTTP {code} {message}{body_excerpt}"))
         }
-        ureq::Error::Transport(transport) => {
-            SenderError::retryable(format!("codetracer-ci transport failure: {transport}"))
-        }
+        ureq::Error::Transport(transport) => SenderError::retryable(format!("codetracer-ci transport failure: {transport}")),
     }
 }
 

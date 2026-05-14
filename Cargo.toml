@@ -10,6 +10,7 @@ members = [
     "codetracer_trace_writer_nim",
     "codetracer_trace_util",
     "trace_formatter", "codetracer_ctfs",
+    "codetracer_trace_filter",
 ]
 
 [workspace.dependencies]

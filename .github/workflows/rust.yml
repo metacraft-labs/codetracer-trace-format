@@ -54,13 +54,29 @@ jobs:
       # codetracer_ctfs/tests/trace_storage.rs scans 4 recorder siblings to
       # enforce the "no private storage parser" contract. Without the siblings
       # checked out, those tests panic with NotFound on Cargo.toml lookups.
-      - name: Clone recorder siblings (for trace_storage cross-recorder tests)
+      # codetracer-native-recorder is private; the default GITHUB_TOKEN can't
+      # pull it from CI on a public-repo workflow, so it is cloned only when
+      # CROSS_REPO_TOKEN is provided as an org/repo secret with read access.
+      - name: Clone public recorder siblings
         run: |
-          for repo in codetracer-python-recorder codetracer-ruby-recorder codetracer-js-recorder codetracer-native-recorder; do
+          for repo in codetracer-python-recorder codetracer-ruby-recorder codetracer-js-recorder; do
             git clone --depth 1 \
               "https://github.com/metacraft-labs/${repo}.git" \
               "${GITHUB_WORKSPACE}/../${repo}"
           done
+      - name: Clone codetracer-native-recorder (private; optional)
+        env:
+          CROSS_REPO_TOKEN: ${{ secrets.CROSS_REPO_TOKEN }}
+        run: |
+          if [ -z "${CROSS_REPO_TOKEN}" ]; then
+            echo "CROSS_REPO_TOKEN not set; skipping codetracer-native-recorder clone."
+            echo "trace_storage tests that walk this sibling will be skipped via CI_SKIP_NATIVE_RECORDER_SCAN."
+            echo "CI_SKIP_NATIVE_RECORDER_SCAN=1" >> "$GITHUB_ENV"
+            exit 0
+          fi
+          git clone --depth 1 \
+            "https://x-access-token:${CROSS_REPO_TOKEN}@github.com/metacraft-labs/codetracer-native-recorder.git" \
+            "${GITHUB_WORKSPACE}/../codetracer-native-recorder"
 
       - name: Build
         run: just build

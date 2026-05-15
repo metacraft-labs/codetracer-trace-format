@@ -51,6 +51,17 @@ jobs:
             -o:libcodetracer_trace_writer.a src/codetracer_trace_writer_ffi.nim
           echo "CODETRACER_NIM_LIB_DIR=${GITHUB_WORKSPACE}/../codetracer-trace-format-nim" >> "$GITHUB_ENV"
 
+      # codetracer_ctfs/tests/trace_storage.rs scans 4 recorder siblings to
+      # enforce the "no private storage parser" contract. Without the siblings
+      # checked out, those tests panic with NotFound on Cargo.toml lookups.
+      - name: Clone recorder siblings (for trace_storage cross-recorder tests)
+        run: |
+          for repo in codetracer-python-recorder codetracer-ruby-recorder codetracer-js-recorder codetracer-native-recorder; do
+            git clone --depth 1 \
+              "https://github.com/metacraft-labs/${repo}.git" \
+              "${GITHUB_WORKSPACE}/../${repo}"
+          done
+
       - name: Build
         run: just build
       - name: Run tests

@@ -102,6 +102,12 @@ extern "C" {
 
     fn ct_value_begin_struct(h: *mut std::ffi::c_void, type_id: u64, field_count: i32) -> i32;
     fn ct_value_begin_sequence(h: *mut std::ffi::c_void, type_id: u64, element_count: i32) -> i32;
+    fn ct_value_begin_sequence_with_slice(
+        h: *mut std::ffi::c_void,
+        type_id: u64,
+        element_count: i32,
+        is_slice: i32,
+    ) -> i32;
     fn ct_value_begin_tuple(h: *mut std::ffi::c_void, type_id: u64, element_count: i32) -> i32;
     fn ct_value_begin_variant(h: *mut std::ffi::c_void, discriminator: *const u8, disc_len: usize, type_id: u64) -> i32;
     fn ct_value_begin_reference(h: *mut std::ffi::c_void, address: u64, mutable: i32, type_id: u64) -> i32;
@@ -516,6 +522,27 @@ impl StreamingValueEncoder {
         unsafe { ct_value_begin_sequence(self.handle, type_id.0 as u64, count as i32) };
     }
 
+    /// Begin a sequence with an explicit `is_slice` flag.  Use `is_slice =
+    /// true` for view/slice sequences (`Span<T>`, Sway `Bytes`, Rust `&[T]`,
+    /// etc.) and `is_slice = false` for owned sequences (`Vec<T>`,
+    /// `Array<T>`, etc.).  Must be followed by exactly `count` element
+    /// encodings and one [`end_compound`](Self::end_compound) call.
+    pub fn begin_sequence_with_slice(
+        &mut self,
+        type_id: TypeId,
+        count: usize,
+        is_slice: bool,
+    ) {
+        unsafe {
+            ct_value_begin_sequence_with_slice(
+                self.handle,
+                type_id.0 as u64,
+                count as i32,
+                if is_slice { 1 } else { 0 },
+            )
+        };
+    }
+
     /// Begin a tuple with a known element count.
     /// Must be followed by exactly `count` element encodings and one
     /// [`end_compound`](Self::end_compound) call.
@@ -556,10 +583,17 @@ impl StreamingValueEncoder {
             }
             ValueRecord::Sequence {
                 elements,
-                is_slice: _,
+                is_slice,
                 type_id,
             } => {
-                unsafe { ct_value_begin_sequence(self.handle, type_id.0 as u64, elements.len() as i32) };
+                unsafe {
+                    ct_value_begin_sequence_with_slice(
+                        self.handle,
+                        type_id.0 as u64,
+                        elements.len() as i32,
+                        if *is_slice { 1 } else { 0 },
+                    )
+                };
                 for elem in elements {
                     self.encode_recursive(elem);
                 }

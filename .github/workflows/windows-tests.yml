@@ -13,6 +13,13 @@ jobs:
       - name: Install capnproto
         shell: pwsh
         run: choco install capnproto -y
+      # Skip codetracer_trace_writer_nim on Windows: it links against a
+      # libcodetracer_trace_writer.a built from the codetracer-trace-format-nim
+      # sibling repo, which requires nim + libzstd. Recorder repos that need
+      # the Nim writer build it themselves; the workspace's other crates are
+      # all pure-Rust and validate the format / reader / writer logic.
       - name: Test
         shell: bash
-        run: cargo test
+        run: |
+          cargo test --workspace \
+            --exclude codetracer_trace_writer_nim

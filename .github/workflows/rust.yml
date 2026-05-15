@@ -2,7 +2,7 @@ name: Rust
 
 on:
   push:
-    branches: [ "master", "main" ]
+    branches: ["master", "main"]
   pull_request:
 
 env:
@@ -13,24 +13,45 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
-    - name: Install capnproto
-      run: sudo apt-get install -y capnproto
-    - name: Install just
-      uses: extractions/setup-just@v2
-    - name: Lint
-      run: just lint
+      - uses: actions/checkout@v4
+      - name: Install capnproto
+        run: sudo apt-get install -y capnproto
+      - name: Install just
+        uses: extractions/setup-just@v2
+      - name: Lint
+        run: just lint
 
   build-and-test:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
-    - name: Install capnproto
-      run: sudo apt-get install -y capnproto
-    - name: Install just
-      uses: extractions/setup-just@v2
-    - name: Build
-      run: just build
-    - name: Run tests
-      run: just test
+      - uses: actions/checkout@v4
+      - name: Install capnproto + zstd
+        run: sudo apt-get install -y capnproto libzstd-dev
+      - name: Install just
+        uses: extractions/setup-just@v2
+
+      # codetracer_trace_writer_nim links against libcodetracer_trace_writer.a
+      # which is built from the codetracer-trace-format-nim sibling repo.
+      # Recorder repos clone + build the same way; mirror that here.
+      - name: Install Nim
+        uses: jiro4989/setup-nim-action@v2
+        with:
+          nim-version: "2.2.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build Nim trace writer library
+        run: |
+          git clone --depth 1 \
+            "https://github.com/metacraft-labs/codetracer-trace-format-nim.git" \
+            "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim"
+          cd "${GITHUB_WORKSPACE}/../codetracer-trace-format-nim"
+          nimble install -y stew results
+          nim c --app:staticlib --mm:arc --noMain -d:release \
+            --passC:"-fPIC" -p:src \
+            -o:libcodetracer_trace_writer.a src/codetracer_trace_writer_ffi.nim
+          echo "CODETRACER_NIM_LIB_DIR=${GITHUB_WORKSPACE}/../codetracer-trace-format-nim" >> "$GITHUB_ENV"
+
+      - name: Build
+        run: just build
+      - name: Run tests
+        run: just test

@@ -102,6 +102,12 @@ extern "C" {
 
     fn ct_value_begin_struct(h: *mut std::ffi::c_void, type_id: u64, field_count: i32) -> i32;
     fn ct_value_begin_sequence(h: *mut std::ffi::c_void, type_id: u64, element_count: i32) -> i32;
+    fn ct_value_begin_sequence_with_slice(
+        h: *mut std::ffi::c_void,
+        type_id: u64,
+        element_count: i32,
+        is_slice: i32,
+    ) -> i32;
     fn ct_value_begin_tuple(h: *mut std::ffi::c_void, type_id: u64, element_count: i32) -> i32;
     fn ct_value_begin_variant(h: *mut std::ffi::c_void, discriminator: *const u8, disc_len: usize, type_id: u64) -> i32;
     fn ct_value_begin_reference(h: *mut std::ffi::c_void, address: u64, mutable: i32, type_id: u64) -> i32;
@@ -126,6 +132,22 @@ extern "C" {
     fn trace_writer_register_thread_start(handle: *mut std::ffi::c_void, thread_id: u64);
     fn trace_writer_register_thread_exit(handle: *mut std::ffi::c_void, thread_id: u64);
     fn trace_writer_register_thread_switch(handle: *mut std::ffi::c_void, thread_id: u64);
+
+    // ----- trace-filter provenance (TF-M7, spec §7) -----
+    //
+    // Recorders integrating `codetracer_trace_filter` call these to embed
+    // the composed filter chain (builtin → auto-discovered → env → CLI)
+    // into `meta.dat` so post-trace audit tools can verify which rules
+    // produced the trace.  Each `add_filter_provenance` entry appends one
+    // (path, sha256) pair in composition order; `record_empty_filter_provenance`
+    // flips a flag for the rare "implements filters but the chain happens
+    // to be empty" case.
+    fn trace_writer_add_filter_provenance(
+        handle: *mut std::ffi::c_void,
+        path: *const u8, path_len: usize,
+        sha256_bytes: *const u8, sha256_len: usize,
+    ) -> i32;
+    fn trace_writer_record_empty_filter_provenance(handle: *mut std::ffi::c_void) -> i32;
 
     // ----- meta.dat -----
 
@@ -500,6 +522,27 @@ impl StreamingValueEncoder {
         unsafe { ct_value_begin_sequence(self.handle, type_id.0 as u64, count as i32) };
     }
 
+    /// Begin a sequence with an explicit `is_slice` flag.  Use `is_slice =
+    /// true` for view/slice sequences (`Span<T>`, Sway `Bytes`, Rust `&[T]`,
+    /// etc.) and `is_slice = false` for owned sequences (`Vec<T>`,
+    /// `Array<T>`, etc.).  Must be followed by exactly `count` element
+    /// encodings and one [`end_compound`](Self::end_compound) call.
+    pub fn begin_sequence_with_slice(
+        &mut self,
+        type_id: TypeId,
+        count: usize,
+        is_slice: bool,
+    ) {
+        unsafe {
+            ct_value_begin_sequence_with_slice(
+                self.handle,
+                type_id.0 as u64,
+                count as i32,
+                if is_slice { 1 } else { 0 },
+            )
+        };
+    }
+
     /// Begin a tuple with a known element count.
     /// Must be followed by exactly `count` element encodings and one
     /// [`end_compound`](Self::end_compound) call.
@@ -540,10 +583,17 @@ impl StreamingValueEncoder {
             }
             ValueRecord::Sequence {
                 elements,
-                is_slice: _,
+                is_slice,
                 type_id,
             } => {
-                unsafe { ct_value_begin_sequence(self.handle, type_id.0 as u64, elements.len() as i32) };
+                unsafe {
+                    ct_value_begin_sequence_with_slice(
+                        self.handle,
+                        type_id.0 as u64,
+                        elements.len() as i32,
+                        if *is_slice { 1 } else { 0 },
+                    )
+                };
                 for elem in elements {
                     self.encode_recursive(elem);
                 }
@@ -563,27 +613,22 @@ impl StreamingValueEncoder {
                 }
                 unsafe { ct_value_end_compound(self.handle) };
             }
-            ValueRecord::Variant { discriminator, contents, type_id } => {
-                unsafe {
-                    ct_value_begin_variant(
-                        self.handle,
-                        discriminator.as_ptr(),
-                        discriminator.len(),
-                        type_id.0 as u64,
-                    )
-                };
+            ValueRecord::Variant {
+                discriminator,
+                contents,
+                type_id,
+            } => {
+                unsafe { ct_value_begin_variant(self.handle, discriminator.as_ptr(), discriminator.len(), type_id.0 as u64) };
                 self.encode_recursive(contents);
                 unsafe { ct_value_end_compound(self.handle) };
             }
-            ValueRecord::Reference { dereferenced, address, mutable, type_id } => {
-                unsafe {
-                    ct_value_begin_reference(
-                        self.handle,
-                        *address,
-                        if *mutable { 1 } else { 0 },
-                        type_id.0 as u64,
-                    )
-                };
+            ValueRecord::Reference {
+                dereferenced,
+                address,
+                mutable,
+                type_id,
+            } => {
+                unsafe { ct_value_begin_reference(self.handle, *address, if *mutable { 1 } else { 0 }, type_id.0 as u64) };
                 self.encode_recursive(dereferenced);
                 unsafe { ct_value_end_compound(self.handle) };
             }
@@ -596,15 +641,7 @@ impl StreamingValueEncoder {
                 } else {
                     (b.as_ptr(), b.len())
                 };
-                unsafe {
-                    ct_value_write_bigint(
-                        self.handle,
-                        ptr,
-                        len,
-                        if *negative { 1 } else { 0 },
-                        type_id.0 as u64,
-                    )
-                };
+                unsafe { ct_value_write_bigint(self.handle, ptr, len, if *negative { 1 } else { 0 }, type_id.0 as u64) };
             }
             // Cell has no streaming-encoder counterpart yet — its CBOR shape
             // (`{ "kind":"Cell", "place": int }`) only appears in tracer-side
@@ -702,6 +739,43 @@ impl NimTraceWriter {
         } else {
             Ok(())
         }
+    }
+
+    /// TF-M7: append one `(path, sha256)` entry to the trace-filter
+    /// provenance chain that the writer will embed in `meta.dat` at
+    /// close-time.  Callers should invoke this once per filter source in
+    /// composition order (builtin default → auto-discovered →
+    /// env-var-loaded → CLI `--trace-filter:`).
+    ///
+    /// `sha256` is the raw 32-byte SHA-256 digest of the filter source
+    /// (file contents on disk, or — for inline filters like the
+    /// recorder-embedded default — the literal TOML string).  Callers
+    /// receive a pre-computed hex string from
+    /// `codetracer_trace_filter::FilterSummaryEntry::sha256` and pass
+    /// the decoded raw bytes here.
+    ///
+    /// Spec: `codetracer-trace-format-spec/Trace-Filters.md` § 7 and
+    /// `internal-files.md` § "Flag bit 3 — Trace filter provenance".
+    pub fn add_filter_provenance(&mut self, path: &str, sha256: &[u8; 32]) -> Result<(), Box<dyn Error>> {
+        let rc = unsafe {
+            trace_writer_add_filter_provenance(
+                self.handle,
+                path.as_ptr(), path.len(),
+                sha256.as_ptr(), sha256.len(),
+            )
+        };
+        check_result(rc)
+    }
+
+    /// TF-M7: mark the writer to emit a *present-but-empty* trace-filter
+    /// provenance block.  Useful only for recorders that integrate
+    /// filters but ended up with a deliberately empty chain — preserves
+    /// the spec § 7 distinction between "did not record" (flag clear)
+    /// and "recorded an empty chain" (flag set, count 0).  When at
+    /// least one entry is appended via [`add_filter_provenance`], this
+    /// flag is ignored.
+    pub fn record_empty_filter_provenance(&mut self) -> Result<(), Box<dyn Error>> {
+        check_result(unsafe { trace_writer_record_empty_filter_provenance(self.handle) })
     }
 }
 
@@ -1319,6 +1393,25 @@ pub trait TraceWriter: Send {
     fn add_event(&mut self, event: TraceLowLevelEvent);
     fn append_events(&mut self, events: &mut Vec<TraceLowLevelEvent>);
     fn events(&self) -> &[TraceLowLevelEvent];
+
+    /// TF-M7: record one `(path, sha256)` filter-provenance entry on the
+    /// writer.  Recorders integrating `codetracer_trace_filter` invoke
+    /// this once per composed source in composition order (builtin
+    /// default → auto-discovered → env-var → CLI `--trace-filter:`)
+    /// before [`close`](Self::close).  Default impl is a no-op so test
+    /// doubles and legacy writers without provenance support keep
+    /// compiling; the CTFS-emitting `NimTraceWriter` overrides this to
+    /// thread the entry into `meta.dat` (spec § 7).
+    fn add_filter_provenance(&mut self, _path: &str, _sha256: &[u8; 32]) -> Result<(), Box<dyn Error>> {
+        Ok(())
+    }
+
+    /// TF-M7: mark the writer to emit a present-but-empty trace-filter
+    /// provenance block.  See [`add_filter_provenance`].  Default no-op
+    /// for writers without CTFS meta.dat output.
+    fn record_empty_filter_provenance(&mut self) -> Result<(), Box<dyn Error>> {
+        Ok(())
+    }
 }
 
 impl TraceWriter for NimTraceWriter {
@@ -1468,6 +1561,12 @@ impl TraceWriter for NimTraceWriter {
     }
     fn events(&self) -> &[TraceLowLevelEvent] {
         NimTraceWriter::events(self)
+    }
+    fn add_filter_provenance(&mut self, path: &str, sha256: &[u8; 32]) -> Result<(), Box<dyn Error>> {
+        NimTraceWriter::add_filter_provenance(self, path, sha256)
+    }
+    fn record_empty_filter_provenance(&mut self) -> Result<(), Box<dyn Error>> {
+        NimTraceWriter::record_empty_filter_provenance(self)
     }
 }
 

@@ -2,7 +2,7 @@ name: Rust
 
 on:
   push:
-    branches: [ "master", "main" ]
+    branches: ["master", "main"]
   pull_request:
 
 env:
@@ -13,24 +13,87 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
-    - name: Install capnproto
-      run: sudo apt-get install -y capnproto
-    - name: Install just
-      uses: extractions/setup-just@v2
-    - name: Lint
-      run: just lint
+      - uses: actions/checkout@v4
+      - name: Install capnproto
+        run: sudo apt-get install -y capnproto
+      - name: Install just
+        uses: extractions/setup-just@v2
+      - name: Lint
+        run: just lint
 
   build-and-test:
     runs-on: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
-    - name: Install capnproto
-      run: sudo apt-get install -y capnproto
-    - name: Install just
-      uses: extractions/setup-just@v2
-    - name: Build
-      run: just build
-    - name: Run tests
-      run: just test
+      - uses: actions/checkout@v4
+        with:
+          path: codetracer-trace-format
+      - name: Install capnproto + zstd
+        run: sudo apt-get install -y capnproto libzstd-dev
+      - name: Install just
+        uses: extractions/setup-just@v2
+
+      # codetracer_trace_writer_nim links against libcodetracer_trace_writer.a
+      # built from the codetracer-trace-format-nim sibling.  All cross-repo
+      # checkouts go through the shared metacraft-github-actions/clone-repo
+      # action so the GH_READ_METACRAFT_PRIVATE_REPOS secret (which the org
+      # provisions to every CI repo) authenticates against private repos.
+      - name: Clone codetracer-trace-format-nim
+        uses: metacraft-labs/metacraft-github-actions/clone-repo@main
+        with:
+          repo: metacraft-labs/codetracer-trace-format-nim
+          ref: main
+          path: codetracer-trace-format-nim
+          gh-token: ${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS }}
+      - name: Install Nim
+        uses: jiro4989/setup-nim-action@v2
+        with:
+          nim-version: "2.2.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build Nim trace writer static library
+        working-directory: codetracer-trace-format-nim
+        run: |
+          nimble install -y stew results
+          nim c --app:staticlib --mm:arc --noMain -d:release \
+            --passC:"-fPIC" -p:src \
+            -o:libcodetracer_trace_writer.a src/codetracer_trace_writer_ffi.nim
+          echo "CODETRACER_NIM_LIB_DIR=${GITHUB_WORKSPACE}/codetracer-trace-format-nim" >> "$GITHUB_ENV"
+
+      # codetracer_ctfs/tests/trace_storage.rs walks 4 recorder siblings to
+      # enforce the "no private storage parser" contract.  codetracer-native-recorder
+      # is private; clone-repo + GH_READ_METACRAFT_PRIVATE_REPOS handles auth.
+      - name: Clone codetracer-python-recorder
+        uses: metacraft-labs/metacraft-github-actions/clone-repo@main
+        with:
+          repo: metacraft-labs/codetracer-python-recorder
+          ref: main
+          path: codetracer-python-recorder
+          gh-token: ${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS }}
+      - name: Clone codetracer-ruby-recorder
+        uses: metacraft-labs/metacraft-github-actions/clone-repo@main
+        with:
+          repo: metacraft-labs/codetracer-ruby-recorder
+          ref: main
+          path: codetracer-ruby-recorder
+          gh-token: ${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS }}
+      - name: Clone codetracer-js-recorder
+        uses: metacraft-labs/metacraft-github-actions/clone-repo@main
+        with:
+          repo: metacraft-labs/codetracer-js-recorder
+          ref: main
+          path: codetracer-js-recorder
+          gh-token: ${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS }}
+      - name: Clone codetracer-native-recorder
+        uses: metacraft-labs/metacraft-github-actions/clone-repo@main
+        with:
+          repo: metacraft-labs/codetracer-native-recorder
+          ref: main
+          path: codetracer-native-recorder
+          gh-token: ${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS }}
+
+      - name: Build
+        working-directory: codetracer-trace-format
+        run: just build
+      - name: Run tests
+        working-directory: codetracer-trace-format
+        run: just test

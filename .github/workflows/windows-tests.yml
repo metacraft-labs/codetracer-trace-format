@@ -13,6 +13,20 @@ jobs:
       - name: Install capnproto
         shell: pwsh
         run: choco install capnproto -y
+      # Two crates are excluded on Windows:
+      #
+      # * codetracer_trace_writer_nim: links against libcodetracer_trace_writer.a
+      #   built from the codetracer-trace-format-nim sibling, which needs nim +
+      #   libzstd; recorder repos that need the Nim writer build it themselves.
+      #
+      # * codetracer_ctfs: integration tests use mock HTTP servers on 127.0.0.1
+      #   (Windows often aborts these mid-handshake with os error 10053) and
+      #   pre-existing assertions assume Unix path conventions; they also walk
+      #   recorder siblings that aren't checked out here.  Linux CI exercises
+      #   the crate fully.
       - name: Test
         shell: bash
-        run: cargo test
+        run: |
+          cargo test --workspace \
+            --exclude codetracer_trace_writer_nim \
+            --exclude codetracer_ctfs

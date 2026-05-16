@@ -391,14 +391,9 @@ fn test_recorders_use_shared_storage_config_without_private_parsers() {
         assert!(text.contains("codetracer_ctfs"), "{file} must depend on the shared CTFS storage contract");
     }
 
-    // codetracer-native-recorder is private; in CI without a cross-repo
-    // token (CI_SKIP_NATIVE_RECORDER_SCAN=1), we skip this assertion.
-    // Local + repo-with-token runs always exercise it.
-    if std::env::var("CI_SKIP_NATIVE_RECORDER_SCAN").is_err() {
-        let native_test =
-            fs::read_to_string(workspace.join("../codetracer-native-recorder/ct_recorder/tests/test_shared_storage_config_adapter.nim")).unwrap();
-        assert!(native_test.contains("codetracer_ctfs/trace_storage_config"));
-    }
+    let native_test =
+        fs::read_to_string(workspace.join("../codetracer-native-recorder/ct_recorder/tests/test_shared_storage_config_adapter.nim")).unwrap();
+    assert!(native_test.contains("codetracer_ctfs/trace_storage_config"));
 
     let forbidden = [
         "struct StorageServer",
@@ -412,15 +407,12 @@ fn test_recorders_use_shared_storage_config_without_private_parsers() {
         "class StorageServer",
         "interface StorageServer",
     ];
-    let skip_native = std::env::var("CI_SKIP_NATIVE_RECORDER_SCAN").is_ok();
-    let mut recorder_roots: Vec<&str> = vec![
+    let recorder_roots = [
+        "../codetracer-native-recorder",
         "../codetracer-python-recorder",
         "../codetracer-ruby-recorder",
         "../codetracer-js-recorder",
     ];
-    if !skip_native {
-        recorder_roots.push("../codetracer-native-recorder");
-    }
     for root in recorder_roots {
         for entry in walk_files(workspace.join(root)) {
             let Some(ext) = entry.extension().and_then(|value| value.to_str()) else {

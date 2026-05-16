@@ -42,6 +42,7 @@ jobs:
         uses: metacraft-labs/metacraft-github-actions/clone-repo@main
         with:
           repo: metacraft-labs/codetracer-trace-format-nim
+          ref: main
           path: codetracer-trace-format-nim
           gh-token: ${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS }}
       - name: Install Nim
@@ -65,24 +66,28 @@ jobs:
         uses: metacraft-labs/metacraft-github-actions/clone-repo@main
         with:
           repo: metacraft-labs/codetracer-python-recorder
+          ref: main
           path: codetracer-python-recorder
           gh-token: ${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS }}
       - name: Clone codetracer-ruby-recorder
         uses: metacraft-labs/metacraft-github-actions/clone-repo@main
         with:
           repo: metacraft-labs/codetracer-ruby-recorder
+          ref: main
           path: codetracer-ruby-recorder
           gh-token: ${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS }}
       - name: Clone codetracer-js-recorder
         uses: metacraft-labs/metacraft-github-actions/clone-repo@main
         with:
           repo: metacraft-labs/codetracer-js-recorder
+          ref: main
           path: codetracer-js-recorder
           gh-token: ${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS }}
       - name: Clone codetracer-native-recorder
         uses: metacraft-labs/metacraft-github-actions/clone-repo@main
         with:
           repo: metacraft-labs/codetracer-native-recorder
+          ref: main
           path: codetracer-native-recorder
           gh-token: ${{ secrets.GH_READ_METACRAFT_PRIVATE_REPOS }}
 

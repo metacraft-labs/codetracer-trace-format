@@ -363,12 +363,16 @@ impl TraceWriter for CtfsTraceWriter {
             let format_handle = writer.add_file("events.fmt")?;
             writer.write(format_handle, format_name)?;
 
-            // Write metadata as meta.json
-            let trace_metadata = codetracer_trace_types::TraceMetadata {
-                program: self.base.program.clone(),
-                args: self.base.args.clone(),
-                workdir: self.base.workdir.clone(),
-            };
+            // Write metadata as meta.json.
+            // M-REC-1: mint a UUIDv7 recording_id for this trace.
+            // Recorders that need to pin a pre-existing id (the
+            // import flow, M-REC-7) should construct TraceMetadata
+            // directly with their own id and then write it out.
+            let trace_metadata = codetracer_trace_types::TraceMetadata::new(
+                self.base.program.clone(),
+                self.base.args.clone(),
+                self.base.workdir.clone(),
+            );
             let meta_json = serde_json::to_string(&trace_metadata)?;
             let meta_handle = writer.add_file("meta.json")?;
             writer.write(meta_handle, meta_json.as_bytes())?;

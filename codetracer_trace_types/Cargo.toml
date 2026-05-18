@@ -17,3 +17,6 @@ serde_json = "1.0"
 serde_repr = "0.1"
 schemars = "0.8.2"
 serde_with = "3.15.1"
+# M-REC-1: UUIDv7 generation for recording_id (RFC 9562, §5.7).  The
+# `v7` feature pulls in `getrandom` for CSPRNG entropy.
+uuid = { version = "1.10", features = ["v7", "serde"] }

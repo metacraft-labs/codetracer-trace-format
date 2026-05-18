@@ -31,3 +31,5 @@ workspace = true
 
 [dev-dependencies]
 tempfile = "3"
+# M-REC-1: parse and validate UUIDv7 recording_id in integration tests.
+uuid = { version = "1.10", features = ["v7"] }

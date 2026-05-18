@@ -308,11 +308,16 @@ pub trait AbstractTraceWriter {
 
     fn finish_writing_trace_metadata(&mut self) -> Result<(), Box<dyn Error>> {
         if let Some(path) = &self.get_data().trace_metadata_path {
-            let trace_metadata = TraceMetadata {
-                program: self.get_data().program.clone(),
-                args: self.get_data().args.clone(),
-                workdir: self.get_data().workdir.clone(),
-            };
+            // M-REC-1: mint the canonical UUIDv7 recording_id at the
+            // point metadata is finalised.  Recorders that need to
+            // pin a specific id (e.g. the import path) should call a
+            // dedicated entry point rather than this default trait
+            // method.
+            let trace_metadata = TraceMetadata::new(
+                self.get_data().program.clone(),
+                self.get_data().args.clone(),
+                self.get_data().workdir.clone(),
+            );
             let json = serde_json::to_string(&trace_metadata)?;
             fs::write(path, json)?;
             Ok(())

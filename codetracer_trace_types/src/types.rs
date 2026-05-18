@@ -148,12 +148,41 @@ pub struct FullValueRecord {
     pub value: ValueRecord,
 }
 
+/// Per-trace metadata stamped into `meta.dat` (or, for the legacy JSON
+/// fallback path, into `meta.json`).
+///
+/// `recording_id` is the canonical UUIDv7 (RFC 9562) identity of the
+/// recording, generated at record start by the recorder.  See
+/// `codetracer-specs/Refactoring-Plans/Recording-Identifier-Migration.md`
+/// for the migration rationale.  Pre-1.0, this field is REQUIRED;
+/// parsers reject metadata that does not carry one.  Canonical text
+/// form: lowercase hyphenated 36-char (e.g.
+/// `01949fcc-7d92-7e9c-aaaa-bbbbbbbbbbbb`).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TraceMetadata {
+    pub recording_id: String,
     #[serde(default)]
     pub workdir: PathBuf,
     pub program: String,
     pub args: Vec<String>,
+}
+
+impl TraceMetadata {
+    /// Construct a `TraceMetadata` with a freshly-minted UUIDv7
+    /// `recording_id`.  Convenience for call sites that do not want to
+    /// thread the `uuid` crate themselves.
+    ///
+    /// M-REC-1: the recording_id is generated via `Uuid::now_v7`,
+    /// which combines the current wall-clock ms with 74 random bits
+    /// from a CSPRNG, per RFC 9562 §5.7.
+    pub fn new(program: impl Into<String>, args: Vec<String>, workdir: PathBuf) -> Self {
+        TraceMetadata {
+            recording_id: uuid::Uuid::now_v7().hyphenated().to_string(),
+            workdir,
+            program: program.into(),
+            args,
+        }
+    }
 }
 
 // call keys:

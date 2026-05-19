@@ -1412,6 +1412,15 @@ pub trait TraceWriter: Send {
     fn record_empty_filter_provenance(&mut self) -> Result<(), Box<dyn Error>> {
         Ok(())
     }
+
+    /// Write the branded recorder-id field into `meta.dat` (CTFS spec §7).
+    /// `recorder_id` should be the stable recorder identifier
+    /// (e.g. `"codetracer-cairo-recorder"`).  Default no-op so
+    /// in-memory test doubles continue to compile; the CTFS-emitting
+    /// `NimTraceWriter` overrides this to write the field via FFI.
+    fn write_meta_dat(&mut self, _recorder_id: &str) -> Result<(), Box<dyn Error>> {
+        Ok(())
+    }
 }
 
 impl TraceWriter for NimTraceWriter {
@@ -1567,6 +1576,9 @@ impl TraceWriter for NimTraceWriter {
     }
     fn record_empty_filter_provenance(&mut self) -> Result<(), Box<dyn Error>> {
         NimTraceWriter::record_empty_filter_provenance(self)
+    }
+    fn write_meta_dat(&mut self, recorder_id: &str) -> Result<(), Box<dyn Error>> {
+        NimTraceWriter::write_meta_dat(self, recorder_id)
     }
 }
 

@@ -16,10 +16,16 @@ codetracer_trace_types = { path = "../codetracer_trace_types" }
 # its Rust bindings (only the linked libzstd + the exported `zstd.h`), and
 # `bindgen` would otherwise require libclang on every consumer's machine.
 zstd-sys = { version = "2", default-features = false, features = ["std"] }
+# Used by the in-memory `NonStreamingTraceWriter` test double to decode the
+# streaming-encoder CBOR payloads (`register_variable_cbor` / `register_return_cbor`)
+# back into typed `ValueRecord`s so buffered events are faithfully inspectable.
+ciborium = "0.2"
+# `NonStreamingTraceWriter` serialises buffered events to disk as JSON for the
+# `Json` trace format (faithful drop-in for the legacy Rust writer crate).
+serde_json = "1.0"
 
 [build-dependencies]
 # None needed -- build.rs compiles the Nim static library via `nim`.
 
 [dev-dependencies]
-serde_json = "1.0"
 tempfile = "3"

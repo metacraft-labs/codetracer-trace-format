@@ -405,7 +405,7 @@ fn str_to_cstring(s: &str) -> CString {
 // ---------------------------------------------------------------------------
 
 /// Trace event file formats (mirrors the Rust `TraceEventsFileFormat`).
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TraceEventsFileFormat {
     Json,
     BinaryV0,
@@ -2033,11 +2033,34 @@ impl Drop for NimTraceReaderHandle {
 // Public factory function — drop-in replacement for codetracer_trace_writer
 // ---------------------------------------------------------------------------
 
-/// Create a trace writer backed by the Nim library.
+/// Create a trace writer for the requested format.
 ///
-/// This is a drop-in replacement for `codetracer_trace_writer::create_trace_writer`.
-pub fn create_trace_writer(program: &str, _args: &[String], format: TraceEventsFileFormat) -> Box<dyn TraceWriter> {
-    Box::new(NimTraceWriter::new(program, format))
+/// This is a drop-in replacement for `codetracer_trace_writer::create_trace_writer`
+/// and preserves that crate's format → writer mapping:
+///
+/// * `Json` / `BinaryV0` → the in-memory [`non_streaming_trace_writer::NonStreamingTraceWriter`],
+///   which buffers events (inspectable via `events()`) and serialises them to
+///   disk on `finish_writing_trace_events` / `close`.
+/// * `Binary` / `Ctfs` → the streaming Nim-backed [`NimTraceWriter`], which
+///   writes a modern seekable-Zstd `.ct` CTFS container.
+///
+/// The Nim backend's single-stream legacy path is only safe once
+/// `begin_writing_trace_events` has been called; routing the non-streaming
+/// formats to the in-memory writer keeps `Json` usable both for on-disk
+/// output and for recorder unit tests that inspect buffered events without
+/// opening a container — matching the historical `codetracer_trace_writer`
+/// contract these consumers were written against.
+pub fn create_trace_writer(program: &str, args: &[String], format: TraceEventsFileFormat) -> Box<dyn TraceWriter> {
+    match format {
+        TraceEventsFileFormat::Json | TraceEventsFileFormat::BinaryV0 => {
+            let mut writer = non_streaming_trace_writer::NonStreamingTraceWriter::new(program, args);
+            writer.set_format(format);
+            Box::new(writer)
+        }
+        TraceEventsFileFormat::Binary | TraceEventsFileFormat::Ctfs => {
+            Box::new(NimTraceWriter::new(program, format))
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -2070,6 +2093,162 @@ fn value_record_to_raw(value: &ValueRecord) -> (String, TypeKind, String) {
 }
 
 // ---------------------------------------------------------------------------
+// CBOR -> ValueRecord decoding
+// ---------------------------------------------------------------------------
+
+/// Decode the CBOR payload produced by `StreamingValueEncoder` (and the Nim
+/// `streaming_value_encoder`) back into a typed [`ValueRecord`].
+///
+/// The streaming encoder emits one CBOR map per value, internally tagged with
+/// a `"kind"` field — byte-identical to the serde representation of
+/// `ValueRecord`. The in-memory [`non_streaming_trace_writer::NonStreamingTraceWriter`]
+/// uses this so `register_variable_cbor` / `register_return_cbor` buffer the
+/// real typed value rather than a lossy hex-`Raw` placeholder, which lets
+/// recorder unit tests inspect the captured values faithfully.
+///
+/// Returns a `ValueRecord::Raw` carrying a hex dump of the bytes if the
+/// payload cannot be decoded — this never silently loses data, it just
+/// degrades to the legacy placeholder behaviour for genuinely opaque blobs.
+pub fn decode_cbor_value_record(cbor: &[u8]) -> ValueRecord {
+    match ciborium::de::from_reader::<ciborium::value::Value, _>(cbor) {
+        Ok(value) => cbor_value_to_record(&value).unwrap_or_else(|| hex_raw(cbor)),
+        Err(_) => hex_raw(cbor),
+    }
+}
+
+fn hex_raw(cbor: &[u8]) -> ValueRecord {
+    let hex = cbor.iter().map(|b| format!("{b:02x}")).collect::<String>();
+    ValueRecord::Raw {
+        r: hex,
+        type_id: TypeId(0),
+    }
+}
+
+fn cbor_value_to_record(value: &ciborium::value::Value) -> Option<ValueRecord> {
+    use ciborium::value::Value as V;
+
+    // A ValueRef (CBOR tag 256 + uint) — encoded by `StreamingValueEncoder::write_ref`.
+    // The non-streaming writer has no compound-value table, so surface it as a
+    // descriptive Raw rather than dropping it.
+    if let V::Tag(256, inner) = value {
+        let id = inner.as_integer().and_then(|i| i128::try_from(i).ok());
+        return Some(ValueRecord::Raw {
+            r: format!("<ref {}>", id.unwrap_or_default()),
+            type_id: TypeId(0),
+        });
+    }
+
+    let map = match value {
+        V::Map(entries) => entries,
+        _ => return None,
+    };
+
+    let get = |key: &str| -> Option<&V> {
+        map.iter().find_map(|(k, v)| match k {
+            V::Text(t) if t == key => Some(v),
+            _ => None,
+        })
+    };
+    let as_u64 = |v: &V| -> Option<u64> {
+        v.as_integer().and_then(|i| u64::try_from(i).ok())
+    };
+    let as_i64 = |v: &V| -> Option<i64> {
+        v.as_integer().and_then(|i| i64::try_from(i).ok())
+    };
+    let as_str = |v: &V| -> Option<String> { v.as_text().map(|s| s.to_string()) };
+    let type_id = |default: u64| -> TypeId {
+        TypeId(get("type_id").and_then(as_u64).unwrap_or(default) as usize)
+    };
+
+    let kind = get("kind").and_then(|v| v.as_text())?.to_string();
+    let record = match kind.as_str() {
+        "Int" => ValueRecord::Int {
+            i: get("i").and_then(as_i64)?,
+            type_id: type_id(0),
+        },
+        "Float" => ValueRecord::Float {
+            f: get("f").and_then(|v| v.as_float())?,
+            type_id: type_id(0),
+        },
+        "Bool" => ValueRecord::Bool {
+            b: get("b").and_then(|v| v.as_bool())?,
+            type_id: type_id(0),
+        },
+        "String" => ValueRecord::String {
+            text: get("text").and_then(as_str)?,
+            type_id: type_id(0),
+        },
+        "Raw" => ValueRecord::Raw {
+            r: get("r").and_then(as_str)?,
+            type_id: type_id(0),
+        },
+        "Error" => ValueRecord::Error {
+            msg: get("msg").and_then(as_str)?,
+            type_id: type_id(0),
+        },
+        "None" => ValueRecord::None {
+            type_id: type_id(0),
+        },
+        "Char" => {
+            let text = get("c").and_then(as_str)?;
+            ValueRecord::Char {
+                c: text.chars().next()?,
+                type_id: type_id(0),
+            }
+        }
+        "Sequence" => ValueRecord::Sequence {
+            elements: decode_cbor_elements(get("elements")?)?,
+            is_slice: get("is_slice").and_then(|v| v.as_bool()).unwrap_or(false),
+            type_id: type_id(0),
+        },
+        "Tuple" => ValueRecord::Tuple {
+            elements: decode_cbor_elements(get("elements")?)?,
+            type_id: type_id(0),
+        },
+        "Struct" => ValueRecord::Struct {
+            field_values: decode_cbor_elements(get("field_values")?)?,
+            type_id: type_id(0),
+        },
+        "Variant" => ValueRecord::Variant {
+            discriminator: get("discriminator").and_then(as_str)?,
+            contents: Box::new(cbor_value_to_record(get("contents")?)?),
+            type_id: type_id(0),
+        },
+        "Reference" => ValueRecord::Reference {
+            dereferenced: Box::new(cbor_value_to_record(get("dereferenced")?)?),
+            address: get("address").and_then(as_u64).unwrap_or(0),
+            mutable: get("mutable").and_then(|v| v.as_bool()).unwrap_or(false),
+            type_id: type_id(0),
+        },
+        "BigInt" => ValueRecord::BigInt {
+            b: get("b").and_then(|v| v.as_bytes().map(|b| b.to_vec()))?,
+            negative: get("negative").and_then(|v| v.as_bool()).unwrap_or(false),
+            type_id: type_id(0),
+        },
+        "Enum" => {
+            // The streaming encoder can emit an Enum leaf; `ValueRecord` has no
+            // Enum variant, so represent it as a Raw "name" — faithful enough
+            // for the in-memory test double.
+            ValueRecord::Raw {
+                r: get("name").and_then(as_str).unwrap_or_default(),
+                type_id: type_id(0),
+            }
+        }
+        _ => return None,
+    };
+    Some(record)
+}
+
+fn decode_cbor_elements(value: &ciborium::value::Value) -> Option<Vec<ValueRecord>> {
+    let arr = value.as_array()?;
+    let mut out = Vec::with_capacity(arr.len());
+    for item in arr {
+        out.push(cbor_value_to_record(item)?);
+    }
+    Some(out)
+}
+
+// ---------------------------------------------------------------------------
 // NonStreamingTraceWriter — in-memory test double
 // ---------------------------------------------------------------------------
 
@@ -2097,6 +2276,12 @@ pub mod non_streaming_trace_writer {
         next_variable_id: usize,
         next_path_id: usize,
         workdir: PathBuf,
+        /// Output path captured by `begin_writing_trace_events`. The buffered
+        /// events are serialised here by `finish_writing_trace_events` /
+        /// `close` so this writer is a faithful drop-in for the legacy
+        /// `codetracer_trace_writer::NonStreamingTraceWriter` (which the
+        /// `Json` trace format relies on for on-disk output).
+        trace_events_path: Option<PathBuf>,
     }
 
     impl NonStreamingTraceWriter {
@@ -2115,11 +2300,31 @@ pub mod non_streaming_trace_writer {
                 next_variable_id: 0,
                 next_path_id: 0,
                 workdir: PathBuf::new(),
+                trace_events_path: None,
             }
         }
 
         pub fn set_format(&mut self, format: TraceEventsFileFormat) {
             self.format = format;
+        }
+
+        /// Serialise the buffered events to `trace_events_path`.
+        /// Called from `finish_writing_trace_events` and `close`; idempotent.
+        ///
+        /// Only the `Json` format produces an on-disk artifact here — that is
+        /// the format the recorder uses for human-readable traces and that
+        /// the legacy `codetracer_trace_writer::NonStreamingTraceWriter`
+        /// emitted as JSON. `BinaryV0` keeps its events buffered in memory
+        /// (inspectable via `events()`); it has no JSON-on-disk contract.
+        fn flush_events_to_disk(&self) -> Result<(), Box<dyn Error>> {
+            if self.format != TraceEventsFileFormat::Json {
+                return Ok(());
+            }
+            if let Some(path) = &self.trace_events_path {
+                let json = serde_json::to_string(&self.events)?;
+                std::fs::write(path, json)?;
+            }
+            Ok(())
         }
     }
 
@@ -2132,16 +2337,22 @@ pub mod non_streaming_trace_writer {
             Ok(())
         }
         fn begin_writing_trace_events(&mut self, path: &Path) -> Result<(), Box<dyn Error>> {
+            self.trace_events_path = Some(path.to_path_buf());
             Ok(())
         }
         fn finish_writing_trace_events(&mut self) -> Result<(), Box<dyn Error>> {
-            Ok(())
+            self.flush_events_to_disk()
         }
         fn begin_writing_trace_paths(&mut self, path: &Path) -> Result<(), Box<dyn Error>> {
             Ok(())
         }
         fn finish_writing_trace_paths(&mut self) -> Result<(), Box<dyn Error>> {
             Ok(())
+        }
+        fn close(&mut self) -> Result<(), Box<dyn Error>> {
+            // Ensure events reach disk even if `finish_writing_trace_events`
+            // was not called explicitly (mirrors the legacy writer contract).
+            self.flush_events_to_disk()
         }
         fn set_workdir(&mut self, workdir: &Path) {
             self.workdir = workdir.to_path_buf();
@@ -2198,6 +2409,13 @@ pub mod non_streaming_trace_writer {
             let id = VariableId(self.next_variable_id);
             self.next_variable_id += 1;
             self.variables.insert(variable_name.to_string(), id);
+            // Emit a `VariableName` event the first time an id is minted, so
+            // the buffered event stream stays self-describing: a `Value` /
+            // `Call` arg referencing `VariableId(n)` is always preceded by
+            // the `VariableName` at index `n`. Mirrors the legacy
+            // `codetracer_trace_writer::AbstractTraceWriter::ensure_variable_id`.
+            self.events
+                .push(TraceLowLevelEvent::VariableName(variable_name.to_string()));
             id
         }
         fn register_path(&mut self, path: &Path) {
@@ -2246,19 +2464,22 @@ pub mod non_streaming_trace_writer {
             self.events.push(TraceLowLevelEvent::Value(FullValueRecord { variable_id, value }));
         }
         fn register_variable_cbor(&mut self, name: &str, cbor: &[u8]) {
-            // Test double: store CBOR as a Raw value with hex representation.
-            let hex = cbor.iter().map(|b| format!("{b:02x}")).collect::<String>();
+            // Decode the streaming-encoder CBOR back into the typed
+            // `ValueRecord` it represents so buffered events carry real
+            // values (recorder unit tests inspect `events()`).
+            let value = super::decode_cbor_value_record(cbor);
             let variable_id = self.ensure_variable_id(name);
             self.events.push(TraceLowLevelEvent::Value(FullValueRecord {
                 variable_id,
-                value: ValueRecord::Raw { r: hex, type_id: TypeId(0) },
+                value,
             }));
         }
         fn register_return_cbor(&mut self, cbor: &[u8]) {
-            // Test double: store CBOR as a Raw return value with hex representation.
-            let hex = cbor.iter().map(|b| format!("{b:02x}")).collect::<String>();
+            // Decode the streaming-encoder CBOR back into the typed
+            // `ValueRecord` it represents (see `register_variable_cbor`).
+            let return_value = super::decode_cbor_value_record(cbor);
             self.events.push(TraceLowLevelEvent::Return(ReturnRecord {
-                return_value: ValueRecord::Raw { r: hex, type_id: TypeId(0) },
+                return_value,
             }));
         }
         fn register_variable_name(&mut self, variable_name: &str) {

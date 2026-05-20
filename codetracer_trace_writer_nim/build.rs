@@ -24,6 +24,11 @@ fn main() {
     );
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR is set by Cargo"));
     let windows = env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows");
+    // `msvc` vs `gnu` on Windows: the Nim objects must match the ABI of the
+    // consuming Rust crate. The MSVC target needs `--cc:vcc` and a `.lib`;
+    // the `x86_64-pc-windows-gnu` target (used by e.g. the Ruby recorder to
+    // match MSYS2 Ruby) needs MinGW gcc and a `.a`.
+    let msvc = windows && env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc");
 
     // --- locate the Nim sources ------------------------------------------
     // Default: the `codetracer-trace-format-nim` sibling repo. Override with
@@ -63,9 +68,9 @@ fn main() {
 
     // --- build the Nim static library ------------------------------------
     // MSVC's linker resolves `static=codetracer_trace_writer` to
-    // `codetracer_trace_writer.lib`; Unix `ar` to
+    // `codetracer_trace_writer.lib`; the GNU/Unix `ar` to
     // `libcodetracer_trace_writer.a`. The lib itself goes to OUT_DIR.
-    let lib_name = if windows {
+    let lib_name = if msvc {
         "codetracer_trace_writer.lib"
     } else {
         "libcodetracer_trace_writer.a"
@@ -92,10 +97,14 @@ fn main() {
     if let Some(inc) = zstd_include_dir() {
         nim.arg(format!("--passC:-I{}", inc.display()));
     }
-    if windows {
-        // The consuming Rust crate uses the MSVC ABI, so the Nim objects
-        // must too -- Nim defaults to MinGW gcc on Windows.
+    if msvc {
+        // MSVC-ABI consumer: Nim must emit MSVC objects (it defaults to
+        // MinGW gcc on Windows).
         nim.arg("--cc:vcc");
+    } else if windows {
+        // windows-gnu consumer: MinGW gcc objects (ABI-compatible with the
+        // x86_64-pc-windows-gnu Rust target).
+        nim.arg("--cc:gcc");
     } else {
         // -fPIC so the .a can be linked into shared objects (PyO3 .so).
         nim.arg("--passC:-fPIC");
@@ -110,10 +119,10 @@ fn main() {
     println!("cargo:rustc-link-search=native={}", out_dir.display());
     println!("cargo:rustc-link-lib=static=codetracer_trace_writer");
 
-    // libm is a separate library only on Unix (the Nim runtime / CTFS code
-    // uses math symbols); the MSVC CRT folds the math symbols in, so
-    // linking `m` on Windows fails with "could not find m".
-    if !windows {
+    // The Nim runtime / CTFS code uses math symbols. Unix and MinGW
+    // (windows-gnu) provide them in a separate `libm`; the MSVC CRT folds
+    // them in, so linking `m` under MSVC fails with "could not find m".
+    if !msvc {
         println!("cargo:rustc-link-lib=dylib=m");
     }
 

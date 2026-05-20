@@ -6,16 +6,19 @@ description = "TraceWriter implementation backed by the Nim codetracer-trace-for
 
 [dependencies]
 codetracer_trace_types = { path = "../codetracer_trace_types" }
-# Provides libzstd at link time (via zstd-sys, which compiles zstd from
-# source with the active toolchain — MSVC on Windows). The Nim static
-# library from codetracer-trace-format-nim calls libzstd; depending on it
-# here resolves those symbols. The prebuilt zstd release's
-# `libzstd_static.lib` is MinGW-built and is NOT linkable into MSVC
-# binaries (`___chkstk_ms` unresolved), so build.rs must not link it.
-zstd = "0.13"
+# The Nim static library from codetracer-trace-format-nim calls libzstd.
+# Depending on `zstd-sys` directly (a) links a libzstd built from source
+# with the active toolchain (MSVC on Windows, so it links cleanly -- unlike
+# the MinGW `libzstd_static.lib` in the prebuilt zstd release) and (b)
+# exposes `DEP_ZSTD_ROOT` to this crate's build.rs, which is where the
+# matching `zstd.h` lives (build.rs needs it to compile the Nim bindings).
+# default-features = false drops zstd-sys's `bindgen` feature: we never use
+# its Rust bindings (only the linked libzstd + the exported `zstd.h`), and
+# `bindgen` would otherwise require libclang on every consumer's machine.
+zstd-sys = { version = "2", default-features = false, features = ["std"] }
 
 [build-dependencies]
-# None needed — build.rs compiles the Nim static library via `nim`.
+# None needed -- build.rs compiles the Nim static library via `nim`.
 
 [dev-dependencies]
 serde_json = "1.0"

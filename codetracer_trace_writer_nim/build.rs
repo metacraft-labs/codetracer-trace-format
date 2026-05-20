@@ -1,18 +1,20 @@
 //! Builds the Nim `codetracer-trace-format-nim` static library and links it.
 //!
 //! The Nim FFI library (`codetracer_trace_writer_ffi.nim`) is compiled to a
-//! native static library at build time — it is **not** a committed artifact.
-//! The repo previously expected a hand-built `libcodetracer_trace_writer.a`
-//! to already exist (produced by `nimble buildStaticLib`), which meant a
-//! fresh checkout could not build, and Windows could not build at all
-//! (`.a` naming, `-fPIC`, `-lm` and `pkg-config` are all Unix-only).
+//! native static library at build time -- it is **not** a committed
+//! artifact. The repo previously expected a hand-built
+//! `libcodetracer_trace_writer.a` to already exist, which meant a fresh
+//! checkout could not build, and Windows could not build at all (`.a`
+//! naming, `-fPIC`, `-lm` and `pkg-config` are all Unix-only).
 //!
-//! libzstd (which the Nim CTFS code links) is supplied by the `zstd` crate
-//! dependency — zstd-sys compiles it from source with the active toolchain,
-//! so it is MSVC-compatible. The prebuilt zstd release ships a MinGW
-//! `libzstd_static.lib` that cannot be linked into an MSVC binary.
+//! libzstd (which the Nim CTFS code links) is supplied by the `zstd-sys`
+//! crate dependency: it builds libzstd from source with the active
+//! toolchain (MSVC-clean on Windows) and exposes `DEP_ZSTD_ROOT`, where the
+//! matching `zstd.h` lives.
 
+use std::collections::hash_map::DefaultHasher;
 use std::env;
+use std::hash::{Hash, Hasher};
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -39,15 +41,30 @@ fn main() {
     let ffi_entry = nim_src.join("codetracer_trace_writer_ffi.nim");
     assert!(
         ffi_entry.is_file(),
-        "Nim FFI entry point not found at {} — is the codetracer-trace-format-nim \
+        "Nim FFI entry point not found at {} -- is the codetracer-trace-format-nim \
          repo checked out as a sibling? (override with CODETRACER_TRACE_FORMAT_NIM_DIR)",
         ffi_entry.display(),
     );
 
-    // --- build the Nim static library into OUT_DIR -----------------------
+    // --- choose a short nimcache directory -------------------------------
+    // When the nimcache sits inside a deeply nested OUT_DIR (e.g. a napi-rs
+    // build: <repo>/crates/<x>/target/<triple>/release/build/<hash>/out),
+    // Nim's per-file C compiler invocations fail with C1083 "cannot open
+    // source file" -- Nim falls back to relative source paths that the C
+    // compiler resolves against a different working directory. Keeping the
+    // nimcache in a short directory under the system temp dir avoids that.
+    // The directory is keyed by a deterministic hash of OUT_DIR so each
+    // cargo build unit gets its own cache and incremental reuse still works.
+    let mut hasher = DefaultHasher::new();
+    out_dir.hash(&mut hasher);
+    let nimcache = env::temp_dir()
+        .join("ctnw")
+        .join(format!("{:016x}", hasher.finish()));
+
+    // --- build the Nim static library ------------------------------------
     // MSVC's linker resolves `static=codetracer_trace_writer` to
     // `codetracer_trace_writer.lib`; Unix `ar` to
-    // `libcodetracer_trace_writer.a`.
+    // `libcodetracer_trace_writer.a`. The lib itself goes to OUT_DIR.
     let lib_name = if windows {
         "codetracer_trace_writer.lib"
     } else {
@@ -63,23 +80,22 @@ fn main() {
         .arg("-d:release")
         // db-backend also links the Nim-compiled MCR emulator. Two
         // independently Nim-compiled artifacts in one binary both define
-        // `NimMain`/`PreMain`/... — `--nimMainPrefix` renames this lib's
+        // `NimMain`/`PreMain`/... -- `--nimMainPrefix` renames this lib's
         // copy so the final link does not hit a duplicate-symbol error.
         // The prefix MUST match the `codetracerTraceWriterNimMain` importc
         // in `codetracer_trace_writer_ffi.nim` and the nimble build tasks.
         .arg("--nimMainPrefix:codetracerTraceWriter")
         .arg(format!("--path:{}", nim_src.display()))
-        .arg(format!("--nimcache:{}", out_dir.join("nimcache").display()));
+        .arg(format!("--nimcache:{}", nimcache.display()));
+    // The zstd bindings do `#include <zstd.h>`; put its header dir on the C
+    // include path so the generated C compiles.
+    if let Some(inc) = zstd_include_dir() {
+        nim.arg(format!("--passC:-I{}", inc.display()));
+    }
     if windows {
         // The consuming Rust crate uses the MSVC ABI, so the Nim objects
-        // must too — Nim defaults to MinGW gcc on Windows.
+        // must too -- Nim defaults to MinGW gcc on Windows.
         nim.arg("--cc:vcc");
-        // The zstd bindings do `#include <zstd.h>`; put its header dir on
-        // the C include path so the generated C compiles. (Header only —
-        // the actual libzstd comes from the `zstd` crate dependency.)
-        if let Some(inc) = zstd_include_dir() {
-            nim.arg(format!("--passC:-I{}", inc.display()));
-        }
     } else {
         // -fPIC so the .a can be linked into shared objects (PyO3 .so).
         nim.arg("--passC:-fPIC");
@@ -88,7 +104,7 @@ fn main() {
 
     let status = nim
         .status()
-        .expect("failed to run `nim` — the Nim compiler must be on PATH");
+        .expect("failed to run `nim` -- the Nim compiler must be on PATH");
     assert!(status.success(), "nim static-library build failed");
 
     println!("cargo:rustc-link-search=native={}", out_dir.display());
@@ -109,15 +125,22 @@ fn main() {
 
 /// Locate a directory containing `zstd.h` for the Nim C compilation step.
 ///
-/// On Windows `env.ps1` exports `ZSTD_DIR` (the prebuilt zstd release,
-/// which has `include/zstd.h`). On Unix the system include path already
-/// carries `zstd.h`, so no `-I` is needed and this returns `None`.
+/// Preference: the `zstd-sys` crate's exported root (`DEP_ZSTD_ROOT`, which
+/// holds `include/zstd.h`) -- always present because this crate depends on
+/// `zstd-sys`. Falls back to `ZSTD_DIR/include` (the prebuilt zstd release
+/// exported by codetracer's env.ps1).
 fn zstd_include_dir() -> Option<PathBuf> {
-    let zstd_dir = env::var("ZSTD_DIR").ok()?;
-    let inc = PathBuf::from(zstd_dir).join("include");
-    if inc.join("zstd.h").is_file() {
-        Some(inc)
-    } else {
-        None
+    if let Ok(root) = env::var("DEP_ZSTD_ROOT") {
+        let inc = PathBuf::from(root).join("include");
+        if inc.join("zstd.h").is_file() {
+            return Some(inc);
+        }
     }
+    if let Ok(zstd_dir) = env::var("ZSTD_DIR") {
+        let inc = PathBuf::from(zstd_dir).join("include");
+        if inc.join("zstd.h").is_file() {
+            return Some(inc);
+        }
+    }
+    None
 }

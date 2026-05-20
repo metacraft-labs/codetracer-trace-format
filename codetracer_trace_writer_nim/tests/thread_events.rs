@@ -32,7 +32,7 @@ static NIM_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 fn make_writer(program_basename: &str) -> (tempfile::TempDir, NimTraceWriter) {
     let dir = tempfile::tempdir().expect("tempdir");
-    let mut writer = NimTraceWriter::new(program_basename, TraceEventsFileFormat::Binary);
+    let mut writer = NimTraceWriter::new(program_basename, &[], TraceEventsFileFormat::Binary);
 
     // Start the trace lifecycle exactly the way recorders do.  The
     // multi-stream backend defers .ct creation until `begin_writing_trace_events`,

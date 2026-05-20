@@ -37,6 +37,12 @@ extern "C" {
 
     fn trace_writer_start(handle: *mut std::ffi::c_void, path: *const std::os::raw::c_char, line: i64);
     fn trace_writer_set_workdir(handle: *mut std::ffi::c_void, workdir: *const std::os::raw::c_char);
+    fn trace_writer_set_args(
+        handle: *mut std::ffi::c_void,
+        args: *const *const u8,
+        arg_lens: *const usize,
+        args_count: usize,
+    );
     fn trace_writer_register_step(handle: *mut std::ffi::c_void, path: *const std::os::raw::c_char, line: i64);
 
     fn trace_writer_ensure_function_id(
@@ -711,11 +717,28 @@ unsafe impl Send for NimTraceWriter {}
 
 impl NimTraceWriter {
     /// Create a new trace writer backed by the Nim library.
-    pub fn new(program: &str, format: TraceEventsFileFormat) -> Self {
+    ///
+    /// `args` is the recorded program's argv; it is forwarded to the
+    /// Nim writer so the CTFS `meta.dat` block records it (spec §7).
+    /// Pass an empty slice when there are no arguments.
+    pub fn new(program: &str, args: &[String], format: TraceEventsFileFormat) -> Self {
         ensure_nim_initialized();
         let c_program = str_to_cstring(program);
         let handle = unsafe { trace_writer_new(c_program.as_ptr(), format.to_ffi()) };
         assert!(!handle.is_null(), "trace_writer_new returned null: {}", last_error());
+        // Forward argv into the Nim writer's meta.dat metadata.  Each
+        // entry crosses the FFI boundary as a (pointer, length) pair so
+        // argv containing non-UTF8 bytes or embedded NULs survives.
+        let arg_ptrs: Vec<*const u8> = args.iter().map(|a| a.as_ptr()).collect();
+        let arg_lens: Vec<usize> = args.iter().map(|a| a.len()).collect();
+        unsafe {
+            trace_writer_set_args(
+                handle,
+                arg_ptrs.as_ptr(),
+                arg_lens.as_ptr(),
+                args.len(),
+            );
+        }
         NimTraceWriter {
             handle,
             streaming_encoder: StreamingValueEncoder::new(),
@@ -2058,7 +2081,7 @@ pub fn create_trace_writer(program: &str, args: &[String], format: TraceEventsFi
             Box::new(writer)
         }
         TraceEventsFileFormat::Binary | TraceEventsFileFormat::Ctfs => {
-            Box::new(NimTraceWriter::new(program, format))
+            Box::new(NimTraceWriter::new(program, args, format))
         }
     }
 }

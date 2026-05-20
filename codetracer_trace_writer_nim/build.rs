@@ -66,6 +66,37 @@ fn main() {
         .join("ctnw")
         .join(format!("{:016x}", hasher.finish()));
 
+    // --- resolve the Nim sources' nimble dependencies --------------------
+    // `codetracer-trace-format-nim`'s `.nimble` declares `requires` entries
+    // (`results`, `stew`, ...) that the FFI sources import. A bare `nim c`
+    // (which is what this build.rs invokes) only finds those packages once
+    // they are installed under the global nimble pkg dir -- a fresh checkout
+    // has none of them, so `nim c` fails with `cannot open file: results`.
+    //
+    // `nimble install --depsOnly -y`, run in the nim repo directory, reads
+    // that `.nimble` and installs exactly the declared dependencies into the
+    // global nimble store (where `nim`'s default `nimblePath` then resolves
+    // them). It is idempotent: already-satisfied requirements are a no-op,
+    // so it is safe to run on every build. This mirrors the pattern the
+    // sibling `codetracer-native-recorder` Justfile uses for its Nim FFI
+    // libraries (`ct_interpose`). `nimble` ships with the Nim toolchain.
+    let nimble_status = Command::new("nimble")
+        .arg("install")
+        .arg("--depsOnly")
+        .arg("-y")
+        .current_dir(&nim_repo)
+        .status()
+        .expect(
+            "failed to run `nimble` -- it ships with the Nim toolchain and \
+             must be on PATH alongside `nim`",
+        );
+    assert!(
+        nimble_status.success(),
+        "`nimble install --depsOnly -y` failed in {} -- could not resolve \
+         the Nim FFI library's nimble dependencies",
+        nim_repo.display(),
+    );
+
     // --- build the Nim static library ------------------------------------
     // MSVC's linker resolves `static=codetracer_trace_writer` to
     // `codetracer_trace_writer.lib`; the GNU/Unix `ar` to
@@ -127,6 +158,12 @@ fn main() {
     }
 
     println!("cargo:rerun-if-changed={}", nim_src.display());
+    // Re-resolve nimble dependencies whenever the `.nimble` requirements
+    // change.
+    println!(
+        "cargo:rerun-if-changed={}",
+        nim_repo.join("codetracer_trace_format.nimble").display(),
+    );
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=CODETRACER_TRACE_FORMAT_NIM_DIR");
     println!("cargo:rerun-if-env-changed=ZSTD_DIR");

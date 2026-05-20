@@ -10,6 +10,11 @@ use std::sync::Once;
 
 use codetracer_trace_types::*;
 
+// The Nim static library calls libzstd. Referencing the `zstd` crate keeps
+// it in the dependency graph so zstd-sys's (toolchain-built) libzstd is on
+// the final link line and resolves those symbols. Not used from Rust.
+use zstd as _;
+
 // ---------------------------------------------------------------------------
 // FFI declarations (must match codetracer_trace_writer.h)
 // ---------------------------------------------------------------------------

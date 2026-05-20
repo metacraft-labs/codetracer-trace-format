@@ -368,6 +368,7 @@ dependencies = [
  "codetracer_trace_types",
  "serde_json",
  "tempfile",
+ "zstd",
 ]
 
 [[package]]

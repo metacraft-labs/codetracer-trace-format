@@ -6,9 +6,16 @@ description = "TraceWriter implementation backed by the Nim codetracer-trace-for
 
 [dependencies]
 codetracer_trace_types = { path = "../codetracer_trace_types" }
+# Provides libzstd at link time (via zstd-sys, which compiles zstd from
+# source with the active toolchain — MSVC on Windows). The Nim static
+# library from codetracer-trace-format-nim calls libzstd; depending on it
+# here resolves those symbols. The prebuilt zstd release's
+# `libzstd_static.lib` is MinGW-built and is NOT linkable into MSVC
+# binaries (`___chkstk_ms` unresolved), so build.rs must not link it.
+zstd = "0.13"
 
 [build-dependencies]
-# None needed — we use manual linking via build.rs
+# None needed — build.rs compiles the Nim static library via `nim`.
 
 [dev-dependencies]
 serde_json = "1.0"

@@ -812,16 +812,24 @@ fn test_shared_sender_retries_and_finalize_is_idempotent() {
         "finalize-m32",
     );
 
+    // Build local paths under the platform temp dir so they are absolute
+    // on every OS — a literal `/tmp/...` is absolute on Unix but NOT on
+    // Windows (no drive letter), which broke the is_absolute() assertion.
+    let temp_root = std::env::temp_dir();
     let slice = ManagedUploadObject {
         object_key: "traces/tenant-a/recording-a/slice_0000.ct".to_string(),
-        local_path: "/tmp/slice_0000.ct".to_string(),
+        local_path: temp_root.join("slice_0000.ct").to_string_lossy().into_owned(),
         content_length: 128,
         sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".to_string(),
         kind: ManagedUploadKind::McrSlice { slice_index: 0 },
     };
     let materialized = ManagedUploadObject {
         object_key: "traces/tenant-a/recording-b/python-materialized-trace-v1.json".to_string(),
-        local_path: "/tmp/python/materialized-trace-v1.json".to_string(),
+        local_path: temp_root
+            .join("python")
+            .join("materialized-trace-v1.json")
+            .to_string_lossy()
+            .into_owned(),
         content_length: 256,
         sha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
         kind: ManagedUploadKind::MaterializedArtifact {

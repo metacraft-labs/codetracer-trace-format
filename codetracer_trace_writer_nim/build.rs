@@ -156,6 +156,9 @@ fn main() {
     if !msvc {
         println!("cargo:rustc-link-lib=dylib=m");
     }
+    if env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        println!("cargo:rustc-link-lib=framework=Security");
+    }
 
     println!("cargo:rerun-if-changed={}", nim_src.display());
     // Re-resolve nimble dependencies whenever the `.nimble` requirements

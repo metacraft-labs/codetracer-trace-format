@@ -5,10 +5,7 @@
 //! composition rules from § 5.
 
 use crate::error::FilterResult;
-use crate::model::{
-    ExecDirective, FilterMeta, FilterSource, IoConfig, IoStream, ScopeRule, TraceFilterConfig,
-    ValueAction, ValuePattern,
-};
+use crate::model::{ExecDirective, FilterMeta, FilterSource, IoConfig, IoStream, ScopeRule, TraceFilterConfig, ValueAction, ValuePattern};
 use crate::selector::{MatchType, Selector, SelectorKind};
 use crate::{filter_invalid, filter_io, MAX_SCHEMA_VERSION};
 use serde::Deserialize;
@@ -31,9 +28,7 @@ pub struct ConfigAggregator {
 impl ConfigAggregator {
     /// Ingest a filter from the filesystem.
     pub fn ingest_file(&mut self, path: &Path) -> FilterResult<()> {
-        let contents = fs::read_to_string(path).map_err(|err| {
-            filter_io!("failed to read trace filter '{}': {}", path.display(), err)
-        })?;
+        let contents = fs::read_to_string(path).map_err(|err| filter_io!("failed to read trace filter '{}': {}", path.display(), err))?;
 
         self.ingest_source(path, &contents)
     }
@@ -46,12 +41,12 @@ impl ConfigAggregator {
 
     /// Finalise the aggregation, producing a resolved configuration.
     pub fn finish(self) -> FilterResult<TraceFilterConfig> {
-        let default_exec = self.default_exec.ok_or_else(|| {
-            filter_invalid!("composed filters never set 'scope.default_exec'")
-        })?;
-        let default_value_action = self.default_value_action.ok_or_else(|| {
-            filter_invalid!("composed filters never set 'scope.default_value_action'")
-        })?;
+        let default_exec = self
+            .default_exec
+            .ok_or_else(|| filter_invalid!("composed filters never set 'scope.default_exec'"))?;
+        let default_value_action = self
+            .default_value_action
+            .ok_or_else(|| filter_invalid!("composed filters never set 'scope.default_value_action'"))?;
         let default_value_source = self
             .default_value_source
             .ok_or_else(|| filter_invalid!("failed to record source for 'scope.default_value_action'"))?;
@@ -70,13 +65,8 @@ impl ConfigAggregator {
 
     fn ingest_source(&mut self, path: &Path, contents: &str) -> FilterResult<()> {
         let checksum = calculate_sha256(contents);
-        let raw: RawFilterFile = toml::from_str(contents).map_err(|err| {
-            filter_invalid!(
-                "failed to parse trace filter '{}': {}",
-                path.display(),
-                err
-            )
-        })?;
+        let raw: RawFilterFile =
+            toml::from_str(contents).map_err(|err| filter_invalid!("failed to parse trace filter '{}': {}", path.display(), err))?;
 
         let project_root = detect_project_root(path);
         let source_index = self.sources.len();
@@ -88,12 +78,7 @@ impl ConfigAggregator {
             meta,
         });
 
-        let defaults = resolve_defaults(
-            &raw.scope,
-            path,
-            self.default_exec,
-            self.default_value_action,
-        )?;
+        let defaults = resolve_defaults(&raw.scope, path, self.default_exec, self.default_value_action)?;
         if let Some(exec) = defaults.exec {
             self.default_exec = Some(exec);
         }
@@ -106,12 +91,7 @@ impl ConfigAggregator {
             self.io = Some(io);
         }
 
-        let rules = parse_rules(
-            raw.scope.rules.as_deref().unwrap_or_default(),
-            path,
-            &project_root,
-            source_index,
-        )?;
+        let rules = parse_rules(raw.scope.rules.as_deref().unwrap_or_default(), path, &project_root, source_index)?;
         self.rules.extend(rules);
 
         Ok(())
@@ -129,31 +109,20 @@ pub fn detect_project_root(path: &Path) -> PathBuf {
     let mut current = path.parent();
     while let Some(dir) = current {
         if dir.file_name().and_then(|name| name.to_str()) == Some(".codetracer") {
-            return dir
-                .parent()
-                .map(Path::to_path_buf)
-                .unwrap_or_else(|| dir.to_path_buf());
+            return dir.parent().map(Path::to_path_buf).unwrap_or_else(|| dir.to_path_buf());
         }
         current = dir.parent();
     }
-    path.parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."))
+    path.parent().map(Path::to_path_buf).unwrap_or_else(|| PathBuf::from("."))
 }
 
 pub fn parse_meta(raw: &RawMeta, path: &Path) -> FilterResult<FilterMeta> {
     if raw.name.trim().is_empty() {
-        return Err(filter_invalid!(
-            "'meta.name' must not be empty in '{}'",
-            path.display()
-        ));
+        return Err(filter_invalid!("'meta.name' must not be empty in '{}'", path.display()));
     }
 
     if raw.version < 1 {
-        return Err(filter_invalid!(
-            "'meta.version' must be >= 1 in '{}'",
-            path.display()
-        ));
+        return Err(filter_invalid!("'meta.version' must be >= 1 in '{}'", path.display()));
     }
 
     // Spec § 11: refuse to load filter files whose schema version exceeds
@@ -199,16 +168,11 @@ pub fn resolve_defaults(
     current_value_action: Option<ValueAction>,
 ) -> FilterResult<ResolvedDefaults> {
     let exec = parse_default_exec(&scope.default_exec, path, current_exec)?;
-    let value_action =
-        parse_default_value_action(&scope.default_value_action, path, current_value_action)?;
+    let value_action = parse_default_value_action(&scope.default_value_action, path, current_value_action)?;
     Ok(ResolvedDefaults { exec, value_action })
 }
 
-pub fn parse_default_exec(
-    token: &str,
-    path: &Path,
-    current_exec: Option<ExecDirective>,
-) -> FilterResult<Option<ExecDirective>> {
+pub fn parse_default_exec(token: &str, path: &Path, current_exec: Option<ExecDirective>) -> FilterResult<Option<ExecDirective>> {
     match token {
         "inherit" => {
             if current_exec.is_none() {
@@ -220,22 +184,12 @@ pub fn parse_default_exec(
             Ok(None)
         }
         _ => ExecDirective::parse(token)
-            .ok_or_else(|| {
-                filter_invalid!(
-                    "unsupported value '{}' for 'scope.default_exec' in '{}'",
-                    token,
-                    path.display()
-                )
-            })
+            .ok_or_else(|| filter_invalid!("unsupported value '{}' for 'scope.default_exec' in '{}'", token, path.display()))
             .map(Some),
     }
 }
 
-pub fn parse_default_value_action(
-    token: &str,
-    path: &Path,
-    current_value_action: Option<ValueAction>,
-) -> FilterResult<Option<ValueAction>> {
+pub fn parse_default_value_action(token: &str, path: &Path, current_value_action: Option<ValueAction>) -> FilterResult<Option<ValueAction>> {
     match token {
         "inherit" => {
             if current_value_action.is_none() {
@@ -247,13 +201,7 @@ pub fn parse_default_value_action(
             Ok(None)
         }
         _ => ValueAction::parse(token)
-            .ok_or_else(|| {
-                filter_invalid!(
-                    "unsupported value '{}' for 'scope.default_value_action' in '{}'",
-                    token,
-                    path.display()
-                )
-            })
+            .ok_or_else(|| filter_invalid!("unsupported value '{}' for 'scope.default_value_action' in '{}'", token, path.display()))
             .map(Some),
     }
 }
@@ -269,13 +217,7 @@ pub fn parse_io(raw: Option<&RawIo>, path: &Path) -> FilterResult<Option<IoConfi
             let mut parsed = Vec::new();
             let mut seen = HashSet::new();
             for value in values {
-                let stream = IoStream::parse(value).ok_or_else(|| {
-                    filter_invalid!(
-                        "unsupported IO stream '{}' in '{}'",
-                        value,
-                        path.display()
-                    )
-                })?;
+                let stream = IoStream::parse(value).ok_or_else(|| filter_invalid!("unsupported IO stream '{}' in '{}'", value, path.display()))?;
                 if seen.insert(stream) {
                     parsed.push(stream);
                 }
@@ -293,73 +235,44 @@ pub fn parse_io(raw: Option<&RawIo>, path: &Path) -> FilterResult<Option<IoConfi
     }
     if let Some(modes) = raw.modes.as_ref() {
         if !modes.is_empty() {
-            return Err(filter_invalid!(
-                "'io.modes' is reserved and must be empty in '{}'",
-                path.display()
-            ));
+            return Err(filter_invalid!("'io.modes' is reserved and must be empty in '{}'", path.display()));
         }
     }
 
     Ok(Some(IoConfig { capture, streams }))
 }
 
-pub fn parse_rules(
-    raw_rules: &[RawScopeRule],
-    path: &Path,
-    project_root: &Path,
-    source_id: usize,
-) -> FilterResult<Vec<ScopeRule>> {
+pub fn parse_rules(raw_rules: &[RawScopeRule], path: &Path, project_root: &Path, source_id: usize) -> FilterResult<Vec<ScopeRule>> {
     let mut rules = Vec::new();
     for (idx, raw_rule) in raw_rules.iter().enumerate() {
         let location = format!("{} scope.rules[{}]", path.display(), idx);
-        let selector =
-            Selector::parse(&raw_rule.selector, &SCOPE_SELECTOR_KINDS).map_err(|err| {
-                filter_invalid!("invalid scope selector in {}: {}", location, err)
-            })?;
+        let selector = Selector::parse(&raw_rule.selector, &SCOPE_SELECTOR_KINDS)
+            .map_err(|err| filter_invalid!("invalid scope selector in {}: {}", location, err))?;
         let selector = normalize_scope_selector(selector, project_root, &location)?;
 
         let exec = match raw_rule.exec.as_deref() {
             None | Some("inherit") => None,
-            Some(value) => Some(ExecDirective::parse(value).ok_or_else(|| {
-                filter_invalid!(
-                    "unsupported value '{}' for 'exec' in {}",
-                    value,
-                    location
-                )
-            })?),
+            Some(value) => {
+                Some(ExecDirective::parse(value).ok_or_else(|| filter_invalid!("unsupported value '{}' for 'exec' in {}", value, location))?)
+            }
         };
 
         let value_default = match raw_rule.value_default.as_deref() {
             None | Some("inherit") => None,
-            Some(value) => Some(ValueAction::parse(value).ok_or_else(|| {
-                filter_invalid!(
-                    "unsupported value '{}' for 'value_default' in {}",
-                    value,
-                    location
-                )
-            })?),
+            Some(value) => {
+                Some(ValueAction::parse(value).ok_or_else(|| filter_invalid!("unsupported value '{}' for 'value_default' in {}", value, location))?)
+            }
         };
 
         let mut value_patterns = Vec::new();
         if let Some(patterns) = raw_rule.value_patterns.as_ref() {
             for (pidx, pattern) in patterns.iter().enumerate() {
                 let pattern_location = format!("{} value_patterns[{}]", location, pidx);
-                let selector =
-                    Selector::parse(&pattern.selector, &VALUE_SELECTOR_KINDS).map_err(|err| {
-                        filter_invalid!(
-                            "invalid value selector in {}: {}",
-                            pattern_location,
-                            err
-                        )
-                    })?;
+                let selector = Selector::parse(&pattern.selector, &VALUE_SELECTOR_KINDS)
+                    .map_err(|err| filter_invalid!("invalid value selector in {}: {}", pattern_location, err))?;
 
-                let action = ValueAction::parse(&pattern.action).ok_or_else(|| {
-                    filter_invalid!(
-                        "unsupported value '{}' for 'action' in {}",
-                        pattern.action,
-                        pattern_location
-                    )
-                })?;
+                let action = ValueAction::parse(&pattern.action)
+                    .ok_or_else(|| filter_invalid!("unsupported value '{}' for 'action' in {}", pattern.action, pattern_location))?;
 
                 value_patterns.push(ValuePattern {
                     selector,
@@ -382,11 +295,7 @@ pub fn parse_rules(
     Ok(rules)
 }
 
-pub fn normalize_scope_selector(
-    selector: Selector,
-    project_root: &Path,
-    location: &str,
-) -> FilterResult<Selector> {
+pub fn normalize_scope_selector(selector: Selector, project_root: &Path, location: &str) -> FilterResult<Selector> {
     match selector.kind() {
         SelectorKind::File => {
             let pattern = selector.pattern();
@@ -404,12 +313,7 @@ pub fn normalize_scope_selector(
     }
 }
 
-pub fn normalize_file_selector(
-    path: &Path,
-    project_root: &Path,
-    pattern: &str,
-    location: &str,
-) -> FilterResult<String> {
+pub fn normalize_file_selector(path: &Path, project_root: &Path, pattern: &str, location: &str) -> FilterResult<String> {
     let path = if path.is_absolute() {
         path.strip_prefix(project_root)
             .map_err(|_| {
@@ -429,11 +333,7 @@ pub fn normalize_file_selector(
     Ok(pathbuf_to_posix(&normalized))
 }
 
-pub fn normalize_components(
-    path: &Path,
-    raw: &str,
-    location: &str,
-) -> FilterResult<PathBuf> {
+pub fn normalize_components(path: &Path, raw: &str, location: &str) -> FilterResult<PathBuf> {
     let mut normalised = PathBuf::new();
     for component in path.components() {
         match component {
@@ -441,11 +341,7 @@ pub fn normalize_components(
             Component::CurDir => {}
             Component::ParentDir => {
                 if !normalised.pop() {
-                    return Err(filter_invalid!(
-                        "file selector '{}' in {} escapes the project root",
-                        raw,
-                        location
-                    ));
+                    return Err(filter_invalid!("file selector '{}' in {} escapes the project root", raw, location));
                 }
             }
             Component::Normal(part) => normalised.push(part),
@@ -549,11 +445,7 @@ pub struct RawValuePattern {
     pub reason: Option<String>,
 }
 
-const SCOPE_SELECTOR_KINDS: [SelectorKind; 3] = [
-    SelectorKind::Package,
-    SelectorKind::File,
-    SelectorKind::Object,
-];
+const SCOPE_SELECTOR_KINDS: [SelectorKind; 3] = [SelectorKind::Package, SelectorKind::File, SelectorKind::Object];
 const VALUE_SELECTOR_KINDS: [SelectorKind; 5] = [
     SelectorKind::Local,
     SelectorKind::Global,
@@ -562,11 +454,7 @@ const VALUE_SELECTOR_KINDS: [SelectorKind; 5] = [
     SelectorKind::Attr,
 ];
 
-fn rebuild_selector(
-    kind: SelectorKind,
-    match_type: MatchType,
-    pattern: &str,
-) -> FilterResult<Selector> {
+fn rebuild_selector(kind: SelectorKind, match_type: MatchType, pattern: &str) -> FilterResult<Selector> {
     let raw = match match_type {
         MatchType::Glob => format!("{}:{}", kind.token(), pattern),
         MatchType::Regex => format!("{}:regex:{}", kind.token(), pattern),
@@ -603,9 +491,7 @@ default_value_action = "allow"
 "#;
         let (_tmp, path) = write_filter(body);
         let mut aggregator = ConfigAggregator::default();
-        let err = aggregator
-            .ingest_file(&path)
-            .expect_err("v2 schema must be rejected");
+        let err = aggregator.ingest_file(&path).expect_err("v2 schema must be rejected");
         assert_eq!(err.code, ErrorCode::UnsupportedSchemaVersion);
     }
 
@@ -645,9 +531,7 @@ exec = "skipp"
 "#;
         let (_tmp, path) = write_filter(body);
         let mut aggregator = ConfigAggregator::default();
-        let err = aggregator
-            .ingest_file(&path)
-            .expect_err("unknown action must be rejected");
+        let err = aggregator.ingest_file(&path).expect_err("unknown action must be rejected");
         assert_eq!(err.code, ErrorCode::InvalidPolicyValue);
     }
 }

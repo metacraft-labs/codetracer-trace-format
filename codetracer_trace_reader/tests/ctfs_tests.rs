@@ -183,8 +183,7 @@ fn test_ctfs_container_has_expected_files() {
     // M-REC-1: the recorder must have stamped a canonical UUIDv7
     // recording_id.  Parse it back to verify the version and variant
     // nibbles round-trip correctly.
-    let parsed_id = uuid::Uuid::parse_str(&meta.recording_id)
-        .expect("recording_id must parse as a UUID");
+    let parsed_id = uuid::Uuid::parse_str(&meta.recording_id).expect("recording_id must parse as a UUID");
     assert_eq!(
         parsed_id.get_version_num(),
         7,

@@ -36,9 +36,7 @@ thread_local! {
 
 fn set_last_error(err: &FilterError) {
     let formatted = format!("{}", err);
-    let cstring = CString::new(formatted).unwrap_or_else(|_| {
-        CString::new("trace-filter error contained NUL byte").expect("static error message")
-    });
+    let cstring = CString::new(formatted).unwrap_or_else(|_| CString::new("trace-filter error contained NUL byte").expect("static error message"));
     LAST_ERROR.with(|cell| cell.borrow_mut().replace(cstring));
 }
 
@@ -70,10 +68,7 @@ pub extern "C" fn ctf_last_error_message() -> *const c_char {
 /// * Each pointer in `paths` MUST remain valid for the duration of the
 ///   call (the function only borrows them).
 #[no_mangle]
-pub unsafe extern "C" fn ctf_classifier_new_from_paths(
-    paths: *const *const c_char,
-    n: usize,
-) -> *mut Classifier {
+pub unsafe extern "C" fn ctf_classifier_new_from_paths(paths: *const *const c_char, n: usize) -> *mut Classifier {
     clear_last_error();
     if paths.is_null() && n != 0 {
         set_last_error(&FilterError::invalid("paths pointer is NULL but n > 0"));
@@ -84,18 +79,14 @@ pub unsafe extern "C" fn ctf_classifier_new_from_paths(
     for offset in 0..n {
         let raw = *paths.add(offset);
         if raw.is_null() {
-            set_last_error(&FilterError::invalid(format!(
-                "paths[{offset}] is NULL"
-            )));
+            set_last_error(&FilterError::invalid(format!("paths[{offset}] is NULL")));
             return ptr::null_mut();
         }
         let cstr = CStr::from_ptr(raw);
         let s = match cstr.to_str() {
             Ok(s) => s,
             Err(_) => {
-                set_last_error(&FilterError::invalid(format!(
-                    "paths[{offset}] is not valid UTF-8"
-                )));
+                set_last_error(&FilterError::invalid(format!("paths[{offset}] is not valid UTF-8")));
                 return ptr::null_mut();
             }
         };
@@ -236,9 +227,7 @@ pub unsafe extern "C" fn ctf_resolution_exec(resolution: *const ScopeResolution)
 ///
 /// `resolution` MUST be a valid pointer from [`ctf_classify`].
 #[no_mangle]
-pub unsafe extern "C" fn ctf_resolution_default_value_action(
-    resolution: *const ScopeResolution,
-) -> c_int {
+pub unsafe extern "C" fn ctf_resolution_default_value_action(resolution: *const ScopeResolution) -> c_int {
     use crate::model::ValueAction;
     match (*resolution).value_policy().default_action() {
         ValueAction::Allow => 0,
@@ -256,11 +245,7 @@ pub unsafe extern "C" fn ctf_resolution_default_value_action(
 ///
 /// All pointer arguments MUST be valid; `name` MUST be UTF-8.
 #[no_mangle]
-pub unsafe extern "C" fn ctf_resolution_decide_value(
-    resolution: *const ScopeResolution,
-    kind: c_int,
-    name: *const c_char,
-) -> c_int {
+pub unsafe extern "C" fn ctf_resolution_decide_value(resolution: *const ScopeResolution, kind: c_int, name: *const c_char) -> c_int {
     use crate::model::ValueAction;
     if resolution.is_null() || name.is_null() {
         return -1;
@@ -327,15 +312,7 @@ exec = "skip"
         let module = CString::new("app.foo").unwrap();
 
         let mut resolution_ptr: *mut ScopeResolution = ptr::null_mut();
-        let rc = unsafe {
-            ctf_classify(
-                classifier,
-                filename.as_ptr(),
-                ptr::null(),
-                module.as_ptr(),
-                &mut resolution_ptr,
-            )
-        };
+        let rc = unsafe { ctf_classify(classifier, filename.as_ptr(), ptr::null(), module.as_ptr(), &mut resolution_ptr) };
         assert_eq!(rc, 0, "classify returned non-zero");
         assert!(!resolution_ptr.is_null());
         assert_eq!(unsafe { ctf_resolution_exec(resolution_ptr) }, 1, "expected Skip");

@@ -66,10 +66,7 @@ impl SelectorKind {
 
     /// Return true when the selector kind targets scope-level decisions.
     pub fn is_scope_kind(self) -> bool {
-        matches!(
-            self,
-            SelectorKind::Package | SelectorKind::File | SelectorKind::Object
-        )
+        matches!(self, SelectorKind::Package | SelectorKind::File | SelectorKind::Object)
     }
 
     /// Return true when the selector kind targets value-level decisions.
@@ -141,21 +138,13 @@ impl Selector {
         }
 
         let mut segments = raw.splitn(3, ':');
-        let kind_token = segments
-            .next()
-            .ok_or_else(|| filter_invalid!("selector must include a kind"))?;
-        let remainder = segments
-            .next()
-            .ok_or_else(|| filter_invalid!("selector missing pattern"))?;
+        let kind_token = segments.next().ok_or_else(|| filter_invalid!("selector must include a kind"))?;
+        let remainder = segments.next().ok_or_else(|| filter_invalid!("selector missing pattern"))?;
 
-        let kind = SelectorKind::parse(kind_token)
-            .ok_or_else(|| filter_invalid!("unsupported selector kind '{}'", kind_token))?;
+        let kind = SelectorKind::parse(kind_token).ok_or_else(|| filter_invalid!("unsupported selector kind '{}'", kind_token))?;
 
         if !permitted_kinds.is_empty() && !permitted_kinds.contains(&kind) {
-            return Err(filter_invalid!(
-                "selector kind '{}' is not allowed in this context",
-                kind
-            ));
+            return Err(filter_invalid!("selector kind '{}' is not allowed in this context", kind));
         }
 
         let (match_type, pattern) = match segments.next() {
@@ -164,9 +153,8 @@ impl Selector {
                 if match_token.is_empty() {
                     return Err(filter_invalid!("selector match type cannot be empty"));
                 }
-                let resolved_match = MatchType::parse(match_token).ok_or_else(|| {
-                    filter_invalid!("unsupported selector match type '{}'", match_token)
-                })?;
+                let resolved_match =
+                    MatchType::parse(match_token).ok_or_else(|| filter_invalid!("unsupported selector match type '{}'", match_token))?;
                 (resolved_match, pattern)
             }
             None => (MatchType::Glob, remainder),
@@ -226,11 +214,7 @@ fn build_matcher(match_type: MatchType, pattern: &str) -> FilterResult<Matcher> 
             Ok(regex) => Ok(Matcher::Regex(regex)),
             Err(err) => {
                 log_regex_failure(pattern, &err);
-                Err(filter_invalid!(
-                    "invalid regex pattern '{}': {}",
-                    pattern,
-                    err
-                ))
+                Err(filter_invalid!("invalid regex pattern '{}': {}", pattern, err))
             }
         },
     }
@@ -267,12 +251,7 @@ mod tests {
     use super::*;
     use crate::error::ErrorCode;
 
-    fn assert_parse(
-        raw: &str,
-        expected_kind: SelectorKind,
-        mt: MatchType,
-        pattern: &str,
-    ) -> Selector {
+    fn assert_parse(raw: &str, expected_kind: SelectorKind, mt: MatchType, pattern: &str) -> Selector {
         let selector = Selector::parse(raw, &[]).unwrap_or_else(|err| {
             panic!("selector parse failed for '{}': {}", raw, err);
         });
@@ -284,12 +263,7 @@ mod tests {
 
     #[test]
     fn parses_default_glob_scope_selector() {
-        let selector = assert_parse(
-            "pkg:my_app.core.*",
-            SelectorKind::Package,
-            MatchType::Glob,
-            "my_app.core.*",
-        );
+        let selector = assert_parse("pkg:my_app.core.*", SelectorKind::Package, MatchType::Glob, "my_app.core.*");
         assert!(selector.matches("my_app.core.services"));
         assert!(!selector.matches("other.module"));
     }
@@ -326,8 +300,7 @@ mod tests {
 
     #[test]
     fn rejects_disallowed_kind() {
-        let err =
-            Selector::parse("pkg:foo", &[SelectorKind::Local]).expect_err("kind not permitted");
+        let err = Selector::parse("pkg:foo", &[SelectorKind::Local]).expect_err("kind not permitted");
         assert_eq!(err.code, ErrorCode::InvalidPolicyValue);
     }
 
@@ -351,12 +324,7 @@ mod tests {
 
     #[test]
     fn matches_glob_against_values() {
-        let selector = assert_parse(
-            "local:user_*",
-            SelectorKind::Local,
-            MatchType::Glob,
-            "user_*",
-        );
+        let selector = assert_parse("local:user_*", SelectorKind::Local, MatchType::Glob, "user_*");
         assert!(selector.matches("user_id"));
         assert!(!selector.matches("order_id"));
     }

@@ -37,12 +37,7 @@ extern "C" {
 
     fn trace_writer_start(handle: *mut std::ffi::c_void, path: *const std::os::raw::c_char, line: i64);
     fn trace_writer_set_workdir(handle: *mut std::ffi::c_void, workdir: *const std::os::raw::c_char);
-    fn trace_writer_set_args(
-        handle: *mut std::ffi::c_void,
-        args: *const *const u8,
-        arg_lens: *const usize,
-        args_count: usize,
-    );
+    fn trace_writer_set_args(handle: *mut std::ffi::c_void, args: *const *const u8, arg_lens: *const usize, args_count: usize);
     fn trace_writer_register_step(handle: *mut std::ffi::c_void, path: *const std::os::raw::c_char, line: i64);
 
     fn trace_writer_ensure_function_id(
@@ -113,12 +108,7 @@ extern "C" {
 
     fn ct_value_begin_struct(h: *mut std::ffi::c_void, type_id: u64, field_count: i32) -> i32;
     fn ct_value_begin_sequence(h: *mut std::ffi::c_void, type_id: u64, element_count: i32) -> i32;
-    fn ct_value_begin_sequence_with_slice(
-        h: *mut std::ffi::c_void,
-        type_id: u64,
-        element_count: i32,
-        is_slice: i32,
-    ) -> i32;
+    fn ct_value_begin_sequence_with_slice(h: *mut std::ffi::c_void, type_id: u64, element_count: i32, is_slice: i32) -> i32;
     fn ct_value_begin_tuple(h: *mut std::ffi::c_void, type_id: u64, element_count: i32) -> i32;
     fn ct_value_begin_variant(h: *mut std::ffi::c_void, discriminator: *const u8, disc_len: usize, type_id: u64) -> i32;
     fn ct_value_begin_reference(h: *mut std::ffi::c_void, address: u64, mutable: i32, type_id: u64) -> i32;
@@ -155,8 +145,10 @@ extern "C" {
     // to be empty" case.
     fn trace_writer_add_filter_provenance(
         handle: *mut std::ffi::c_void,
-        path: *const u8, path_len: usize,
-        sha256_bytes: *const u8, sha256_len: usize,
+        path: *const u8,
+        path_len: usize,
+        sha256_bytes: *const u8,
+        sha256_len: usize,
     ) -> i32;
     fn trace_writer_record_empty_filter_provenance(handle: *mut std::ffi::c_void) -> i32;
 
@@ -538,20 +530,8 @@ impl StreamingValueEncoder {
     /// etc.) and `is_slice = false` for owned sequences (`Vec<T>`,
     /// `Array<T>`, etc.).  Must be followed by exactly `count` element
     /// encodings and one [`end_compound`](Self::end_compound) call.
-    pub fn begin_sequence_with_slice(
-        &mut self,
-        type_id: TypeId,
-        count: usize,
-        is_slice: bool,
-    ) {
-        unsafe {
-            ct_value_begin_sequence_with_slice(
-                self.handle,
-                type_id.0 as u64,
-                count as i32,
-                if is_slice { 1 } else { 0 },
-            )
-        };
+    pub fn begin_sequence_with_slice(&mut self, type_id: TypeId, count: usize, is_slice: bool) {
+        unsafe { ct_value_begin_sequence_with_slice(self.handle, type_id.0 as u64, count as i32, if is_slice { 1 } else { 0 }) };
     }
 
     /// Begin a tuple with a known element count.
@@ -592,19 +572,8 @@ impl StreamingValueEncoder {
             ValueRecord::Error { msg, type_id } => {
                 unsafe { ct_value_write_error(self.handle, msg.as_ptr(), msg.len(), type_id.0 as u64) };
             }
-            ValueRecord::Sequence {
-                elements,
-                is_slice,
-                type_id,
-            } => {
-                unsafe {
-                    ct_value_begin_sequence_with_slice(
-                        self.handle,
-                        type_id.0 as u64,
-                        elements.len() as i32,
-                        if *is_slice { 1 } else { 0 },
-                    )
-                };
+            ValueRecord::Sequence { elements, is_slice, type_id } => {
+                unsafe { ct_value_begin_sequence_with_slice(self.handle, type_id.0 as u64, elements.len() as i32, if *is_slice { 1 } else { 0 }) };
                 for elem in elements {
                     self.encode_recursive(elem);
                 }
@@ -732,12 +701,7 @@ impl NimTraceWriter {
         let arg_ptrs: Vec<*const u8> = args.iter().map(|a| a.as_ptr()).collect();
         let arg_lens: Vec<usize> = args.iter().map(|a| a.len()).collect();
         unsafe {
-            trace_writer_set_args(
-                handle,
-                arg_ptrs.as_ptr(),
-                arg_lens.as_ptr(),
-                args.len(),
-            );
+            trace_writer_set_args(handle, arg_ptrs.as_ptr(), arg_lens.as_ptr(), args.len());
         }
         NimTraceWriter {
             handle,
@@ -785,13 +749,7 @@ impl NimTraceWriter {
     /// Spec: `codetracer-trace-format-spec/Trace-Filters.md` § 7 and
     /// `internal-files.md` § "Flag bit 3 — Trace filter provenance".
     pub fn add_filter_provenance(&mut self, path: &str, sha256: &[u8; 32]) -> Result<(), Box<dyn Error>> {
-        let rc = unsafe {
-            trace_writer_add_filter_provenance(
-                self.handle,
-                path.as_ptr(), path.len(),
-                sha256.as_ptr(), sha256.len(),
-            )
-        };
+        let rc = unsafe { trace_writer_add_filter_provenance(self.handle, path.as_ptr(), path.len(), sha256.as_ptr(), sha256.len()) };
         check_result(rc)
     }
 
@@ -2080,9 +2038,7 @@ pub fn create_trace_writer(program: &str, args: &[String], format: TraceEventsFi
             writer.set_format(format);
             Box::new(writer)
         }
-        TraceEventsFileFormat::Binary | TraceEventsFileFormat::Ctfs => {
-            Box::new(NimTraceWriter::new(program, args, format))
-        }
+        TraceEventsFileFormat::Binary | TraceEventsFileFormat::Ctfs => Box::new(NimTraceWriter::new(program, args, format)),
     }
 }
 
@@ -2141,10 +2097,7 @@ pub fn decode_cbor_value_record(cbor: &[u8]) -> ValueRecord {
 
 fn hex_raw(cbor: &[u8]) -> ValueRecord {
     let hex = cbor.iter().map(|b| format!("{b:02x}")).collect::<String>();
-    ValueRecord::Raw {
-        r: hex,
-        type_id: TypeId(0),
-    }
+    ValueRecord::Raw { r: hex, type_id: TypeId(0) }
 }
 
 fn cbor_value_to_record(value: &ciborium::value::Value) -> Option<ValueRecord> {
@@ -2172,16 +2125,10 @@ fn cbor_value_to_record(value: &ciborium::value::Value) -> Option<ValueRecord> {
             _ => None,
         })
     };
-    let as_u64 = |v: &V| -> Option<u64> {
-        v.as_integer().and_then(|i| u64::try_from(i).ok())
-    };
-    let as_i64 = |v: &V| -> Option<i64> {
-        v.as_integer().and_then(|i| i64::try_from(i).ok())
-    };
+    let as_u64 = |v: &V| -> Option<u64> { v.as_integer().and_then(|i| u64::try_from(i).ok()) };
+    let as_i64 = |v: &V| -> Option<i64> { v.as_integer().and_then(|i| i64::try_from(i).ok()) };
     let as_str = |v: &V| -> Option<String> { v.as_text().map(|s| s.to_string()) };
-    let type_id = |default: u64| -> TypeId {
-        TypeId(get("type_id").and_then(as_u64).unwrap_or(default) as usize)
-    };
+    let type_id = |default: u64| -> TypeId { TypeId(get("type_id").and_then(as_u64).unwrap_or(default) as usize) };
 
     let kind = get("kind").and_then(|v| v.as_text())?.to_string();
     let record = match kind.as_str() {
@@ -2209,9 +2156,7 @@ fn cbor_value_to_record(value: &ciborium::value::Value) -> Option<ValueRecord> {
             msg: get("msg").and_then(as_str)?,
             type_id: type_id(0),
         },
-        "None" => ValueRecord::None {
-            type_id: type_id(0),
-        },
+        "None" => ValueRecord::None { type_id: type_id(0) },
         "Char" => {
             let text = get("c").and_then(as_str)?;
             ValueRecord::Char {
@@ -2437,8 +2382,7 @@ pub mod non_streaming_trace_writer {
             // `Call` arg referencing `VariableId(n)` is always preceded by
             // the `VariableName` at index `n`. Mirrors the legacy
             // `codetracer_trace_writer::AbstractTraceWriter::ensure_variable_id`.
-            self.events
-                .push(TraceLowLevelEvent::VariableName(variable_name.to_string()));
+            self.events.push(TraceLowLevelEvent::VariableName(variable_name.to_string()));
             id
         }
         fn register_path(&mut self, path: &Path) {
@@ -2492,18 +2436,13 @@ pub mod non_streaming_trace_writer {
             // values (recorder unit tests inspect `events()`).
             let value = super::decode_cbor_value_record(cbor);
             let variable_id = self.ensure_variable_id(name);
-            self.events.push(TraceLowLevelEvent::Value(FullValueRecord {
-                variable_id,
-                value,
-            }));
+            self.events.push(TraceLowLevelEvent::Value(FullValueRecord { variable_id, value }));
         }
         fn register_return_cbor(&mut self, cbor: &[u8]) {
             // Decode the streaming-encoder CBOR back into the typed
             // `ValueRecord` it represents (see `register_variable_cbor`).
             let return_value = super::decode_cbor_value_record(cbor);
-            self.events.push(TraceLowLevelEvent::Return(ReturnRecord {
-                return_value,
-            }));
+            self.events.push(TraceLowLevelEvent::Return(ReturnRecord { return_value }));
         }
         fn register_variable_name(&mut self, variable_name: &str) {
             self.ensure_variable_id(variable_name);

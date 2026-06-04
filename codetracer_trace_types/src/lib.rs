@@ -25,8 +25,7 @@ mod tests {
     #[test]
     fn recording_id_is_uuid_v7_canonical() {
         let m = TraceMetadata::new("hello", vec!["arg".into()], PathBuf::from("/tmp"));
-        let parsed = uuid::Uuid::parse_str(&m.recording_id)
-            .expect("recording_id must parse as a UUID");
+        let parsed = uuid::Uuid::parse_str(&m.recording_id).expect("recording_id must parse as a UUID");
         assert_eq!(parsed.get_version_num(), 7, "must be UUIDv7");
         // hyphenated lowercase is the canonical form we agreed on.
         assert_eq!(m.recording_id.len(), 36);
@@ -85,12 +84,7 @@ mod tests {
             | ((bytes_b[3] as u64) << 16)
             | ((bytes_b[4] as u64) << 8)
             | (bytes_b[5] as u64);
-        assert!(
-            ms_a < ms_b,
-            "embedded ms must strictly increase; ms_a={} ms_b={}",
-            ms_a,
-            ms_b,
-        );
+        assert!(ms_a < ms_b, "embedded ms must strictly increase; ms_a={} ms_b={}", ms_a, ms_b,);
     }
 
     /// JSON round-trip preserves the `recording_id` field exactly.
@@ -123,10 +117,6 @@ mod tests {
         let bad = r#"{"program":"p","args":[],"workdir":"/tmp"}"#;
         let err = serde_json::from_str::<TraceMetadata>(bad).unwrap_err();
         let msg = err.to_string();
-        assert!(
-            msg.contains("recording_id"),
-            "error should mention recording_id; got {}",
-            msg,
-        );
+        assert!(msg.contains("recording_id"), "error should mention recording_id; got {}", msg,);
     }
 }

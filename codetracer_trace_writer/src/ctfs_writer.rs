@@ -368,11 +368,8 @@ impl TraceWriter for CtfsTraceWriter {
             // Recorders that need to pin a pre-existing id (the
             // import flow, M-REC-7) should construct TraceMetadata
             // directly with their own id and then write it out.
-            let trace_metadata = codetracer_trace_types::TraceMetadata::new(
-                self.base.program.clone(),
-                self.base.args.clone(),
-                self.base.workdir.clone(),
-            );
+            let trace_metadata =
+                codetracer_trace_types::TraceMetadata::new(self.base.program.clone(), self.base.args.clone(), self.base.workdir.clone());
             let meta_json = serde_json::to_string(&trace_metadata)?;
             let meta_handle = writer.add_file("meta.json")?;
             writer.write(meta_handle, meta_json.as_bytes())?;

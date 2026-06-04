@@ -825,11 +825,7 @@ fn test_shared_sender_retries_and_finalize_is_idempotent() {
     };
     let materialized = ManagedUploadObject {
         object_key: "traces/tenant-a/recording-b/python-materialized-trace-v1.json".to_string(),
-        local_path: temp_root
-            .join("python")
-            .join("materialized-trace-v1.json")
-            .to_string_lossy()
-            .into_owned(),
+        local_path: temp_root.join("python").join("materialized-trace-v1.json").to_string_lossy().into_owned(),
         content_length: 256,
         sha256: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb".to_string(),
         kind: ManagedUploadKind::MaterializedArtifact {

@@ -8,8 +8,8 @@
 //! variable, and CLI arguments.
 
 pub use crate::model::{
-    ExecDirective, FilterMeta, FilterSource, FilterSummary, FilterSummaryEntry, IoConfig, IoStream,
-    ScopeRule, TraceFilterConfig, ValueAction, ValuePattern,
+    ExecDirective, FilterMeta, FilterSource, FilterSummary, FilterSummaryEntry, IoConfig, IoStream, ScopeRule, TraceFilterConfig, ValueAction,
+    ValuePattern,
 };
 
 use crate::error::FilterResult;
@@ -33,10 +33,7 @@ impl TraceFilterConfig {
     /// files. This matches the spec § 5 composition order when callers pass:
     /// 1. inline = builtin default (`("builtin-default", BUILTIN_TOML)`)
     /// 2. paths  = auto-discovery, env, CLI in that order
-    pub fn from_inline_and_paths(
-        inline: &[(&str, &str)],
-        paths: &[PathBuf],
-    ) -> FilterResult<Self> {
+    pub fn from_inline_and_paths(inline: &[(&str, &str)], paths: &[PathBuf]) -> FilterResult<Self> {
         if inline.is_empty() && paths.is_empty() {
             return Err(filter_invalid!("no trace filter sources supplied"));
         }

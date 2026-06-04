@@ -10,9 +10,7 @@
 //! Keeping the engine free of host-runtime types means this crate compiles
 //! anywhere and can be FFI'd into any recorder.
 
-use crate::config::{
-    ExecDirective, ScopeRule, TraceFilterConfig, ValueAction, ValuePattern,
-};
+use crate::config::{ExecDirective, ScopeRule, TraceFilterConfig, ValueAction, ValuePattern};
 use crate::model::FilterSummary;
 use crate::selector::{Selector, SelectorKind};
 use std::path::{Component, Path, PathBuf};
@@ -75,13 +73,7 @@ impl ValueKind {
         }
     }
 
-    pub const ALL: [ValueKind; 5] = [
-        ValueKind::Local,
-        ValueKind::Global,
-        ValueKind::Arg,
-        ValueKind::Return,
-        ValueKind::Attr,
-    ];
+    pub const ALL: [ValueKind; 5] = [ValueKind::Local, ValueKind::Global, ValueKind::Arg, ValueKind::Return, ValueKind::Attr];
 }
 
 /// Value redaction policy resolved for a scope.
@@ -93,10 +85,7 @@ pub struct ValuePolicy {
 
 impl ValuePolicy {
     fn new(default_action: ValueAction, patterns: Arc<[CompiledValuePattern]>) -> Self {
-        ValuePolicy {
-            default_action,
-            patterns,
-        }
+        ValuePolicy { default_action, patterns }
     }
 
     /// Default action applied when no selector matches.
@@ -310,10 +299,7 @@ impl Classifier {
         // that come from earlier sources than the one that set Drop — those
         // patterns can't possibly survive the broader Drop policy.
         let patterns = if value_default == ValueAction::Drop {
-            if patterns
-                .iter()
-                .all(|pattern| pattern.source_id >= value_default_source)
-            {
+            if patterns.iter().all(|pattern| pattern.source_id >= value_default_source) {
                 patterns
             } else {
                 let filtered: Vec<CompiledValuePattern> = patterns
@@ -371,12 +357,7 @@ impl CompiledScopeRule {
                 .relative_path
                 .as_deref()
                 .map(|path| self.selector.matches(path))
-                .or_else(|| {
-                    context
-                        .absolute_path
-                        .as_deref()
-                        .map(|path| self.selector.matches(path))
-                })
+                .or_else(|| context.absolute_path.as_deref().map(|path| self.selector.matches(path)))
                 .unwrap_or(false),
             SelectorKind::Object => context
                 .object_name
@@ -445,9 +426,7 @@ impl ScopeContext {
             if let Ok(stripped) = Path::new(filename).strip_prefix(&source.project_root) {
                 let stripped_owned = stripped.to_path_buf();
                 let better = match &best_match {
-                    Some((_, current)) => {
-                        stripped_owned.components().count() < current.components().count()
-                    }
+                    Some((_, current)) => stripped_owned.components().count() < current.components().count(),
                     None => true,
                 };
                 if better {
@@ -534,10 +513,7 @@ pub fn normalise_to_posix(path: &Path) -> Option<String> {
 /// module name. Mirrors the helper that previously lived in the Python
 /// recorder's `module_identity` module.
 pub fn module_from_relative(relative: &str) -> Option<String> {
-    let mut parts: Vec<&str> = relative
-        .split('/')
-        .filter(|segment| !segment.is_empty())
-        .collect();
+    let mut parts: Vec<&str> = relative.split('/').filter(|segment| !segment.is_empty()).collect();
     if parts.is_empty() {
         return None;
     }
@@ -626,11 +602,7 @@ action = "redact"
 
         let classifier = Classifier::new(config);
         let filename = file_path.to_string_lossy().into_owned();
-        let resolution = classifier.classify(
-            &ScopeQuery::new(&filename)
-                .with_qualname("foo")
-                .with_module_hint("app.foo"),
-        );
+        let resolution = classifier.classify(&ScopeQuery::new(&filename).with_qualname("foo").with_module_hint("app.foo"));
         assert_eq!(resolution.exec(), ExecDecision::Trace);
         assert_eq!(resolution.module_name(), Some("app.foo"));
         assert_eq!(resolution.relative_path(), Some("app/foo.py"));
@@ -638,10 +610,7 @@ action = "redact"
         let policy = resolution.value_policy();
         assert_eq!(policy.default_action(), ValueAction::Allow);
         assert_eq!(policy.decide(ValueKind::Local, "user"), ValueAction::Allow);
-        assert_eq!(
-            policy.decide(ValueKind::Arg, "password"),
-            ValueAction::Redact
-        );
+        assert_eq!(policy.decide(ValueKind::Arg, "password"), ValueAction::Redact);
     }
 
     #[test]
@@ -686,28 +655,15 @@ value_default = "redact"
 
         let classifier = Classifier::new(config);
         let filename = file_path.to_string_lossy().into_owned();
-        let resolution = classifier.classify(
-            &ScopeQuery::new(&filename)
-                .with_qualname("bar")
-                .with_module_hint("app.foo"),
-        );
+        let resolution = classifier.classify(&ScopeQuery::new(&filename).with_qualname("bar").with_module_hint("app.foo"));
         assert_eq!(resolution.exec(), ExecDecision::Trace);
         assert_eq!(resolution.matched_rule_index(), Some(1));
-        assert_eq!(
-            resolution.value_policy().default_action(),
-            ValueAction::Redact
-        );
+        assert_eq!(resolution.value_policy().default_action(), ValueAction::Redact);
     }
 
     #[test]
     fn module_from_relative_strips_init() {
-        assert_eq!(
-            module_from_relative("pkg/module/__init__.py").as_deref(),
-            Some("pkg.module")
-        );
-        assert_eq!(
-            module_from_relative("pkg/module/sub.py").as_deref(),
-            Some("pkg.module.sub")
-        );
+        assert_eq!(module_from_relative("pkg/module/__init__.py").as_deref(), Some("pkg.module"));
+        assert_eq!(module_from_relative("pkg/module/sub.py").as_deref(), Some("pkg.module.sub"));
     }
 }

@@ -19,9 +19,7 @@ use std::path::PathBuf;
 use std::process::Command;
 
 fn main() {
-    let manifest_dir = PathBuf::from(
-        env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set by Cargo"),
-    );
+    let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set by Cargo"));
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR is set by Cargo"));
     let windows = env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows");
     // `msvc` vs `gnu` on Windows: the Nim objects must match the ABI of the
@@ -33,15 +31,13 @@ fn main() {
     // --- locate the Nim sources ------------------------------------------
     // Default: the `codetracer-trace-format-nim` sibling repo. Override with
     // CODETRACER_TRACE_FORMAT_NIM_DIR for non-standard checkouts.
-    let nim_repo = env::var("CODETRACER_TRACE_FORMAT_NIM_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(|_| {
-            manifest_dir
-                .parent() // codetracer-trace-format
-                .and_then(|p| p.parent()) // workspace root
-                .map(|p| p.join("codetracer-trace-format-nim"))
-                .unwrap_or_else(|| PathBuf::from("../../codetracer-trace-format-nim"))
-        });
+    let nim_repo = env::var("CODETRACER_TRACE_FORMAT_NIM_DIR").map(PathBuf::from).unwrap_or_else(|_| {
+        manifest_dir
+            .parent() // codetracer-trace-format
+            .and_then(|p| p.parent()) // workspace root
+            .map(|p| p.join("codetracer-trace-format-nim"))
+            .unwrap_or_else(|| PathBuf::from("../../codetracer-trace-format-nim"))
+    });
     let nim_src = nim_repo.join("src");
     let ffi_entry = nim_src.join("codetracer_trace_writer_ffi.nim");
     assert!(
@@ -62,9 +58,7 @@ fn main() {
     // cargo build unit gets its own cache and incremental reuse still works.
     let mut hasher = DefaultHasher::new();
     out_dir.hash(&mut hasher);
-    let nimcache = env::temp_dir()
-        .join("ctnw")
-        .join(format!("{:016x}", hasher.finish()));
+    let nimcache = env::temp_dir().join("ctnw").join(format!("{:016x}", hasher.finish()));
 
     // --- resolve the Nim sources' nimble dependencies --------------------
     // `codetracer-trace-format-nim`'s `.nimble` declares `requires` entries
@@ -142,9 +136,7 @@ fn main() {
     }
     nim.arg(format!("-o:{}", lib_path.display())).arg(&ffi_entry);
 
-    let status = nim
-        .status()
-        .expect("failed to run `nim` -- the Nim compiler must be on PATH");
+    let status = nim.status().expect("failed to run `nim` -- the Nim compiler must be on PATH");
     assert!(status.success(), "nim static-library build failed");
 
     println!("cargo:rustc-link-search=native={}", out_dir.display());
@@ -163,10 +155,7 @@ fn main() {
     println!("cargo:rerun-if-changed={}", nim_src.display());
     // Re-resolve nimble dependencies whenever the `.nimble` requirements
     // change.
-    println!(
-        "cargo:rerun-if-changed={}",
-        nim_repo.join("codetracer_trace_format.nimble").display(),
-    );
+    println!("cargo:rerun-if-changed={}", nim_repo.join("codetracer_trace_format.nimble").display(),);
     println!("cargo:rerun-if-changed=build.rs");
     println!("cargo:rerun-if-env-changed=CODETRACER_TRACE_FORMAT_NIM_DIR");
     println!("cargo:rerun-if-env-changed=ZSTD_DIR");

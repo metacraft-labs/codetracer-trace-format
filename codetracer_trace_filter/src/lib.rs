@@ -41,13 +41,10 @@ pub mod summary;
 pub mod ffi;
 
 pub use crate::config::{
-    ExecDirective, FilterMeta, FilterSource, FilterSummary, FilterSummaryEntry, IoConfig, IoStream,
-    ScopeRule, TraceFilterConfig, ValueAction, ValuePattern,
+    ExecDirective, FilterMeta, FilterSource, FilterSummary, FilterSummaryEntry, IoConfig, IoStream, ScopeRule, TraceFilterConfig, ValueAction,
+    ValuePattern,
 };
-pub use crate::engine::{
-    Classifier, CompiledValuePattern, ExecDecision, ScopeQuery, ScopeResolution, ValueKind,
-    ValuePolicy,
-};
+pub use crate::engine::{Classifier, CompiledValuePattern, ExecDecision, ScopeQuery, ScopeResolution, ValueKind, ValuePolicy};
 pub use crate::error::{ErrorCode, FilterError, FilterResult};
 pub use crate::selector::{MatchType, Selector, SelectorKind};
 

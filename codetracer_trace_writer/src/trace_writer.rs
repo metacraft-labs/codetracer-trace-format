@@ -45,6 +45,9 @@ pub trait TraceWriter: AbstractTraceWriter {
     fn register_step(&mut self, path: &Path, line: Line) {
         AbstractTraceWriter::register_step(self, path, line)
     }
+    fn register_step_with_column(&mut self, path: &Path, line: Line, column: Option<Line>) {
+        AbstractTraceWriter::register_step_with_column(self, path, line, column)
+    }
     fn register_call(&mut self, function_id: FunctionId, args: Vec<FullValueRecord>) {
         AbstractTraceWriter::register_call(self, function_id, args)
     }

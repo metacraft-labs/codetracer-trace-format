@@ -31,6 +31,31 @@ typedef enum Elk {
 } Elk;
 
 /**
+ * `PassBy` mirror for the FFI.
+ */
+typedef enum FfiPassBy {
+    FFI_PASS_BY_VALUE = 0,
+    FFI_PASS_BY_REFERENCE = 1,
+} FfiPassBy;
+
+/**
+ * `RValue` kind discriminator for the FFI surface introduced in M14.
+ *
+ * The discriminator is used by [`ct_assignment`] to pick the variant
+ * inside the resulting `RValue` payload from the supplied scalar
+ * arguments. The exact field semantics per discriminator are
+ * documented on `ct_assignment`.
+ */
+typedef enum FfiRValueKind {
+    FFI_R_VALUE_KIND_SIMPLE = 0,
+    FFI_R_VALUE_KIND_COMPOUND = 1,
+    FFI_R_VALUE_KIND_LITERAL = 2,
+    FFI_R_VALUE_KIND_FIELD_ACCESS = 3,
+    FFI_R_VALUE_KIND_INDEX_ACCESS = 4,
+    FFI_R_VALUE_KIND_FUNCTION_RETURN = 5,
+} FfiRValueKind;
+
+/**
  * Trace file format — mirrors [`TraceEventsFileFormat`].
  */
 typedef enum Fmt {
@@ -209,5 +234,61 @@ void trace_writer_register_special_event(struct TraceWriterHandle *handle,
                                          enum Elk kind,
                                          const char *metadata,
                                          const char *content);
+
+/**
+ * Emit an `Assignment` event.
+ *
+ * `target_name` is the destination variable's display name (it is interned
+ * by the writer if not already present). The other arguments describe the
+ * RHS via [`FfiRValueKind`]; see [`build_rvalue`] for the per-discriminator
+ * argument semantics.
+ *
+ * # Safety
+ *
+ * `handle` must be a writer obtained from [`trace_writer_new`].
+ * `target_name` must be a valid NUL-terminated UTF-8 C string. The
+ * `compound_ids` pointer (if non-null) must point at `compound_len`
+ * contiguous `usize` values. `field_name` (if used) must be a valid
+ * NUL-terminated UTF-8 C string.
+ */
+void ct_assignment(struct TraceWriterHandle *handle,
+                   const char *target_name,
+                   enum FfiPassBy pass_by,
+                   enum FfiRValueKind rvalue_kind,
+                   uintptr_t simple_variable_id,
+                   const uintptr_t *compound_ids,
+                   uintptr_t compound_len,
+                   const char *field_name,
+                   int64_t index,
+                   int64_t call_key);
+
+/**
+ * Emit a `BindVariable` event associating `variable_name` with `place`.
+ *
+ * # Safety
+ *
+ * `handle` must be a writer obtained from [`trace_writer_new`].
+ * `variable_name` must be a valid NUL-terminated UTF-8 C string.
+ */
+void ct_bind_variable(struct TraceWriterHandle *handle, const char *variable_name, int64_t place);
+
+/**
+ * Emit a `Step` event at (path, line, column).
+ *
+ * `column` is taken as-is when `has_column` is non-zero; otherwise the
+ * event is recorded without column information. This matches the M14
+ * back-compat rule (recorders without column data continue to emit the
+ * legacy-shaped Step event).
+ *
+ * # Safety
+ *
+ * `handle` must be a writer obtained from [`trace_writer_new`].
+ * `path` must be a valid NUL-terminated UTF-8 C string.
+ */
+void ct_assignment_with_column(struct TraceWriterHandle *handle,
+                               const char *path,
+                               int64_t line,
+                               int64_t column,
+                               bool has_column);
 
 #endif  /* CODETRACER_TRACE_WRITER_H */

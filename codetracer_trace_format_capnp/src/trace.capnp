@@ -59,6 +59,24 @@ struct Trace {
         union {
             simple @0 :VariableId;
             compound @1 :List(VariableId);
+            # M14 additions. Decoders that see an unknown variant MUST
+            # fall back to an empty Compound (no dependencies) per the
+            # M14 back-compat rule. Capnp's union tag is forwards-
+            # compatible (unknown discriminants surface as an error),
+            # so producers MUST NOT emit these variants when targeting
+            # the legacy reader.
+            literal @2 :Void;
+            fieldAccess :group {
+                receiver @3 :VariableId;
+                field @4 :Text;
+            }
+            indexAccess :group {
+                rxReceiver @5 :VariableId;
+                rxIndex @6 :Int64;
+            }
+            functionReturn :group {
+                callKey @7 :Int64;
+            }
         }
     }
 
@@ -141,6 +159,13 @@ struct Trace {
     struct StepRecord {
         pathId @0 :PathId;
         line @1 :Line;
+        # M14: optional column field. `hasColumn = false` (the default for
+        # legacy traces produced before M14) means the column is unknown and
+        # readers should expose it as `None`. Cap'n Proto's "default-zero"
+        # semantics keep this back-compatible with pre-M14 traces, which
+        # naturally decode `hasColumn = false`.
+        column @2 :Line;
+        hasColumn @3 :Bool;
     }
 
     # TODO: VariableRecord???

@@ -337,10 +337,23 @@ pub fn write_trace(q: &[codetracer_trace_types::TraceLowLevelEvent], output: &mu
             }
             TraceLowLevelEvent::Step(steprecord) => {
                 let mut step_record = event.init_step();
-                let mut path_id = step_record.reborrow().init_path_id();
-                path_id.set_i(steprecord.path_id.0.try_into().unwrap());
-                let mut line = step_record.init_line();
-                line.set_l(steprecord.line.0);
+                {
+                    let mut path_id = step_record.reborrow().init_path_id();
+                    path_id.set_i(steprecord.path_id.0.try_into().unwrap());
+                }
+                {
+                    let mut line = step_record.reborrow().init_line();
+                    line.set_l(steprecord.line.0);
+                }
+                // M14: emit the column field (default Line(0) when absent so
+                // the on-disk layout stays well-formed; the `has_column` flag
+                // distinguishes "explicit column 0" from "unknown").
+                let col_val = steprecord.column.unwrap_or_default();
+                {
+                    let mut column = step_record.reborrow().init_column();
+                    column.set_l(col_val.0);
+                }
+                step_record.set_has_column(steprecord.column.is_some());
             }
             TraceLowLevelEvent::VariableName(varname) => {
                 event.set_variable_name(varname);
@@ -384,7 +397,7 @@ pub fn write_trace(q: &[codetracer_trace_types::TraceLowLevelEvent], output: &mu
                 let mut ret_to = ret.reborrow().init_to();
                 ret_to.set_i(assrec.to.0.try_into().unwrap());
                 ret.set_pass_by(assrec.pass_by.clone().into());
-                let ret_from = ret.init_from();
+                let mut ret_from = ret.init_from();
                 match &assrec.from {
                     codetracer_trace_types::RValue::Simple(variable_id) => {
                         let mut ret_from_simple = ret_from.init_simple();
@@ -396,6 +409,30 @@ pub fn write_trace(q: &[codetracer_trace_types::TraceLowLevelEvent], output: &mu
                             let mut r = ret_from_compound.reborrow().get(i.try_into().unwrap());
                             r.set_i(variable_ids[i].0.try_into().unwrap());
                         }
+                    }
+                    // M14 RValue extensions
+                    codetracer_trace_types::RValue::Literal => {
+                        ret_from.set_literal(());
+                    }
+                    codetracer_trace_types::RValue::FieldAccess { receiver, field } => {
+                        let mut fa = ret_from.init_field_access();
+                        {
+                            let mut rcv = fa.reborrow().init_receiver();
+                            rcv.set_i(receiver.0.try_into().unwrap());
+                        }
+                        fa.set_field(field);
+                    }
+                    codetracer_trace_types::RValue::IndexAccess { receiver, index } => {
+                        let mut ia = ret_from.init_index_access();
+                        {
+                            let mut rcv = ia.reborrow().init_rx_receiver();
+                            rcv.set_i(receiver.0.try_into().unwrap());
+                        }
+                        ia.set_rx_index(*index);
+                    }
+                    codetracer_trace_types::RValue::FunctionReturn { call_key } => {
+                        let mut fr = ret_from.init_function_return();
+                        fr.set_call_key(call_key.0);
                     }
                 }
             }
@@ -571,9 +608,18 @@ pub fn read_trace(input: &mut impl std::io::BufRead) -> ::capnp::Result<Vec<code
         let q = match event.which() {
             Ok(trace::trace_low_level_event::Which::Step(step_record)) => {
                 let step_record = step_record?;
+                // M14 back-compat: legacy traces have `has_column = false`
+                // by capnp's default-zero rule, so the column surfaces as
+                // `None` exactly as the trace_processor expects.
+                let column = if step_record.get_has_column() {
+                    Some(codetracer_trace_types::Line(step_record.get_column()?.get_l()))
+                } else {
+                    None
+                };
                 TraceLowLevelEvent::Step(codetracer_trace_types::StepRecord {
                     path_id: codetracer_trace_types::PathId(step_record.get_path_id()?.get_i().try_into().unwrap()),
                     line: codetracer_trace_types::Line(step_record.get_line()?.get_l()),
+                    column,
                 })
             }
             Ok(trace::trace_low_level_event::Which::Path(path_buf)) => {
@@ -678,6 +724,19 @@ pub fn read_trace(input: &mut impl std::io::BufRead) -> ::capnp::Result<Vec<code
                             }
                             codetracer_trace_types::RValue::Compound(v)
                         }
+                        // M14 RValue extensions
+                        trace::r_value::Which::Literal(()) => codetracer_trace_types::RValue::Literal,
+                        trace::r_value::Which::FieldAccess(fa) => codetracer_trace_types::RValue::FieldAccess {
+                            receiver: codetracer_trace_types::VariableId(fa.get_receiver()?.get_i().try_into().unwrap()),
+                            field: fa.get_field()?.to_string()?,
+                        },
+                        trace::r_value::Which::IndexAccess(ia) => codetracer_trace_types::RValue::IndexAccess {
+                            receiver: codetracer_trace_types::VariableId(ia.get_rx_receiver()?.get_i().try_into().unwrap()),
+                            index: ia.get_rx_index(),
+                        },
+                        trace::r_value::Which::FunctionReturn(fr) => codetracer_trace_types::RValue::FunctionReturn {
+                            call_key: codetracer_trace_types::CallKey(fr.get_call_key()),
+                        },
                     },
                 })
             }

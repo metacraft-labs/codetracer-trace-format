@@ -15,6 +15,7 @@ fn make_test_events(n: usize) -> Vec<TraceLowLevelEvent> {
             TraceLowLevelEvent::Step(StepRecord {
                 path_id: PathId(0),
                 line: Line(i as i64 + 1),
+                column: None,
             })
         })
         .collect()

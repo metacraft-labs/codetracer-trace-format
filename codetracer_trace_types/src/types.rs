@@ -88,13 +88,50 @@ pub struct AssignmentRecord {
     pub from: RValue,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind")]
+/// Right-hand side of an Assignment event.
+///
+/// This is the source description of an assignment captured by the recorder.
+/// Newer recorders (M14+) emit more specific variants so the db-backend
+/// classifier can build origin chains without re-deriving the AST shape from
+/// source text.
+///
+/// Back-compat: when decoding traces produced by older recorders, only
+/// `Simple` and `Compound` will appear; the additional variants are opt-in for
+/// recorders that have been upgraded to the M14 vocabulary. Decoders that see
+/// an unknown variant MUST fall back to `Compound(vec![])` (no dependencies)
+/// per the M14 reader-side compatibility rule.
+///
+/// # Serialization
+///
+/// The `#[serde(tag = "kind", content = "data")]` representation is the
+/// "adjacently tagged" form (see serde docs). It works uniformly for tuple
+/// (newtype) and struct variants — unlike the internally-tagged form which
+/// `cbor4ii` rejects when a tuple variant carries an integer payload. Every
+/// active encoder (JSON, CBOR via cbor4ii, the hand-rolled split-binary CBOR
+/// path on the Nim side) supports this representation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", content = "data")]
 pub enum RValue {
+    /// A copy from a single variable.
     Simple(VariableId),
-    // eventually in future:
-    // discuss more: Const(String, ValueRecord),
+    /// A value composed from multiple variable dependencies (e.g. tuple
+    /// construction, arithmetic combining several locals).
     Compound(Vec<VariableId>),
+    /// A literal expression (the RHS was a constant in the source: `42`,
+    /// `"hello"`, `true`). The literal's printed form is carried in the
+    /// associated value of the Assignment — this variant has no payload here
+    /// because the value is captured by the subsequent `Value` event for the
+    /// assigned variable.
+    Literal,
+    /// A field-access RHS: `target = receiver.field`.
+    FieldAccess { receiver: VariableId, field: String },
+    /// An index-access RHS with a static integer index: `target = receiver[index]`.
+    /// (For dynamic-index access, recorders should use `Compound([receiver, index_var])`.)
+    IndexAccess { receiver: VariableId, index: i64 },
+    /// The RHS is the return value of a previously recorded call. The
+    /// `call_key` references the `CallRecord` whose return value flowed into
+    /// the assigned variable.
+    FunctionReturn { call_key: CallKey },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -321,10 +358,35 @@ pub struct FunctionRecord {
 //     pub value: ValueRecord,
 // }
 
-#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
+#[derive(Copy, Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct StepRecord {
     pub path_id: PathId,
     pub line: Line,
+    /// Optional source column (1-based) for the step location. Recorders that
+    /// can extract column ranges from a richer line table (e.g. Python 3.11+
+    /// `co_positions`, sourcemapped JavaScript) populate this; older recorders
+    /// leave it as `None` and the field is omitted from JSON for back-compat
+    /// with traces produced before M14.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub column: Option<Line>,
+}
+
+impl StepRecord {
+    /// Build a column-less step record. Convenience constructor for
+    /// downstream code that has not yet been updated to the M14 column-aware
+    /// form: this preserves the pre-M14 field layout at the call site.
+    pub fn new(path_id: PathId, line: Line) -> Self {
+        StepRecord { path_id, line, column: None }
+    }
+
+    /// Build a column-bearing step record.
+    pub fn with_column(path_id: PathId, line: Line, column: Line) -> Self {
+        StepRecord {
+            path_id,
+            line,
+            column: Some(column),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

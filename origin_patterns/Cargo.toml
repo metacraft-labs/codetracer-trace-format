@@ -1,0 +1,16 @@
+[package]
+name = "codetracer_origin_patterns"
+version = "0.1.0"
+edition = "2024"
+authors = ["Metacraft Labs Ltd"]
+description = "Shared schema for CodeTracer origin-patterns.toml files used by recorders and the db-backend"
+repository = "https://github.com/metacraft-labs/runtime_tracing"
+license = "MIT"
+keywords = ["debugging", "development-tools"]
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+toml = "0.8"
+
+[dev-dependencies]
+tempfile = "3"

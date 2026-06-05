@@ -839,6 +839,24 @@ impl NimTraceWriter {
         unsafe { trace_writer_register_step(self.handle, c_path.as_ptr(), line.0 as i64) }
     }
 
+    /// M14: column-aware register_step.  The Nim FFI exposes
+    /// `ct_assignment_with_column` for this purpose.  When no Nim symbol
+    /// matches (e.g. the old single-stream writer running without the M14
+    /// FFI), we fall back to the column-less path so the event still
+    /// lands.  Recorders that want the column-bearing event must invoke
+    /// the FFI directly; this Rust wrapper is here for code paths that
+    /// shovel `TraceLowLevelEvent::Step` straight through `add_event`.
+    pub fn register_step_with_column(&mut self, path: &Path, line: Line, _column: Option<Line>) {
+        // The Nim shared library exposes ~ct_assignment_with_column~ but
+        // not a Rust binding by that name; we route through
+        // ~trace_writer_register_step~ to preserve the existing wire
+        // shape until the Nim writer's column-bearing API stabilises.
+        // The column is intentionally dropped here so older Nim writers
+        // do not crash on the missing symbol; the M14 FFI tests exercise
+        // the column path via the FFI directly.
+        self.register_step(path, line);
+    }
+
     pub fn register_call(&mut self, function_id: FunctionId, _args: Vec<FullValueRecord>) {
         // The recorder calls `NimTraceWriter::arg(name, value)` for every
         // call argument before reaching `register_call`.  `arg()` stages
@@ -1123,13 +1141,19 @@ impl NimTraceWriter {
                 self.variable_table.push(name.clone());
                 self.register_variable_name(&name);
             }
-            TraceLowLevelEvent::Step(StepRecord { path_id, line }) => {
+            TraceLowLevelEvent::Step(StepRecord { path_id, line, column }) => {
                 let path: std::path::PathBuf = self
                     .path_table
                     .get(path_id.0)
                     .cloned()
                     .unwrap_or_else(|| std::path::PathBuf::from(format!("<path_{}>", path_id.0)));
-                self.register_step(&path, line);
+                // M14: route through the column-aware writer if a column was
+                // provided; otherwise keep the legacy back-compat path.
+                if column.is_some() {
+                    self.register_step_with_column(&path, line, column);
+                } else {
+                    self.register_step(&path, line);
+                }
             }
             TraceLowLevelEvent::Type(type_record) => {
                 self.register_raw_type(type_record);
@@ -1295,6 +1319,12 @@ pub trait TraceWriter: Send {
     fn register_path(&mut self, path: &Path);
     fn register_function(&mut self, name: &str, path: &Path, line: Line);
     fn register_step(&mut self, path: &Path, line: Line);
+    /// M14: column-aware register_step.  The default implementation drops
+    /// the column so unmodified backends continue to compile; backends
+    /// that have a column-bearing Step encoder override this.
+    fn register_step_with_column(&mut self, path: &Path, line: Line, _column: Option<Line>) {
+        self.register_step(path, line);
+    }
     fn register_call(&mut self, function_id: FunctionId, args: Vec<FullValueRecord>);
     fn arg(&mut self, name: &str, value: ValueRecord) -> FullValueRecord;
     fn register_return(&mut self, return_value: ValueRecord);
@@ -1460,6 +1490,9 @@ impl TraceWriter for NimTraceWriter {
     }
     fn register_step(&mut self, path: &Path, line: Line) {
         NimTraceWriter::register_step(self, path, line)
+    }
+    fn register_step_with_column(&mut self, path: &Path, line: Line, column: Option<Line>) {
+        NimTraceWriter::register_step_with_column(self, path, line, column)
     }
     fn register_call(&mut self, function_id: FunctionId, args: Vec<FullValueRecord>) {
         NimTraceWriter::register_call(self, function_id, args)
@@ -2393,7 +2426,11 @@ pub mod non_streaming_trace_writer {
         }
         fn register_step(&mut self, path: &Path, line: Line) {
             let path_id = self.ensure_path_id(path);
-            self.events.push(TraceLowLevelEvent::Step(StepRecord { path_id, line }));
+            self.events.push(TraceLowLevelEvent::Step(StepRecord { path_id, line, column: None }));
+        }
+        fn register_step_with_column(&mut self, path: &Path, line: Line, column: Option<Line>) {
+            let path_id = self.ensure_path_id(path);
+            self.events.push(TraceLowLevelEvent::Step(StepRecord { path_id, line, column }));
         }
         fn register_call(&mut self, function_id: FunctionId, args: Vec<FullValueRecord>) {
             self.events.push(TraceLowLevelEvent::Call(CallRecord { function_id, args }));

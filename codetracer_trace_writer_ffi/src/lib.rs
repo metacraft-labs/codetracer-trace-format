@@ -15,7 +15,7 @@ use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::path::Path;
 
-use codetracer_trace_types::{EventLogKind, Line, TypeKind, ValueRecord};
+use codetracer_trace_types::{CallKey, EventLogKind, Line, PassBy, Place, RValue, TypeKind, ValueRecord, VariableId};
 use codetracer_trace_writer::trace_writer::TraceWriter;
 use codetracer_trace_writer::{TraceEventsFileFormat, create_trace_writer};
 use num_traits::FromPrimitive;
@@ -104,6 +104,29 @@ pub enum FfiTypeKind {
     Slice = 33,
 }
 
+/// `PassBy` mirror for the FFI.
+#[repr(C)]
+pub enum FfiPassBy {
+    Value = 0,
+    Reference = 1,
+}
+
+/// `RValue` kind discriminator for the FFI surface introduced in M14.
+///
+/// The discriminator is used by [`ct_assignment`] to pick the variant
+/// inside the resulting `RValue` payload from the supplied scalar
+/// arguments. The exact field semantics per discriminator are
+/// documented on `ct_assignment`.
+#[repr(C)]
+pub enum FfiRValueKind {
+    Simple = 0,
+    Compound = 1,
+    Literal = 2,
+    FieldAccess = 3,
+    IndexAccess = 4,
+    FunctionReturn = 5,
+}
+
 /// Event-log kind — mirrors [`EventLogKind`].
 #[repr(C)]
 pub enum FfiEventLogKind {
@@ -141,6 +164,13 @@ fn to_type_kind(k: FfiTypeKind) -> TypeKind {
 
 fn to_event_log_kind(k: FfiEventLogKind) -> EventLogKind {
     EventLogKind::from_u8(k as u8).unwrap_or_default()
+}
+
+fn to_pass_by(p: FfiPassBy) -> PassBy {
+    match p {
+        FfiPassBy::Value => PassBy::Value,
+        FfiPassBy::Reference => PassBy::Reference,
+    }
 }
 
 /// Convert a C string pointer to `&str`.  Returns `""` for null pointers.
@@ -470,6 +500,132 @@ pub unsafe extern "C" fn trace_writer_register_special_event(
 }
 
 // ---------------------------------------------------------------------------
+// M14 — Assignment / BindVariable FFI surface
+// ---------------------------------------------------------------------------
+
+/// Helper: turn the FFI representation of an `RValue` into the Rust value.
+///
+/// The discriminator selects which of the supplied arguments are read.  The
+/// arguments are interpreted as follows:
+///
+/// | discriminator    | source                                                                       |
+/// | ---------------- | ---------------------------------------------------------------------------- |
+/// | `Simple`         | `simple_variable_id`                                                         |
+/// | `Compound`       | `compound_ids[0..compound_len]`                                              |
+/// | `Literal`        | _(no arguments)_                                                             |
+/// | `FieldAccess`    | `simple_variable_id` (= receiver), `field_name`                              |
+/// | `IndexAccess`    | `simple_variable_id` (= receiver), `index`                                   |
+/// | `FunctionReturn` | `call_key`                                                                   |
+///
+/// On unrecognised inputs the function returns `RValue::Compound(vec![])` so
+/// callers cannot accidentally emit malformed events.
+#[allow(clippy::too_many_arguments)]
+fn build_rvalue(
+    rvalue_kind: FfiRValueKind,
+    simple_variable_id: usize,
+    compound_ids: *const usize,
+    compound_len: usize,
+    field_name: *const c_char,
+    index: i64,
+    call_key: i64,
+) -> RValue {
+    match rvalue_kind {
+        FfiRValueKind::Simple => RValue::Simple(VariableId(simple_variable_id)),
+        FfiRValueKind::Compound => {
+            if compound_ids.is_null() || compound_len == 0 {
+                RValue::Compound(Vec::new())
+            } else {
+                let slice = unsafe { std::slice::from_raw_parts(compound_ids, compound_len) };
+                RValue::Compound(slice.iter().copied().map(VariableId).collect())
+            }
+        }
+        FfiRValueKind::Literal => RValue::Literal,
+        FfiRValueKind::FieldAccess => RValue::FieldAccess {
+            receiver: VariableId(simple_variable_id),
+            field: unsafe { cstr_to_str(field_name) }.to_string(),
+        },
+        FfiRValueKind::IndexAccess => RValue::IndexAccess {
+            receiver: VariableId(simple_variable_id),
+            index,
+        },
+        FfiRValueKind::FunctionReturn => RValue::FunctionReturn { call_key: CallKey(call_key) },
+    }
+}
+
+/// Emit an `Assignment` event.
+///
+/// `target_name` is the destination variable's display name (it is interned
+/// by the writer if not already present). The other arguments describe the
+/// RHS via [`FfiRValueKind`]; see [`build_rvalue`] for the per-discriminator
+/// argument semantics.
+///
+/// # Safety
+///
+/// `handle` must be a writer obtained from [`trace_writer_new`].
+/// `target_name` must be a valid NUL-terminated UTF-8 C string. The
+/// `compound_ids` pointer (if non-null) must point at `compound_len`
+/// contiguous `usize` values. `field_name` (if used) must be a valid
+/// NUL-terminated UTF-8 C string.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn ct_assignment(
+    handle: *mut TraceWriterHandle,
+    target_name: *const c_char,
+    pass_by: FfiPassBy,
+    rvalue_kind: FfiRValueKind,
+    simple_variable_id: usize,
+    compound_ids: *const usize,
+    compound_len: usize,
+    field_name: *const c_char,
+    index: i64,
+    call_key: i64,
+) {
+    if handle.is_null() {
+        return;
+    }
+    let h = unsafe { &mut *handle };
+    let rvalue = build_rvalue(rvalue_kind, simple_variable_id, compound_ids, compound_len, field_name, index, call_key);
+    let name = unsafe { cstr_to_str(target_name) };
+    TraceWriter::assign(w(h), name, rvalue, to_pass_by(pass_by));
+}
+
+/// Emit a `BindVariable` event associating `variable_name` with `place`.
+///
+/// # Safety
+///
+/// `handle` must be a writer obtained from [`trace_writer_new`].
+/// `variable_name` must be a valid NUL-terminated UTF-8 C string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ct_bind_variable(handle: *mut TraceWriterHandle, variable_name: *const c_char, place: i64) {
+    if handle.is_null() {
+        return;
+    }
+    let h = unsafe { &mut *handle };
+    TraceWriter::bind_variable(w(h), unsafe { cstr_to_str(variable_name) }, Place(place));
+}
+
+/// Emit a `Step` event at (path, line, column).
+///
+/// `column` is taken as-is when `has_column` is non-zero; otherwise the
+/// event is recorded without column information. This matches the M14
+/// back-compat rule (recorders without column data continue to emit the
+/// legacy-shaped Step event).
+///
+/// # Safety
+///
+/// `handle` must be a writer obtained from [`trace_writer_new`].
+/// `path` must be a valid NUL-terminated UTF-8 C string.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn ct_assignment_with_column(handle: *mut TraceWriterHandle, path: *const c_char, line: i64, column: i64, has_column: bool) {
+    if handle.is_null() {
+        return;
+    }
+    let h = unsafe { &mut *handle };
+    let column_opt = if has_column { Some(Line(column)) } else { None };
+    TraceWriter::register_step_with_column(w(h), Path::new(unsafe { cstr_to_str(path) }), Line(line), column_opt);
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -526,6 +682,129 @@ mod tests {
         assert!(parsed.as_array().map_or(false, |a| !a.is_empty()));
 
         unsafe { trace_writer_free(handle) };
+        fs::remove_dir_all(&tmp).ok();
+    }
+
+    /// M14 verification: the FFI surface that Nim recorders use must produce
+    /// `Assignment` events the Rust reader recognises. This exercises the
+    /// JSON path so the assertion is deterministic across the workspace's
+    /// available encoders (the CBOR-zstd path is exercised by the dedicated
+    /// `m14_rvalue_roundtrip` reader test).
+    #[test]
+    fn test_ffi_emits_assignment_and_step_with_column() {
+        let tmp = std::env::temp_dir().join(format!("ffi_m14_test_{}", std::process::id()));
+        fs::create_dir_all(&tmp).unwrap();
+
+        let program = CString::new("m14_test").unwrap();
+        let handle = unsafe { trace_writer_new(program.as_ptr(), FfiTraceFormat::Json) };
+        assert!(!handle.is_null());
+
+        let meta_path = CString::new(tmp.join("trace_metadata.json").to_str().unwrap()).unwrap();
+        let events_path = CString::new(tmp.join("trace.json").to_str().unwrap()).unwrap();
+        let paths_path = CString::new(tmp.join("trace_paths.json").to_str().unwrap()).unwrap();
+
+        assert!(unsafe { trace_writer_begin_metadata(handle, meta_path.as_ptr()) });
+        assert!(unsafe { trace_writer_begin_events(handle, events_path.as_ptr()) });
+        assert!(unsafe { trace_writer_begin_paths(handle, paths_path.as_ptr()) });
+
+        let source = CString::new("/m14/main.rs").unwrap();
+        unsafe { trace_writer_start(handle, source.as_ptr(), 1) };
+
+        // Step with column 7
+        unsafe { ct_assignment_with_column(handle, source.as_ptr(), 2, 7, true) };
+
+        // Bind a variable to a place
+        let var_name = CString::new("x").unwrap();
+        unsafe { ct_bind_variable(handle, var_name.as_ptr(), 42) };
+
+        // Emit an Assignment with RValue::Literal (x = 10)
+        unsafe {
+            ct_assignment(
+                handle,
+                var_name.as_ptr(),
+                FfiPassBy::Value,
+                FfiRValueKind::Literal,
+                /* simple */ 0,
+                /* compound */ std::ptr::null(),
+                0,
+                /* field */ std::ptr::null(),
+                0,
+                0,
+            )
+        };
+
+        // Emit a FunctionReturn assignment (result = foo())
+        let target_name = CString::new("result").unwrap();
+        unsafe {
+            ct_assignment(
+                handle,
+                target_name.as_ptr(),
+                FfiPassBy::Value,
+                FfiRValueKind::FunctionReturn,
+                0,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                /* call_key */ 17,
+            )
+        };
+
+        assert!(unsafe { trace_writer_finish_events(handle) });
+        assert!(unsafe { trace_writer_finish_metadata(handle) });
+        assert!(unsafe { trace_writer_finish_paths(handle) });
+        unsafe { trace_writer_free(handle) };
+
+        // Read back via serde_json and assert the M14 surface roundtripped.
+        let trace_content = fs::read_to_string(tmp.join("trace.json")).unwrap();
+        let events: Vec<codetracer_trace_types::TraceLowLevelEvent> =
+            serde_json::from_str(&trace_content).expect("trace.json must be a valid event stream");
+
+        // Find the StepWithColumn event
+        let step_with_col = events
+            .iter()
+            .filter_map(|e| match e {
+                codetracer_trace_types::TraceLowLevelEvent::Step(s) if s.column.is_some() => Some(s),
+                _ => None,
+            })
+            .next()
+            .expect("expected a Step with column from ct_assignment_with_column");
+        assert_eq!(step_with_col.column, Some(Line(7)));
+        assert_eq!(step_with_col.line, Line(2));
+
+        // Find the BindVariable event
+        let bind = events
+            .iter()
+            .find_map(|e| match e {
+                codetracer_trace_types::TraceLowLevelEvent::BindVariable(b) => Some(b),
+                _ => None,
+            })
+            .expect("expected a BindVariable from ct_bind_variable");
+        assert_eq!(bind.place, Place(42));
+
+        // Find the Literal Assignment
+        let literal_assignment = events
+            .iter()
+            .find_map(|e| match e {
+                codetracer_trace_types::TraceLowLevelEvent::Assignment(a) if matches!(a.from, RValue::Literal) => Some(a),
+                _ => None,
+            })
+            .expect("expected an Assignment with RValue::Literal");
+        assert!(matches!(literal_assignment.from, RValue::Literal));
+
+        // Find the FunctionReturn Assignment
+        let fnret_assignment = events
+            .iter()
+            .find_map(|e| match e {
+                codetracer_trace_types::TraceLowLevelEvent::Assignment(a) if matches!(a.from, RValue::FunctionReturn { .. }) => Some(a),
+                _ => None,
+            })
+            .expect("expected an Assignment with RValue::FunctionReturn");
+        match &fnret_assignment.from {
+            RValue::FunctionReturn { call_key } => assert_eq!(*call_key, CallKey(17)),
+            _ => unreachable!(),
+        }
+
         fs::remove_dir_all(&tmp).ok();
     }
 }

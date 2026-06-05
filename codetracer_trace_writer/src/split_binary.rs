@@ -70,9 +70,24 @@ fn read_cbor<T: serde::de::DeserializeOwned>(cursor: &mut Cursor<&[u8]>) -> io::
 pub fn encode_event(event: &TraceLowLevelEvent, out: &mut Vec<u8>) -> io::Result<()> {
     match event {
         TraceLowLevelEvent::Step(s) => {
-            write_u8(out, 0);
-            write_u64(out, s.path_id.0 as u64);
-            write_i64(out, s.line.0);
+            // M14 back-compat: when the StepRecord carries no column we use
+            // tag 0 with the same 17-byte payload older readers already
+            // understand. Recorders that emit column ranges (Python 3.11+,
+            // sourcemapped JS) use tag 24 below, which legacy readers must
+            // skip via the unknown-tag path on the read side.
+            match s.column {
+                None => {
+                    write_u8(out, 0);
+                    write_u64(out, s.path_id.0 as u64);
+                    write_i64(out, s.line.0);
+                }
+                Some(col) => {
+                    write_u8(out, 24);
+                    write_u64(out, s.path_id.0 as u64);
+                    write_i64(out, s.line.0);
+                    write_i64(out, col.0);
+                }
+            }
         }
         TraceLowLevelEvent::Path(p) => {
             write_u8(out, 1);
@@ -196,7 +211,7 @@ pub fn decode_event(cursor: &mut Cursor<&[u8]>) -> io::Result<TraceLowLevelEvent
         0 => {
             let path_id = PathId(read_u64(cursor)? as usize);
             let line = Line(read_i64(cursor)?);
-            Ok(TraceLowLevelEvent::Step(StepRecord { path_id, line }))
+            Ok(TraceLowLevelEvent::Step(StepRecord { path_id, line, column: None }))
         }
         1 => {
             let s = read_str(cursor)?;
@@ -290,6 +305,19 @@ pub fn decode_event(cursor: &mut Cursor<&[u8]>) -> io::Result<TraceLowLevelEvent
         21 => Ok(TraceLowLevelEvent::ThreadExit(ThreadId(read_u64(cursor)?))),
         22 => Ok(TraceLowLevelEvent::ThreadSwitch(ThreadId(read_u64(cursor)?))),
         23 => Ok(TraceLowLevelEvent::DropLastStep),
+        24 => {
+            // M14: Step with column. Tag 0 is the column-less back-compat
+            // path; this tag is only emitted when the recorder has column
+            // information.
+            let path_id = PathId(read_u64(cursor)? as usize);
+            let line = Line(read_i64(cursor)?);
+            let column = Line(read_i64(cursor)?);
+            Ok(TraceLowLevelEvent::Step(StepRecord {
+                path_id,
+                line,
+                column: Some(column),
+            }))
+        }
         _ => Err(io::Error::new(io::ErrorKind::InvalidData, format!("unknown event tag: {}", tag))),
     }
 }
@@ -410,6 +438,7 @@ fn event_byte_size(data: &[u8], offset: usize) -> usize {
         19 => 9,           // DropVariable: tag(1) + var_id(8)
         20 | 21 | 22 => 9, // ThreadStart/Exit/Switch: tag(1) + thread_id(8)
         23 => 1,           // DropLastStep: tag(1)
+        24 => 25,          // StepWithColumn: tag(1) + path_id(8) + line(8) + column(8)
         _ => panic!("unknown split-binary event tag: {}", tag),
     }
 }
@@ -423,6 +452,7 @@ mod tests {
         let event = TraceLowLevelEvent::Step(StepRecord {
             path_id: PathId(42),
             line: Line(100),
+            column: None,
         });
         let mut buf = Vec::new();
         encode_event(&event, &mut buf).unwrap();
@@ -455,6 +485,7 @@ mod tests {
             TraceLowLevelEvent::Step(StepRecord {
                 path_id: PathId(1),
                 line: Line(10),
+                column: None,
             }),
             TraceLowLevelEvent::Path("/hello".into()),
             TraceLowLevelEvent::DropLastStep,
@@ -476,6 +507,7 @@ mod tests {
             TraceLowLevelEvent::Step(StepRecord {
                 path_id: PathId(1),
                 line: Line(1),
+                column: None,
             }),
             TraceLowLevelEvent::BindVariable(BindVariableRecord {
                 variable_id: VariableId(5),

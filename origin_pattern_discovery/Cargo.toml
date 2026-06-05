@@ -1,0 +1,17 @@
+[package]
+name = "codetracer_origin_pattern_discovery"
+version = "0.1.0"
+edition = "2024"
+authors = ["Metacraft Labs Ltd"]
+description = "Recorder-side discovery library for CodeTracer origin-patterns.toml files"
+repository = "https://github.com/metacraft-labs/runtime_tracing"
+license = "MIT"
+keywords = ["debugging", "development-tools"]
+
+[dependencies]
+codetracer_origin_patterns = { path = "../origin_patterns" }
+walkdir = "2"
+serde = { version = "1.0", features = ["derive"] }
+
+[dev-dependencies]
+tempfile = "3"

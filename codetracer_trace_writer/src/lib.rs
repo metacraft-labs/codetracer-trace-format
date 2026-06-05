@@ -85,7 +85,7 @@ mod tests {
         // -4, -3 should be variables
         let should_be_step = &tracer.events[tracer.events.len() - 2];
         let should_be_call = &tracer.events[tracer.events.len() - 1];
-        if let TraceLowLevelEvent::Step(StepRecord { path_id, line }) = should_be_step {
+        if let TraceLowLevelEvent::Step(StepRecord { path_id, line, .. }) = should_be_step {
             assert_eq!(*path_id, function_path_id);
             assert_eq!(*line, function_line);
         } else {

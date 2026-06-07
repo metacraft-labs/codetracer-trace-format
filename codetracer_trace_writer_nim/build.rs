@@ -74,22 +74,32 @@ fn main() {
     // so it is safe to run on every build. This mirrors the pattern the
     // sibling `codetracer-native-recorder` Justfile uses for its Nim FFI
     // libraries (`ct_interpose`). `nimble` ships with the Nim toolchain.
-    let nimble_status = Command::new("nimble")
-        .arg("install")
-        .arg("--depsOnly")
-        .arg("-y")
-        .current_dir(&nim_repo)
-        .status()
-        .expect(
-            "failed to run `nimble` -- it ships with the Nim toolchain and \
-             must be on PATH alongside `nim`",
+    // ``CODETRACER_TRACE_FORMAT_NIM_SKIP_NIMBLE_INSTALL=1`` skips the
+    // ``nimble install --depsOnly`` step, which is impossible in a
+    // Nix sandbox (no network) and not needed when the caller already
+    // arranged for the .nimble's ``requires`` packages (stew, results)
+    // to be on Nim's path via ``--nim-path`` flags or
+    // ``CODETRACER_TRACE_FORMAT_NIM_EXTRA_PATHS``.
+    println!("cargo:rerun-if-env-changed=CODETRACER_TRACE_FORMAT_NIM_SKIP_NIMBLE_INSTALL");
+    println!("cargo:rerun-if-env-changed=CODETRACER_TRACE_FORMAT_NIM_EXTRA_PATHS");
+    if env::var_os("CODETRACER_TRACE_FORMAT_NIM_SKIP_NIMBLE_INSTALL").is_none() {
+        let nimble_status = Command::new("nimble")
+            .arg("install")
+            .arg("--depsOnly")
+            .arg("-y")
+            .current_dir(&nim_repo)
+            .status()
+            .expect(
+                "failed to run `nimble` -- it ships with the Nim toolchain and \
+                 must be on PATH alongside `nim`",
+            );
+        assert!(
+            nimble_status.success(),
+            "`nimble install --depsOnly -y` failed in {} -- could not resolve \
+             the Nim FFI library's nimble dependencies",
+            nim_repo.display(),
         );
-    assert!(
-        nimble_status.success(),
-        "`nimble install --depsOnly -y` failed in {} -- could not resolve \
-         the Nim FFI library's nimble dependencies",
-        nim_repo.display(),
-    );
+    }
 
     // --- build the Nim static library ------------------------------------
     // MSVC's linker resolves `static=codetracer_trace_writer` to
@@ -117,6 +127,18 @@ fn main() {
         .arg("--nimMainPrefix:codetracerTraceWriter")
         .arg(format!("--path:{}", nim_src.display()))
         .arg(format!("--nimcache:{}", nimcache.display()));
+    // ``CODETRACER_TRACE_FORMAT_NIM_EXTRA_PATHS`` (colon-separated)
+    // injects additional ``--path:`` directives.  Callers that skip
+    // the nimble-install step (above) use this to provide the
+    // ``results`` / ``stew`` package sources directly.
+    if let Ok(extra) = env::var("CODETRACER_TRACE_FORMAT_NIM_EXTRA_PATHS") {
+        for path in extra.split(':') {
+            if path.is_empty() {
+                continue;
+            }
+            nim.arg(format!("--path:{path}"));
+        }
+    }
     // The zstd bindings do `#include <zstd.h>`; put its header dir on the C
     // include path so the generated C compiles.
     if let Some(inc) = zstd_include_dir() {

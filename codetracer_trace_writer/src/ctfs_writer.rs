@@ -399,7 +399,6 @@ mod tests {
         TraceLowLevelEvent::Step(StepRecord {
             path_id: PathId(0),
             line: Line(line),
-            column: None,
         })
     }
 

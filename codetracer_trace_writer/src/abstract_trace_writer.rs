@@ -150,15 +150,21 @@ pub trait AbstractTraceWriter {
 
     fn register_step(&mut self, path: &std::path::Path, line: Line) {
         let path_id = self.ensure_path_id(path);
-        self.add_event(TraceLowLevelEvent::Step(StepRecord { path_id, line, column: None }));
+        self.add_event(TraceLowLevelEvent::Step(StepRecord { path_id, line }));
     }
 
-    /// M14: emit a `Step` event carrying an optional column. Recorders that
-    /// can extract column ranges (Python 3.11+ `co_positions`, sourcemapped
-    /// JavaScript) call this instead of `register_step`.
-    fn register_step_with_column(&mut self, path: &std::path::Path, line: Line, column: Option<Line>) {
-        let path_id = self.ensure_path_id(path);
-        self.add_event(TraceLowLevelEvent::Step(StepRecord { path_id, line, column }));
+    /// Column-dropping shim for FFI compatibility.  The legacy CTFS
+    /// `StepRecord` carries only `(path_id, line)`; recorders that
+    /// pass a column expression here get the column **silently
+    /// dropped** at this layer.  Recorders that need real column
+    /// information must migrate to the canonical CTFS event stream
+    /// (codetracer-trace-format-nim + its Rust wrapper) where the
+    /// per-file `global_line_index` scheme covers columns natively
+    /// via sub-ranges (see
+    /// codetracer-trace-format-spec/trace-events.md §"Compact Step
+    /// Encoding").
+    fn register_step_with_column(&mut self, path: &std::path::Path, line: Line, _column: Option<Line>) {
+        self.register_step(path, line);
     }
 
     fn register_call(&mut self, function_id: FunctionId, args: Vec<FullValueRecord>) {
@@ -173,7 +179,6 @@ pub trait AbstractTraceWriter {
             self.add_event(TraceLowLevelEvent::Step(StepRecord {
                 path_id: function.1,
                 line: function.2,
-                column: None,
             }));
         }
         // the actual call event:

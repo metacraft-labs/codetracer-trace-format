@@ -362,32 +362,22 @@ pub struct FunctionRecord {
 pub struct StepRecord {
     pub path_id: PathId,
     pub line: Line,
-    /// Optional source column (1-based) for the step location. Recorders that
-    /// can extract column ranges from a richer line table (e.g. Python 3.11+
-    /// `co_positions`, sourcemapped JavaScript) populate this; older recorders
-    /// leave it as `None` and the field is omitted from JSON for back-compat
-    /// with traces produced before M14.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub column: Option<Line>,
 }
 
 impl StepRecord {
-    /// Build a column-less step record. Convenience constructor for
-    /// downstream code that has not yet been updated to the M14 column-aware
-    /// form: this preserves the pre-M14 field layout at the call site.
     pub fn new(path_id: PathId, line: Line) -> Self {
-        StepRecord { path_id, line, column: None }
-    }
-
-    /// Build a column-bearing step record.
-    pub fn with_column(path_id: PathId, line: Line, column: Line) -> Self {
-        StepRecord {
-            path_id,
-            line,
-            column: Some(column),
-        }
+        StepRecord { path_id, line }
     }
 }
+
+// The legacy `StepRecord` carries (path_id, line) inline.  The
+// canonical CTFS event stream represents source location as a
+// single per-file contiguous integer range (`global_line_index`)
+// over (line, column) — see codetracer-trace-format-spec/
+// trace-events.md §"Compact Step Encoding".  Recorders that need
+// column metadata should migrate to the canonical event stream
+// (`codetracer-trace-format-nim` / its Rust wrapper) rather than
+// extend this legacy struct with a separate column field.
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VariableRecord {

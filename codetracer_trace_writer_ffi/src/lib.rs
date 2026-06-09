@@ -760,17 +760,18 @@ mod tests {
         let events: Vec<codetracer_trace_types::TraceLowLevelEvent> =
             serde_json::from_str(&trace_content).expect("trace.json must be a valid event stream");
 
-        // Find the StepWithColumn event
-        let step_with_col = events
+        // ct_assignment_with_column drops the column at the legacy layer
+        // (the legacy StepRecord doesn't carry column metadata) — assert
+        // the Step still lands with the correct line so the FFI's
+        // column-dropping shim is exercised end-to-end.
+        let step = events
             .iter()
-            .filter_map(|e| match e {
-                codetracer_trace_types::TraceLowLevelEvent::Step(s) if s.column.is_some() => Some(s),
+            .find_map(|e| match e {
+                codetracer_trace_types::TraceLowLevelEvent::Step(s) if s.line == Line(2) => Some(s),
                 _ => None,
             })
-            .next()
-            .expect("expected a Step with column from ct_assignment_with_column");
-        assert_eq!(step_with_col.column, Some(Line(7)));
-        assert_eq!(step_with_col.line, Line(2));
+            .expect("expected a Step at line 2 from ct_assignment_with_column");
+        assert_eq!(step.line, Line(2));
 
         // Find the BindVariable event
         let bind = events

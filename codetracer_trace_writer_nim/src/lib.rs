@@ -1141,19 +1141,13 @@ impl NimTraceWriter {
                 self.variable_table.push(name.clone());
                 self.register_variable_name(&name);
             }
-            TraceLowLevelEvent::Step(StepRecord { path_id, line, column }) => {
+            TraceLowLevelEvent::Step(StepRecord { path_id, line }) => {
                 let path: std::path::PathBuf = self
                     .path_table
                     .get(path_id.0)
                     .cloned()
                     .unwrap_or_else(|| std::path::PathBuf::from(format!("<path_{}>", path_id.0)));
-                // M14: route through the column-aware writer if a column was
-                // provided; otherwise keep the legacy back-compat path.
-                if column.is_some() {
-                    self.register_step_with_column(&path, line, column);
-                } else {
-                    self.register_step(&path, line);
-                }
+                self.register_step(&path, line);
             }
             TraceLowLevelEvent::Type(type_record) => {
                 self.register_raw_type(type_record);
@@ -2426,11 +2420,13 @@ pub mod non_streaming_trace_writer {
         }
         fn register_step(&mut self, path: &Path, line: Line) {
             let path_id = self.ensure_path_id(path);
-            self.events.push(TraceLowLevelEvent::Step(StepRecord { path_id, line, column: None }));
+            self.events.push(TraceLowLevelEvent::Step(StepRecord { path_id, line }));
         }
-        fn register_step_with_column(&mut self, path: &Path, line: Line, column: Option<Line>) {
+        fn register_step_with_column(&mut self, path: &Path, line: Line, _column: Option<Line>) {
+            // Column dropped per the legacy crate's surface contract — see
+            // the comment on AbstractTraceWriter::register_step_with_column.
             let path_id = self.ensure_path_id(path);
-            self.events.push(TraceLowLevelEvent::Step(StepRecord { path_id, line, column }));
+            self.events.push(TraceLowLevelEvent::Step(StepRecord { path_id, line }));
         }
         fn register_call(&mut self, function_id: FunctionId, args: Vec<FullValueRecord>) {
             self.events.push(TraceLowLevelEvent::Call(CallRecord { function_id, args }));

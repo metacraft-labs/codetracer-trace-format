@@ -345,15 +345,9 @@ pub fn write_trace(q: &[codetracer_trace_types::TraceLowLevelEvent], output: &mu
                     let mut line = step_record.reborrow().init_line();
                     line.set_l(steprecord.line.0);
                 }
-                // M14: emit the column field (default Line(0) when absent so
-                // the on-disk layout stays well-formed; the `has_column` flag
-                // distinguishes "explicit column 0" from "unknown").
-                let col_val = steprecord.column.unwrap_or_default();
-                {
-                    let mut column = step_record.reborrow().init_column();
-                    column.set_l(col_val.0);
-                }
-                step_record.set_has_column(steprecord.column.is_some());
+                // The legacy `StepRecord` carries only `(path_id, line)`.
+                // Column metadata lives in the canonical CTFS event
+                // stream (codetracer-trace-format-spec/trace-events.md).
             }
             TraceLowLevelEvent::VariableName(varname) => {
                 event.set_variable_name(varname);
@@ -608,18 +602,10 @@ pub fn read_trace(input: &mut impl std::io::BufRead) -> ::capnp::Result<Vec<code
         let q = match event.which() {
             Ok(trace::trace_low_level_event::Which::Step(step_record)) => {
                 let step_record = step_record?;
-                // M14 back-compat: legacy traces have `has_column = false`
-                // by capnp's default-zero rule, so the column surfaces as
-                // `None` exactly as the trace_processor expects.
-                let column = if step_record.get_has_column() {
-                    Some(codetracer_trace_types::Line(step_record.get_column()?.get_l()))
-                } else {
-                    None
-                };
+                // The legacy `StepRecord` carries only `(path_id, line)`.
                 TraceLowLevelEvent::Step(codetracer_trace_types::StepRecord {
                     path_id: codetracer_trace_types::PathId(step_record.get_path_id()?.get_i().try_into().unwrap()),
                     line: codetracer_trace_types::Line(step_record.get_line()?.get_l()),
-                    column,
                 })
             }
             Ok(trace::trace_low_level_event::Which::Path(path_buf)) => {

@@ -159,13 +159,16 @@ struct Trace {
     struct StepRecord {
         pathId @0 :PathId;
         line @1 :Line;
-        # M14: optional column field. `hasColumn = false` (the default for
-        # legacy traces produced before M14) means the column is unknown and
-        # readers should expose it as `None`. Cap'n Proto's "default-zero"
-        # semantics keep this back-compatible with pre-M14 traces, which
-        # naturally decode `hasColumn = false`.
-        column @2 :Line;
-        hasColumn @3 :Bool;
+        # The legacy StepRecord carries `(path_id, line)` only.  Column
+        # metadata is **not** stored here — recorders that need column
+        # info must migrate to the canonical CTFS event stream (see
+        # codetracer-trace-format-spec/trace-events.md §"Compact Step
+        # Encoding").  Fields @2 and @3 were previously assigned to
+        # `column` and `hasColumn` for a candidate M14 extension that
+        # has been withdrawn; the slots are intentionally left
+        # unassigned to make any old-schema reader fail loudly rather
+        # than silently misinterpret subsequent fields if they're ever
+        # added back with a different meaning.
     }
 
     # TODO: VariableRecord???

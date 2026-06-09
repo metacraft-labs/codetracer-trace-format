@@ -44,7 +44,6 @@ fn test_live_replay_during_recording() {
                 let event = TraceLowLevelEvent::Step(StepRecord {
                     path_id: PathId(0),
                     line: Line((batch * 20 + i) as i64),
-                    column: None,
                 });
                 AbstractTraceWriter::add_event(&mut writer, event);
                 events_written += 1;

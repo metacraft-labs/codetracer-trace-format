@@ -45,6 +45,7 @@ pub trait TraceWriter: AbstractTraceWriter {
     fn register_step(&mut self, path: &Path, line: Line) {
         AbstractTraceWriter::register_step(self, path, line)
     }
+    /// Column-dropping shim — see AbstractTraceWriter::register_step_with_column.
     fn register_step_with_column(&mut self, path: &Path, line: Line, column: Option<Line>) {
         AbstractTraceWriter::register_step_with_column(self, path, line, column)
     }

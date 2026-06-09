@@ -72,7 +72,7 @@ impl ChunkedWriter {
 
             // Compress
             let compressed = match self.compression {
-                CompressionMethod::Zstd => zstd::encode_all(Cursor::new(chunk_raw), self.level).map_err(|e| CtfsError::Io(e))?,
+                CompressionMethod::Zstd => zstd::encode_all(Cursor::new(chunk_raw), self.level).map_err(CtfsError::Io)?,
                 _ => chunk_raw.to_vec(),
             };
 
@@ -120,7 +120,7 @@ impl ChunkedReader {
             }
 
             let compressed = &data[offset..end];
-            let decompressed = zstd::decode_all(Cursor::new(compressed)).map_err(|e| CtfsError::Io(e))?;
+            let decompressed = zstd::decode_all(Cursor::new(compressed)).map_err(CtfsError::Io)?;
             output.extend_from_slice(&decompressed);
 
             offset = end;
@@ -170,7 +170,7 @@ impl ChunkedReader {
         }
 
         let compressed = &data[data_offset..end];
-        let decompressed = zstd::decode_all(Cursor::new(compressed)).map_err(|e| CtfsError::Io(e))?;
+        let decompressed = zstd::decode_all(Cursor::new(compressed)).map_err(CtfsError::Io)?;
 
         Ok((decompressed, header))
     }

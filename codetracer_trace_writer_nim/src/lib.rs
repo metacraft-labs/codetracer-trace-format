@@ -134,6 +134,21 @@ extern "C" {
     fn trace_writer_register_thread_exit(handle: *mut std::ffi::c_void, thread_id: u64);
     fn trace_writer_register_thread_switch(handle: *mut std::ffi::c_void, thread_id: u64);
 
+    // ----- Column-aware step mode (P6.3 / P6.4) -----
+    //
+    // Mirrors the Nim multi-stream writer's column-aware API.  Recorders
+    // that capture column information (Python `co_positions`, DWARF
+    // column extraction, Cairo source maps) call `enable_column_aware_steps`
+    // *before* any step is registered, then `register_delta_column` for
+    // every column-only move.  See `codetracer-trace-format-spec/trace-events.md`
+    // §"Column Encoding — `DeltaColumn` (chosen)" and §"Reader Behaviour
+    // and Back-Compat".
+    fn trace_writer_enable_column_aware_steps(handle: *mut std::ffi::c_void);
+    fn trace_writer_register_delta_column(
+        handle: *mut std::ffi::c_void,
+        column_delta: i64,
+    );
+
     // ----- trace-filter provenance (TF-M7, spec §7) -----
     //
     // Recorders integrating `codetracer_trace_filter` call these to embed
@@ -976,6 +991,37 @@ impl NimTraceWriter {
     /// Register a `ThreadSwitch` event (the active thread changed).
     pub fn register_thread_switch(&mut self, thread_id: u64) {
         unsafe { trace_writer_register_thread_switch(self.handle, thread_id) }
+    }
+
+    /// Opt this writer into column-aware step encoding (P6.3 / P6.4).
+    ///
+    /// Must be called *before* any step is registered.  After this the
+    /// writer is permitted to emit `sekDeltaColumn` (tag 0x07) events
+    /// via [`write_delta_column`](Self::write_delta_column), and on close
+    /// `meta.dat` will carry `FlagHasColumnAwareSteps` (bit 4) so
+    /// column-unaware readers reject the trace cleanly via the
+    /// reserved-bits check.
+    ///
+    /// Calling this on the legacy single-stream backend is a no-op (the
+    /// legacy format has no column-only event).  See
+    /// `codetracer-trace-format-spec/trace-events.md` §"Column Encoding —
+    /// `DeltaColumn` (chosen)" and §"Reader Behaviour and Back-Compat".
+    pub fn enable_column_aware_steps(&mut self) {
+        unsafe { trace_writer_enable_column_aware_steps(self.handle) }
+    }
+
+    /// Emit a column-only step event (`sekDeltaColumn`, tag 0x07) that
+    /// advances the cursor's column within the current line by
+    /// `column_delta` (signed zigzag varint on the wire; ±63 fits in 1
+    /// varint byte for a total event size of 2 bytes).
+    ///
+    /// Only valid after [`enable_column_aware_steps`](Self::enable_column_aware_steps)
+    /// has been called and at least one absolute step has been
+    /// registered to define the running `global_position_index`.
+    /// Violations set a thread-local error string retrievable via
+    /// `trace_writer_last_error()` and return silently.
+    pub fn write_delta_column(&mut self, column_delta: i64) {
+        unsafe { trace_writer_register_delta_column(self.handle, column_delta) }
     }
 
     // --- Methods that are no-ops in the Nim backend ---

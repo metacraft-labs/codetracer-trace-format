@@ -149,6 +149,20 @@ extern "C" {
         column_delta: i64,
     );
 
+    // P1.3: register a path together with its per-line column counts
+    // (paths.dat Layout A).  `line_count` is the number of u32 entries in
+    // `line_lengths`; pass 0 + NULL when the per-line data isn't available
+    // (column resolution falls back to surfacing `None` at read time).
+    // When the writer is not in column-aware mode the `line_lengths`
+    // argument is ignored and the legacy paths.dat record format is
+    // preserved byte-for-byte.
+    fn trace_writer_register_path_with_line_lengths(
+        handle: *mut std::ffi::c_void,
+        path: *const std::os::raw::c_char,
+        line_count: i32,
+        line_lengths: *const u32,
+    ) -> i32;
+
     // ----- trace-filter provenance (TF-M7, spec §7) -----
     //
     // Recorders integrating `codetracer_trace_filter` call these to embed
@@ -191,6 +205,18 @@ extern "C" {
     fn ct_reader_event_count(h: *mut std::ffi::c_void) -> u64;
 
     fn ct_reader_path_count(h: *mut std::ffi::c_void) -> u64;
+
+    /// P1.3 round-trip helper: return the addressable column count of
+    /// `line_index0` (0-indexed) in the file with id `file_id`.  Returns
+    /// 0 on success (writes the value via `out_value`); returns 1 when
+    /// the trace is not column-aware or no per-line data exists for
+    /// `(file_id, line_index0)`.
+    fn ct_reader_line_length(
+        h: *mut std::ffi::c_void,
+        file_id: u64,
+        line_index0: u32,
+        out_value: *mut u32,
+    ) -> i32;
     fn ct_reader_function_count(h: *mut std::ffi::c_void) -> u64;
     fn ct_reader_type_count(h: *mut std::ffi::c_void) -> u64;
     fn ct_reader_varname_count(h: *mut std::ffi::c_void) -> u64;
@@ -390,6 +416,106 @@ mod tests {
         assert_eq!(reader.varname(y_varname_id).unwrap(), "y");
         assert!(!x_value.is_empty(), "x arg should carry encoded value bytes");
         assert!(!y_value.is_empty(), "y arg should carry encoded value bytes");
+    }
+
+    /// P1.3 round-trip: register a path with a `[10, 20, 30]` line-length
+    /// table on a column-aware writer, close the trace, re-open it via
+    /// [`NimTraceReaderHandle`], and assert the per-line counts come
+    /// back from [`NimTraceReaderHandle::line_length`].
+    #[test]
+    fn nim_writer_register_path_with_line_lengths_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let events_path = dir.path().join("trace.json");
+        let metadata_path = dir.path().join("trace_metadata.json");
+        let paths_path = dir.path().join("trace_paths.json");
+
+        let mut writer = NimTraceWriter::new("ctfs_line_lengths", &[], TraceEventsFileFormat::Ctfs);
+        writer.begin_writing_trace_events(&events_path).unwrap();
+        writer.begin_writing_trace_metadata(&metadata_path).unwrap();
+        writer.begin_writing_trace_paths(&paths_path).unwrap();
+
+        // Opt the writer into column-aware mode *before* registering
+        // any paths or steps, per the spec contract (the flag is
+        // trace-global and must be flipped before the first event).
+        writer.enable_column_aware_steps();
+
+        let source_path = Path::new("/tmp/ctfs_line_lengths.py");
+        let line_lengths: [u32; 3] = [10, 20, 30];
+        writer
+            .register_path_with_line_lengths(source_path, &line_lengths)
+            .expect("register_path_with_line_lengths should succeed on a fresh column-aware writer");
+
+        // The exec stream needs at least one step so the trace is
+        // valid; the actual position doesn't matter for the line-length
+        // round-trip.
+        writer.start(source_path, Line(1));
+
+        writer.finish_writing_trace_events().unwrap();
+        writer.finish_writing_trace_metadata().unwrap();
+        writer.finish_writing_trace_paths().unwrap();
+        writer.close().unwrap();
+
+        let trace_path = dir.path().join("ctfs_line_lengths.ct");
+        let reader = NimTraceReaderHandle::open(trace_path.to_str().unwrap()).unwrap();
+        assert!(reader.path_count() >= 1, "trace must register at least one path");
+
+        // Per-line round-trip.  The reader API is 0-indexed.
+        assert_eq!(reader.line_length(0, 0), Some(10));
+        assert_eq!(reader.line_length(0, 1), Some(20));
+        assert_eq!(reader.line_length(0, 2), Some(30));
+
+        // Out-of-range queries return None (back-compat-safe default).
+        assert_eq!(
+            reader.line_length(0, 3),
+            None,
+            "queries past the file's known line table should return None"
+        );
+        assert_eq!(
+            reader.line_length(1, 0),
+            None,
+            "queries against an unknown file id should return None"
+        );
+    }
+
+    /// Back-compat smoke test: when the writer has *not* opted into
+    /// column-aware mode, `register_path_with_line_lengths` ignores the
+    /// `line_lengths` argument and the trace keeps the legacy
+    /// bare-path-bytes paths.dat layout.  The reader's
+    /// `line_length` query MUST return `None` in that case (the spec
+    /// contract for pre-extension traces).
+    #[test]
+    fn nim_writer_register_path_with_line_lengths_ignored_when_not_column_aware() {
+        let dir = tempfile::tempdir().unwrap();
+        let events_path = dir.path().join("trace.json");
+        let metadata_path = dir.path().join("trace_metadata.json");
+        let paths_path = dir.path().join("trace_paths.json");
+
+        let mut writer = NimTraceWriter::new("ctfs_legacy_lengths", &[], TraceEventsFileFormat::Ctfs);
+        writer.begin_writing_trace_events(&events_path).unwrap();
+        writer.begin_writing_trace_metadata(&metadata_path).unwrap();
+        writer.begin_writing_trace_paths(&paths_path).unwrap();
+
+        // Deliberately *do not* call enable_column_aware_steps.
+        let source_path = Path::new("/tmp/ctfs_legacy_lengths.py");
+        let line_lengths: [u32; 2] = [42, 99];
+        writer
+            .register_path_with_line_lengths(source_path, &line_lengths)
+            .expect("register_path_with_line_lengths should succeed even on a legacy writer");
+        writer.start(source_path, Line(1));
+
+        writer.finish_writing_trace_events().unwrap();
+        writer.finish_writing_trace_metadata().unwrap();
+        writer.finish_writing_trace_paths().unwrap();
+        writer.close().unwrap();
+
+        let trace_path = dir.path().join("ctfs_legacy_lengths.ct");
+        let reader = NimTraceReaderHandle::open(trace_path.to_str().unwrap()).unwrap();
+        assert_eq!(
+            reader.line_length(0, 0),
+            None,
+            "legacy (non-column-aware) traces must return None for every lineLength query"
+        );
+        assert_eq!(reader.line_length(0, 1), None);
     }
 }
 
@@ -1024,6 +1150,62 @@ impl NimTraceWriter {
         unsafe { trace_writer_register_delta_column(self.handle, column_delta) }
     }
 
+    /// P1.3: register `path` together with its per-line column counts
+    /// (`paths.dat` Layout A — see
+    /// `codetracer-trace-format-spec/trace-events.md` §"paths.dat per-line
+    /// offset table — Layout A").
+    ///
+    /// `line_lengths[i]` is the addressable column count of source line
+    /// `i+1` (1-based line numbering matching the spec).  Pass an empty
+    /// slice when the per-line data isn't available — the column
+    /// resolution at read time falls back to surfacing `None`, the
+    /// back-compat-safe default codified in P6.5.
+    ///
+    /// When the writer has *not* opted into column-aware mode (i.e.
+    /// [`enable_column_aware_steps`](Self::enable_column_aware_steps) was
+    /// never called) the `line_lengths` argument is ignored and the
+    /// legacy bare-path-bytes paths.dat record format is preserved
+    /// byte-for-byte.
+    ///
+    /// Errors from the underlying Nim writer (e.g. writer not yet
+    /// ready) are surfaced via the thread-local `trace_writer_last_error`
+    /// channel and returned as `Err`.  The returned `PathId(0)` is a
+    /// placeholder mirroring [`ensure_path_id`](Self::ensure_path_id) —
+    /// the Nim library owns the real ID assignment.
+    pub fn register_path_with_line_lengths(
+        &mut self,
+        path: &Path,
+        line_lengths: &[u32],
+    ) -> Result<PathId, Box<dyn Error>> {
+        let c_path = path_to_cstring(path);
+        // Cast `usize` to `i32` (the FFI signature).  Line counts >2B
+        // are not realistic — modern source files cap out long before
+        // that — but we still guard against overflow for safety.
+        let line_count: i32 = line_lengths.len().try_into().map_err(|_| -> Box<dyn Error> {
+            "register_path_with_line_lengths: line_count overflows i32".into()
+        })?;
+        // Empty slices may still produce a non-NULL pointer in Rust's
+        // current implementation, but it's safe to forward as-is — the
+        // FFI treats `line_count == 0` as "no per-line data".
+        let line_lengths_ptr = if line_lengths.is_empty() {
+            std::ptr::null()
+        } else {
+            line_lengths.as_ptr()
+        };
+        let rc = unsafe {
+            trace_writer_register_path_with_line_lengths(
+                self.handle,
+                c_path.as_ptr(),
+                line_count,
+                line_lengths_ptr,
+            )
+        };
+        if rc != 0 {
+            return Err(last_error().into());
+        }
+        Ok(PathId(0))
+    }
+
     // --- Methods that are no-ops in the Nim backend ---
 
     pub fn ensure_path_id(&mut self, _path: &Path) -> PathId {
@@ -1365,6 +1547,38 @@ pub trait TraceWriter: Send {
     fn register_step_with_column(&mut self, path: &Path, line: Line, _column: Option<Line>) {
         self.register_step(path, line);
     }
+    /// P1.1: opt the writer into column-aware step encoding.  Default
+    /// no-op so test doubles and legacy writers without column support
+    /// keep compiling — only the canonical multi-stream backend
+    /// ([`NimTraceWriter`]) overrides this to flip the writer's
+    /// column-aware mode flag (the on-close `meta.dat` bit 4).  See
+    /// [`NimTraceWriter::enable_column_aware_steps`] for the contract.
+    fn enable_column_aware_steps(&mut self) {}
+
+    /// P1.2: emit a column-only step event (`sekDeltaColumn`, tag 0x07).
+    /// Default no-op so backends without column support keep compiling.
+    /// Only the canonical multi-stream backend
+    /// ([`NimTraceWriter`]) overrides this.  See
+    /// [`NimTraceWriter::write_delta_column`] for the contract.
+    fn write_delta_column(&mut self, _column_delta: i64) {}
+
+    /// P1.3: register a source path together with its per-line column
+    /// counts (`paths.dat` Layout A — see
+    /// `codetracer-trace-format-spec/trace-events.md` §"paths.dat per-line
+    /// offset table — Layout A").  Default impl delegates to
+    /// [`register_path`] so the per-line data is dropped on backends
+    /// that don't yet support it; the
+    /// [`NimTraceWriter`] override forwards through the canonical
+    /// FFI entry point.  Returns the [`PathId`] assigned by the writer
+    /// (matching the contract of [`ensure_path_id`]).
+    fn register_path_with_line_lengths(
+        &mut self,
+        path: &Path,
+        _line_lengths: &[u32],
+    ) -> Result<PathId, Box<dyn Error>> {
+        self.register_path(path);
+        Ok(self.ensure_path_id(path))
+    }
     fn register_call(&mut self, function_id: FunctionId, args: Vec<FullValueRecord>);
     fn arg(&mut self, name: &str, value: ValueRecord) -> FullValueRecord;
     fn register_return(&mut self, return_value: ValueRecord);
@@ -1533,6 +1747,19 @@ impl TraceWriter for NimTraceWriter {
     }
     fn register_step_with_column(&mut self, path: &Path, line: Line, column: Option<Line>) {
         NimTraceWriter::register_step_with_column(self, path, line, column)
+    }
+    fn enable_column_aware_steps(&mut self) {
+        NimTraceWriter::enable_column_aware_steps(self)
+    }
+    fn write_delta_column(&mut self, column_delta: i64) {
+        NimTraceWriter::write_delta_column(self, column_delta)
+    }
+    fn register_path_with_line_lengths(
+        &mut self,
+        path: &Path,
+        line_lengths: &[u32],
+    ) -> Result<PathId, Box<dyn Error>> {
+        NimTraceWriter::register_path_with_line_lengths(self, path, line_lengths)
     }
     fn register_call(&mut self, function_id: FunctionId, args: Vec<FullValueRecord>) {
         NimTraceWriter::register_call(self, function_id, args)
@@ -1850,6 +2077,26 @@ impl NimTraceReaderHandle {
             return Err(last_error().into());
         }
         Ok(read_nim_buffer(ptr, len))
+    }
+
+    /// P1.3: return the addressable column count of `line_index0`
+    /// (0-indexed — pass `lineno - 1` for the 1-based line number used
+    /// by the spec's AbsoluteStep / DeltaStep cursor tracking) in the
+    /// file with id `file_id`.
+    ///
+    /// Returns `None` when the trace is not column-aware, when
+    /// `file_id` is out of range, when `line_index0` is past the file's
+    /// known line table, or when the recorder did not surface a
+    /// per-line table — matching the `Option[uint32]` contract on the
+    /// underlying Nim `NewTraceReader.lineLength` API.
+    pub fn line_length(&self, file_id: u64, line_index0: u32) -> Option<u32> {
+        let mut value: u32 = 0;
+        let rc = unsafe { ct_reader_line_length(self.handle, file_id, line_index0, &mut value) };
+        if rc == 0 {
+            Some(value)
+        } else {
+            None
+        }
     }
 
     // --- Data access (JSON) ---

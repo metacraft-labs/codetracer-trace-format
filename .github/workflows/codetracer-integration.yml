@@ -71,6 +71,19 @@ jobs:
           gh-token: ${{ steps.app-token.outputs.token }}
           submodules: 'true'
 
+      # codetracer/src/db-backend/build.rs requires a sibling
+      # `codetracer-native-recorder` checkout at
+      # `<manifest>/../../../codetracer-native-recorder`, i.e. at the same
+      # workspace level as the `codetracer/` clone above. Without it the
+      # replay-server build panics before the WASM tests can compile.
+      - name: Clone codetracer-native-recorder (sibling for db-backend build)
+        uses: metacraft-labs/metacraft-github-actions/clone-repo@main
+        with:
+          repo: metacraft-labs/codetracer-native-recorder
+          ref: main
+          path: codetracer-native-recorder
+          gh-token: ${{ steps.app-token.outputs.token }}
+
       # Strip the NimYAML test/yaml-test-suite sub-submodule. NimYAML's
       # .gitmodules pins it at the dead upstream branch
       # `data-2022-01-17` (yaml/yaml-test-suite no longer publishes that

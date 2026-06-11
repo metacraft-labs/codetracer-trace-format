@@ -14,6 +14,7 @@ members = [
     "origin_patterns",
     "origin_pattern_discovery",
     "sourcemap-translate",
+    "ct-mapping-tools",
 ]
 
 [workspace.dependencies]

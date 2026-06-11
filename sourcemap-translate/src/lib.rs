@@ -43,6 +43,34 @@ use std::path::{Path, PathBuf};
 
 use log::warn;
 
+/// One Source Map V3 *segment* (token) surfaced as a flat data record.
+///
+/// Used by tools that want to walk every mapping in a sourcemap
+/// rather than query a single (line, col) — e.g. the §P7.2
+/// `from-sourcemap` exporter that builds a TOML rename list from the
+/// `names[]` table and the per-segment name indices.
+///
+/// All coordinates are **1-indexed** for parity with [`OriginalPos`]
+/// and the rest of the CodeTracer wire.  Segments whose source/name
+/// are absent in the sourcemap surface as `None`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Segment {
+    /// 1-indexed generated line the segment starts at.
+    pub gen_line: u32,
+    /// 1-indexed generated column the segment starts at.
+    pub gen_column: u32,
+    /// Source file path the segment refers to (with `sourceRoot`
+    /// prepended), or `None` for "anchor" segments without a source.
+    pub source: Option<String>,
+    /// 1-indexed original line — `None` for unmapped segments.
+    pub src_line: Option<u32>,
+    /// 1-indexed original column — `None` for unmapped segments.
+    pub src_column: Option<u32>,
+    /// Original identifier name from the sourcemap's `names[]` array,
+    /// when the segment carries a `name_index`.
+    pub name: Option<String>,
+}
+
 /// Translated source position pointing at the *original* source.
 ///
 /// All coordinates are **1-indexed** — the convention used by DAP,
@@ -282,6 +310,62 @@ impl SourcemapIndex {
             .iter()
             .position(|s| s == source)
             .map(|i| i as u32)
+    }
+
+    /// The sourcemap's `file` field — the V3 spec uses this for the
+    /// *generated* output file name (typically the minified bundle
+    /// the sourcemap covers, e.g. `lodash.min.js`).  Returns `None`
+    /// when the sourcemap omits the field.
+    ///
+    /// Tools that produce TOML rename lists from sourcemaps use this
+    /// as the default `file = "..."` entry when no override is supplied.
+    pub fn file(&self) -> Option<&str> {
+        self.inner.get_file()
+    }
+
+    /// Iterate over every segment (token) in the sourcemap.
+    ///
+    /// Yields a flat [`Segment`] record per Source Map V3 mapping
+    /// segment.  Coordinates are 1-indexed (matching the rest of the
+    /// crate's public API); the underlying `sourcemap` crate's
+    /// 0-indexed sentinel `u32::MAX` for unmapped src lines/cols is
+    /// surfaced as `None`.
+    ///
+    /// Segments without a `name_index` carry `name: None`; segments
+    /// without a `src_id` (rare — "anchor" segments) carry
+    /// `source: None`.  Callers that want only the named-binding
+    /// segments should filter on `segment.name.is_some()`.
+    ///
+    /// This is the iteration counterpart to the existing per-position
+    /// [`SourcemapIndex::translate`] lookup; the §P7.2 mapping-tools
+    /// exporter uses it to walk the `names[]` table and pair each
+    /// original name with the minified identifier at the segment's
+    /// generated position.
+    pub fn segments(&self) -> impl Iterator<Item = Segment> + '_ {
+        self.inner.tokens().map(|token| {
+            // Source Map V3 sentinel for "unmapped" is `u32::MAX` on
+            // src_line / src_col; map that to `None` so callers don't
+            // have to know about the sentinel.
+            let raw = token.get_raw_token();
+            let src_line = if raw.src_line == u32::MAX {
+                None
+            } else {
+                Some(token.get_src_line().saturating_add(1))
+            };
+            let src_column = if raw.src_col == u32::MAX {
+                None
+            } else {
+                Some(token.get_src_col().saturating_add(1))
+            };
+            Segment {
+                gen_line: token.get_dst_line().saturating_add(1),
+                gen_column: token.get_dst_col().saturating_add(1),
+                source: token.get_source().map(|s| s.to_string()),
+                src_line,
+                src_column,
+                name: token.get_name().map(|s| s.to_string()),
+            }
+        })
     }
 
     /// `true` when `name` is present in the sourcemap's `names[]` array.
@@ -752,6 +836,58 @@ mod tests {
         // We don't fetch remote URLs — should return None.
         let res = discover_sourcemap_for(&src).expect("disk error");
         assert!(res.is_none());
+    }
+
+    #[test]
+    fn segments_iterates_every_mapping_segment() {
+        // TINY_MAP has three segments; the first two carry names
+        // ("alpha", "beta"), the third is nameless.  We assert the
+        // exact (gen_line, gen_col, source, src_line, src_col, name)
+        // tuple for each so a refactor of the segment iterator can't
+        // silently shift coordinates.
+        let idx = parse(TINY_MAP);
+        let segments: Vec<Segment> = idx.segments().collect();
+        assert_eq!(segments.len(), 3, "TINY_MAP has three segments");
+
+        assert_eq!(
+            segments[0],
+            Segment {
+                gen_line: 1,
+                gen_column: 1,
+                source: Some("orig.js".to_string()),
+                src_line: Some(1),
+                src_column: Some(1),
+                name: Some("alpha".to_string()),
+            }
+        );
+        assert_eq!(
+            segments[1],
+            Segment {
+                gen_line: 1,
+                gen_column: 6,
+                source: Some("orig.js".to_string()),
+                src_line: Some(2),
+                src_column: Some(3),
+                name: Some("beta".to_string()),
+            }
+        );
+        assert_eq!(
+            segments[2],
+            Segment {
+                gen_line: 1,
+                gen_column: 11,
+                source: Some("orig.js".to_string()),
+                src_line: Some(5),
+                src_column: Some(5),
+                name: None,
+            }
+        );
+    }
+
+    #[test]
+    fn file_field_is_surfaced() {
+        let idx = parse(TINY_MAP);
+        assert_eq!(idx.file(), Some("min.js"));
     }
 
     #[test]

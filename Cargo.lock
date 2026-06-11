@@ -487,6 +487,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "ct-mapping-tools"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "clap",
+ "serde",
+ "sourcemap-translate",
+ "toml",
+]
+
+[[package]]
 name = "darling"
 version = "0.23.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -1,0 +1,48 @@
+[package]
+name = "ct-mapping-tools"
+version = "0.1.0"
+edition = "2024"
+description = "CodeTracer mapping tools: produce TOML rename lists from sourcemaps and source pairs (Column-Aware-Tracing-And-Deminification §P7)."
+license = "MIT OR Apache-2.0"
+
+# `ct-mapping-tools` is a small CLI + library that converts the
+# inputs developers actually have (a Source Map V3 plus its minified
+# bundle, today; an LLM or AST aligner in later milestones) into the
+# TOML rename schema the replay-server's `RenameList` consumes.
+#
+# §P7.2 milestone — the first subcommand `from-sourcemap`.  Future
+# subcommands (`infer`, `infer-llm`, `catalog`) are stubbed in the
+# CLI so `--help` shows the full surface from day one.
+#
+# Spec: `codetracer-specs/Planned-Features/Column-Aware-Tracing-And-Deminification.milestones.org` §P7.
+
+[[bin]]
+name = "ct-mapping-tools"
+path = "src/main.rs"
+
+[lib]
+name = "ct_mapping_tools"
+path = "src/lib.rs"
+
+[dependencies]
+# Re-use the parsing + indexing layer from the replay-server's
+# server-side sourcemap support (§P3 / §P6.1).  Keeping the parser
+# in one place means the CLI and the replay-server agree on every
+# edge case (sparse mappings, `sourcesContent: null`, indexed maps).
+sourcemap-translate = { path = "../sourcemap-translate" }
+
+# `clap` derive-style CLI — the conventional choice in this workspace.
+clap = { version = "4", features = ["derive"] }
+
+# TOML output for the rename schema (matches the format the
+# replay-server's `RenameList::parse_toml` expects).
+toml = "0.8"
+
+# Used by the optional `--minified` discovery path so the file
+# arg can be read with a typed error on I/O failure.
+anyhow = "1"
+
+# `serde` is used to derive a `Serialize` shape over the TOML
+# emit path so we can round-trip the rename schema through
+# `toml::to_string`.
+serde = { version = "1", features = ["derive"] }

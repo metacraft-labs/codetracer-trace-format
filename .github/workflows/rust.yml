@@ -13,12 +13,41 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Generate CI token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.CI_TOKEN_PROVIDER_APP_ID }}
+          private-key: ${{ secrets.CI_TOKEN_PROVIDER_PRIVATE_KEY }}
+          owner: metacraft-labs
+
       - uses: actions/checkout@v4
+        with:
+          path: codetracer-trace-format
       - name: Install capnproto
         run: sudo apt-get install -y capnproto
       - name: Install just
         uses: extractions/setup-just@v2
+
+      # codetracer_trace_writer_nim's build.rs reads
+      # `codetracer-trace-format-nim/src/codetracer_trace_writer_ffi.nim`
+      # to compile the static Nim FFI lib.  The build runs even for
+      # `cargo clippy`, so the sibling needs to be checked out + the
+      # build.rs-canonical env var exported, otherwise build.rs panics
+      # before clippy gets a chance to lint.
+      - name: Clone codetracer-trace-format-nim
+        uses: metacraft-labs/metacraft-github-actions/clone-repo@main
+        with:
+          repo: metacraft-labs/codetracer-trace-format-nim
+          ref: main
+          path: codetracer-trace-format-nim
+          gh-token: ${{ steps.app-token.outputs.token }}
+      - name: Export Nim sibling path
+        run: |
+          echo "CODETRACER_TRACE_FORMAT_NIM_DIR=${GITHUB_WORKSPACE}/codetracer-trace-format-nim" >> "$GITHUB_ENV"
+
       - name: Lint
+        working-directory: codetracer-trace-format
         run: just lint
 
   build-and-test:

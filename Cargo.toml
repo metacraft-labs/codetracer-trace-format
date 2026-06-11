@@ -13,6 +13,7 @@ members = [
     "codetracer_trace_filter",
     "origin_patterns",
     "origin_pattern_discovery",
+    "sourcemap-translate",
 ]
 
 [workspace.dependencies]

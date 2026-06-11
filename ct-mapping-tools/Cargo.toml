@@ -46,3 +46,19 @@ anyhow = "1"
 # emit path so we can round-trip the rename schema through
 # `toml::to_string`.
 serde = { version = "1", features = ["derive"] }
+
+# Tree-sitter powers the §P7.3 `infer` subcommand.  We deliberately
+# pick a single language-agnostic parsing layer (one grammar per
+# language) so the alignment heuristic stays language-aware via
+# tree-sitter node kinds rather than maintaining N typed-AST
+# alignment implementations.
+#
+# Why tree-sitter (vs. SWC + RustPython): tree-sitter covers JS,
+# TS, Python, Ruby, etc. uniformly via published grammars; SWC ties
+# us to JS/TS only and pulls in a 10x heavier dependency tree.  The
+# alignment heuristic (kind+position lock-step walk) is trivially
+# generic over node-kind strings.
+tree-sitter = "0.26"
+tree-sitter-javascript = "0.25"
+tree-sitter-typescript = "0.23"
+tree-sitter-python = "0.25"

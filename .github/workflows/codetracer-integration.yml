@@ -84,6 +84,21 @@ jobs:
           path: codetracer-native-recorder
           gh-token: ${{ steps.app-token.outputs.token }}
 
+      # codetracer/src/db-backend/build.rs (line 762) invokes
+      # `direnv exec <native-recorder-dir> bash ct_emulator/build_native_api.sh`
+      # to compile the Nim MCR emulator's C generation pipeline.  On
+      # the self-hosted runners direnv rejects the cloned .envrc as
+      # untrusted, so build.rs panics before the emulator C files
+      # are emitted.  Pre-allowing the .envrc here makes direnv treat
+      # the file as authorized for this checkout; the allow is scoped
+      # to the per-job workspace and disappears when the runner cleans
+      # up.
+      - name: Pre-allow direnv for codetracer-native-recorder
+        run: |
+          if [[ -f codetracer-native-recorder/.envrc ]]; then
+            direnv allow codetracer-native-recorder || true
+          fi
+
       # Strip the NimYAML test/yaml-test-suite sub-submodule. NimYAML's
       # .gitmodules pins it at the dead upstream branch
       # `data-2022-01-17` (yaml/yaml-test-suite no longer publishes that

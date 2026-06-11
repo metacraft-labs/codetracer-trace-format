@@ -65,7 +65,14 @@ jobs:
           nim c --app:staticlib --mm:arc --noMain -d:release \
             --passC:"-fPIC" -p:src \
             -o:libcodetracer_trace_writer.a src/codetracer_trace_writer_ffi.nim
+          # build.rs reads CODETRACER_TRACE_FORMAT_NIM_DIR (not
+          # CODETRACER_NIM_LIB_DIR) to locate the Nim FFI sibling for
+          # cross-language testing.  Export both names: keep the legacy
+          # one in case downstream scripts still rely on it, but the
+          # build.rs-canonical one is required for the Rust crate to
+          # find src/codetracer_trace_writer_ffi.nim.
           echo "CODETRACER_NIM_LIB_DIR=${GITHUB_WORKSPACE}/codetracer-trace-format-nim" >> "$GITHUB_ENV"
+          echo "CODETRACER_TRACE_FORMAT_NIM_DIR=${GITHUB_WORKSPACE}/codetracer-trace-format-nim" >> "$GITHUB_ENV"
 
       # codetracer_ctfs/tests/trace_storage.rs walks 4 recorder siblings to
       # enforce the "no private storage parser" contract.  codetracer-native-recorder

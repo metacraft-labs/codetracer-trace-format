@@ -42,6 +42,15 @@ jobs:
           ref: main
           path: codetracer-trace-format-nim
           gh-token: ${{ steps.app-token.outputs.token }}
+      # Even `cargo clippy` runs build.rs, and codetracer_trace_writer_nim's
+      # build.rs shells out to `nimble` (which ships with Nim) to compile
+      # the static FFI lib. Without Nim on PATH the lint job panics before
+      # clippy reaches a single file.
+      - name: Install Nim
+        uses: jiro4989/setup-nim-action@v2
+        with:
+          nim-version: "2.2.x"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Export Nim sibling path
         run: |
           echo "CODETRACER_TRACE_FORMAT_NIM_DIR=${GITHUB_WORKSPACE}/codetracer-trace-format-nim" >> "$GITHUB_ENV"

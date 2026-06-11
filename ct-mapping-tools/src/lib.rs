@@ -675,6 +675,392 @@ fn node_text(node: tree_sitter::Node<'_>, src: &[u8]) -> Option<String> {
     std::str::from_utf8(bytes).ok().map(|s| s.to_string())
 }
 
+// ---------------------------------------------------------------------------
+// §P7.4 — `infer-llm` subcommand: LLM-proposed renames for minified-only
+// sources.
+//
+// When neither a sourcemap nor an original source is available the only
+// signal left is the structure + naming patterns the LLM recognises in
+// the minified source itself.  We POST the source to the Anthropic
+// Messages API, ask the model for a JSON list of `{from, to,
+// confidence}` triples, parse the response, and emit it through the
+// same TOML schema the other paths use.
+//
+// Design notes:
+//
+// * The library API (`infer_llm`) accepts the `api_key` as a parameter
+//   rather than reading the environment — this lets tests inject a
+//   throwaway key against a mock server and keeps the secret off the
+//   library's surface.  The CLI shim handles env-var fallback +
+//   skip-loud behavior.
+//
+// * `--min-confidence` defaults to **0.5** for `infer-llm` (vs **0.7**
+//   for `infer`) because LLM proposals are inherently best-effort: the
+//   model's confidence calibration is noisier than the AST aligner's
+//   per-bind statistical share.
+//
+// * The prompt asks the model to embed its proposals in a JSON code
+//   fence (`<backticks>json ... <backticks>`).  We tolerate either
+//   "the whole response is JSON" or "JSON inside a code fence" so the
+//   model has some latitude in its formatting.
+// ---------------------------------------------------------------------------
+
+/// Knobs for [`infer_llm`].
+#[derive(Debug, Clone)]
+pub struct InferLlmOptions {
+    /// Source language used for the prompt's syntax hint (the model
+    /// adapts its proposals when told "this is Python" vs "this is
+    /// JavaScript").
+    pub language: Language,
+    /// `file = "..."` value written into every produced
+    /// `[[rename]]` row.  Empty string when `None`.
+    pub file_name: Option<String>,
+    /// Anthropic model ID — e.g. `claude-haiku-4-5-20251001`
+    /// (default).  Haiku is the cheapest + fastest production model
+    /// and the §P7.4 spec calls it out explicitly for cost reasons.
+    pub model: String,
+    /// API base URL — defaults to the Anthropic public endpoint.
+    /// Override in tests to point at a mock server.
+    pub api_base: String,
+    /// Drop proposed renames whose self-rated confidence falls below
+    /// this threshold.  Default in the CLI: 0.5.
+    pub min_confidence: f64,
+    /// Cap the number of proposals embedded in the request so the
+    /// prompt stays small.  Default: 50.
+    pub max_bindings: usize,
+}
+
+impl Default for InferLlmOptions {
+    fn default() -> Self {
+        Self {
+            language: Language::JavaScript,
+            file_name: None,
+            model: "claude-haiku-4-5-20251001".to_string(),
+            api_base: "https://api.anthropic.com/v1".to_string(),
+            min_confidence: 0.5,
+            max_bindings: 50,
+        }
+    }
+}
+
+/// One rename row with the model's self-rated confidence attached.
+///
+/// The CLI strips the confidence before serialising to the TOML
+/// schema (which has no confidence column today); the library exposes
+/// it so callers wanting a review UI can surface "the model says
+/// 0.83" alongside each row.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RenameEntryWithConfidence {
+    pub entry: RenameEntry,
+    /// `0.0..=1.0` — the model's self-rated confidence.  Already
+    /// clamped during parsing; downstream code can trust the range.
+    pub confidence: f64,
+}
+
+/// Outcome of an [`infer_llm`] call.
+#[derive(Debug, Clone)]
+pub struct InferLlmResult {
+    /// Surviving rows (already filtered by
+    /// [`InferLlmOptions::min_confidence`]), sorted by
+    /// `(scope, from)` like the other paths' output.
+    pub entries: Vec<RenameEntryWithConfidence>,
+    /// Usage statistics — useful for a `--verbose` CLI summary and
+    /// for callers tracking spend.
+    pub stats: InferLlmStats,
+}
+
+/// Usage statistics for a single [`infer_llm`] call.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct InferLlmStats {
+    /// How many HTTP requests the implementation made.  Always `1`
+    /// in v1 (no chunking yet); future revisions may split a large
+    /// minified file across multiple requests.
+    pub api_call_count: usize,
+    /// `input_tokens` reported by the Anthropic API.  `0` when the
+    /// response didn't include usage metadata.
+    pub total_tokens_in: usize,
+    /// `output_tokens` reported by the Anthropic API.  `0` when the
+    /// response didn't include usage metadata.
+    pub total_tokens_out: usize,
+    /// Number of rename triples the model proposed (before the
+    /// confidence filter).
+    pub bindings_proposed: usize,
+    /// Subset of `bindings_proposed` that survived the threshold.
+    /// Equals `entries.len()`.
+    pub bindings_above_confidence: usize,
+}
+
+/// Errors emitted by [`infer_llm`].  The CLI maps each variant to a
+/// distinct exit code + user-facing message.
+#[derive(Debug)]
+pub enum InferLlmError {
+    /// `api_key` was empty.  The CLI translates this into the
+    /// skip-loud message and exit code 0 — the §P7.4 spec calls out
+    /// the "no key, no harm" contract for test environments.
+    NoApiKey,
+    /// `reqwest` returned a transport error OR the server responded
+    /// with a non-2xx status.  The payload includes the status code
+    /// + body excerpt for diagnostics.
+    HttpError(String),
+    /// The response body wasn't valid JSON, or the embedded JSON
+    /// proposals block couldn't be parsed.
+    JsonParseError(String),
+    /// The response was valid JSON but didn't have the shape we
+    /// expect (missing `content[0].text`, etc.).
+    ResponseShapeError(String),
+}
+
+impl std::fmt::Display for InferLlmError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            InferLlmError::NoApiKey => write!(f, "no API key configured"),
+            InferLlmError::HttpError(msg) => write!(f, "HTTP error: {msg}"),
+            InferLlmError::JsonParseError(msg) => write!(f, "JSON parse error: {msg}"),
+            InferLlmError::ResponseShapeError(msg) => write!(f, "response shape error: {msg}"),
+        }
+    }
+}
+
+impl std::error::Error for InferLlmError {}
+
+/// Human-readable name for the language — used in the prompt and the
+/// fenced code block's language tag.
+fn language_prompt_name(lang: Language) -> &'static str {
+    match lang {
+        Language::JavaScript => "javascript",
+        Language::TypeScript => "typescript",
+        Language::Python => "python",
+    }
+}
+
+/// System prompt for the LLM.  Kept terse: the model only needs to
+/// know the task shape + output format.  Verbose system prompts cost
+/// tokens on every call without measurably improving output quality
+/// for this kind of structured-extraction task.
+const SYSTEM_PROMPT: &str = "You are a code-analysis assistant. Given a minified source, propose meaningful names for the minified identifiers based on their usage patterns. For each rename, output a confidence score 0.0-1.0 reflecting how sure you are. Only include renames where you have meaningful evidence. Respond with a single JSON code block; no prose outside it.";
+
+/// Build the user prompt embedded in the request.
+///
+/// The shape is documented in the §P7.4 spec — kept here so the
+/// prompt text is right next to its parser.
+fn build_user_prompt(minified_src: &str, lang: Language, max_bindings: usize) -> String {
+    let lang_name = language_prompt_name(lang);
+    format!(
+        "Here is a minified {lang_name} source:\n\n\
+         ```{lang_name}\n\
+         {minified_src}\n\
+         ```\n\n\
+         Propose renames in JSON format:\n\n\
+         ```json\n\
+         {{\n  \"renames\": [\n    {{\"from\": \"a\", \"to\": \"userId\", \"confidence\": 0.85, \"reasoning\": \"passed to authenticate(), looks like an ID\"}}\n  ]\n}}\n\
+         ```\n\n\
+         Only include renames where you have meaningful evidence. Cap at {max_bindings} entries."
+    )
+}
+
+/// Extract the JSON proposals block from the assistant's text
+/// content.
+///
+/// Strategy:
+///
+/// 1. Look for a fenced code block marked ```json — that's what the
+///    prompt asks for.
+/// 2. If no fence is found, try parsing the whole text as JSON (some
+///    well-behaved models return raw JSON without a fence).
+/// 3. If neither parses, return [`InferLlmError::JsonParseError`].
+fn extract_proposals_json(text: &str) -> Result<serde_json::Value, InferLlmError> {
+    // Look for ```json ... ``` fence first.
+    if let Some(start) = text.find("```json") {
+        // After the fence opener, find the matching closer.  We accept
+        // either `\n` or end-of-fence-tag immediately after `json`.
+        let after_tag = start + "```json".len();
+        let rest = &text[after_tag..];
+        if let Some(end_rel) = rest.find("```") {
+            let inner = rest[..end_rel].trim();
+            return serde_json::from_str(inner).map_err(|e| {
+                InferLlmError::JsonParseError(format!(
+                    "could not parse fenced JSON proposals block: {e}"
+                ))
+            });
+        }
+    }
+    // Fall back to whole-text parse.  We trim leading whitespace; the
+    // model sometimes wraps the JSON in a single blank line.
+    serde_json::from_str(text.trim()).map_err(|e| {
+        InferLlmError::JsonParseError(format!(
+            "no fenced JSON block and whole-text parse failed: {e}"
+        ))
+    })
+}
+
+/// Run the §P7.4 LLM-based inference.
+///
+/// Wire shape:
+///
+/// 1. Build the prompt embedding the minified source.
+/// 2. POST to `<api_base>/messages` with the Anthropic Messages
+///    headers (`x-api-key`, `anthropic-version`, `content-type`).
+/// 3. Parse the response, extract `content[0].text`, pull the JSON
+///    proposals block out of it.
+/// 4. Convert each proposal to a [`RenameEntryWithConfidence`],
+///    dropping `from == to`, dropping below-threshold rows, sorting
+///    deterministically.
+///
+/// The function takes `api_key` as a `&str` parameter (NOT through
+/// env) so tests can mock without leaking real credentials and so the
+/// library has no implicit dependency on process state.
+pub fn infer_llm(
+    minified_src: &str,
+    api_key: &str,
+    opts: &InferLlmOptions,
+) -> Result<InferLlmResult, InferLlmError> {
+    if api_key.is_empty() {
+        return Err(InferLlmError::NoApiKey);
+    }
+
+    let user_prompt = build_user_prompt(minified_src, opts.language, opts.max_bindings);
+    let body = serde_json::json!({
+        "model": opts.model,
+        "max_tokens": 4096,
+        "system": SYSTEM_PROMPT,
+        "messages": [
+            {"role": "user", "content": user_prompt}
+        ]
+    });
+
+    let url = format!("{}/messages", opts.api_base.trim_end_matches('/'));
+    let client = reqwest::blocking::Client::builder()
+        // The blocking client without an explicit timeout will wait
+        // forever on a hung connection.  30s is generous for the
+        // Messages API (Haiku typically responds in 2-4 seconds) and
+        // matches the timeout other CLIs in this workspace use.
+        .timeout(std::time::Duration::from_secs(30))
+        .build()
+        .map_err(|e| InferLlmError::HttpError(format!("client setup: {e}")))?;
+
+    let response = client
+        .post(&url)
+        .header("x-api-key", api_key)
+        .header("anthropic-version", "2023-06-01")
+        .header("content-type", "application/json")
+        .json(&body)
+        .send()
+        .map_err(|e| InferLlmError::HttpError(format!("send: {e}")))?;
+
+    let status = response.status();
+    let response_text = response
+        .text()
+        .map_err(|e| InferLlmError::HttpError(format!("read body: {e}")))?;
+
+    if !status.is_success() {
+        // Truncate the body excerpt so an HTML error page doesn't
+        // blow up the user's terminal.
+        let excerpt = if response_text.len() > 500 {
+            format!("{}…", &response_text[..500])
+        } else {
+            response_text.clone()
+        };
+        return Err(InferLlmError::HttpError(format!(
+            "status {status}: {excerpt}"
+        )));
+    }
+
+    let parsed: serde_json::Value = serde_json::from_str(&response_text)
+        .map_err(|e| InferLlmError::JsonParseError(format!("response body: {e}")))?;
+
+    // Anthropic Messages API: response shape is
+    //   { "content": [ { "type": "text", "text": "..." } ], "usage": { ... } }
+    // We grab `content[0].text` (the first text block) and the usage
+    // counts.
+    let text = parsed
+        .get("content")
+        .and_then(|c| c.as_array())
+        .and_then(|arr| arr.first())
+        .and_then(|first| first.get("text"))
+        .and_then(|t| t.as_str())
+        .ok_or_else(|| {
+            InferLlmError::ResponseShapeError(
+                "expected `content[0].text` in Messages API response".to_string(),
+            )
+        })?;
+
+    let usage = parsed.get("usage");
+    let tokens_in = usage
+        .and_then(|u| u.get("input_tokens"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) as usize;
+    let tokens_out = usage
+        .and_then(|u| u.get("output_tokens"))
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0) as usize;
+
+    let proposals = extract_proposals_json(text)?;
+    let renames_array = proposals
+        .get("renames")
+        .and_then(|r| r.as_array())
+        .ok_or_else(|| {
+            InferLlmError::ResponseShapeError(
+                "proposals JSON missing `renames` array".to_string(),
+            )
+        })?;
+
+    let file_name = opts.file_name.clone().unwrap_or_default();
+    let mut entries: Vec<RenameEntryWithConfidence> = Vec::new();
+    let mut bindings_proposed = 0usize;
+
+    for item in renames_array {
+        let from = item.get("from").and_then(|v| v.as_str());
+        let to = item.get("to").and_then(|v| v.as_str());
+        let confidence = item
+            .get("confidence")
+            .and_then(|v| v.as_f64())
+            .unwrap_or(0.0);
+        let (Some(from), Some(to)) = (from, to) else {
+            // Skip malformed proposal rows but don't fail the whole
+            // call — the model occasionally elides a field and we'd
+            // rather use the well-formed ones than punt.
+            continue;
+        };
+        if from.is_empty() || to.is_empty() {
+            continue;
+        }
+        bindings_proposed += 1;
+        if from == to {
+            // No-op rename; drop silently.
+            continue;
+        }
+        // Clamp confidence into [0.0, 1.0] so the model can't smuggle
+        // a 1.5 past the filter via prompt injection or honest error.
+        let confidence = confidence.clamp(0.0, 1.0);
+        if confidence < opts.min_confidence {
+            continue;
+        }
+        entries.push(RenameEntryWithConfidence {
+            entry: RenameEntry {
+                file: file_name.clone(),
+                scope: "global".to_string(),
+                from: from.to_string(),
+                to: to.to_string(),
+            },
+            confidence,
+        });
+    }
+
+    entries.sort_by(|a, b| (&a.entry.scope, &a.entry.from).cmp(&(&b.entry.scope, &b.entry.from)));
+    let bindings_above_confidence = entries.len();
+
+    Ok(InferLlmResult {
+        entries,
+        stats: InferLlmStats {
+            api_call_count: 1,
+            total_tokens_in: tokens_in,
+            total_tokens_out: tokens_out,
+            bindings_proposed,
+            bindings_above_confidence,
+        },
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -720,5 +1106,43 @@ mod tests {
     #[test]
     fn to_toml_empty_produces_empty_string() {
         assert_eq!(to_toml(&[]), "");
+    }
+
+    #[test]
+    fn infer_llm_no_api_key_returns_typed_error() {
+        // Empty api_key short-circuits before any HTTP setup so this
+        // unit test doesn't need a mock server.
+        let err = infer_llm("function a(){}", "", &InferLlmOptions::default()).unwrap_err();
+        match err {
+            InferLlmError::NoApiKey => {}
+            other => panic!("expected NoApiKey, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn extract_proposals_json_handles_fenced_block() {
+        let text = "Here are my proposals:\n\n```json\n{\"renames\": [{\"from\": \"a\", \"to\": \"alpha\", \"confidence\": 0.9}]}\n```\n";
+        let v = extract_proposals_json(text).expect("fenced parse");
+        assert_eq!(
+            v["renames"][0]["from"].as_str(),
+            Some("a"),
+            "fenced block parsed correctly"
+        );
+    }
+
+    #[test]
+    fn extract_proposals_json_handles_raw_json() {
+        let text = "{\"renames\": [{\"from\": \"b\", \"to\": \"beta\", \"confidence\": 0.7}]}";
+        let v = extract_proposals_json(text).expect("raw parse");
+        assert_eq!(v["renames"][0]["from"].as_str(), Some("b"));
+    }
+
+    #[test]
+    fn extract_proposals_json_rejects_garbage() {
+        let text = "Sorry, I can't propose renames for this source.";
+        assert!(matches!(
+            extract_proposals_json(text),
+            Err(InferLlmError::JsonParseError(_))
+        ));
     }
 }

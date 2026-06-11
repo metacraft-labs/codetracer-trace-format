@@ -19,7 +19,8 @@ use anyhow::{Context, Result, anyhow, bail};
 use clap::{Parser, Subcommand};
 
 use ct_mapping_tools::{
-    FromSourcemapOptions, InferOptions, Language, RenameEntry, from_sourcemap, infer, to_toml,
+    FromSourcemapOptions, InferLlmError, InferLlmOptions, InferOptions, Language, RenameEntry,
+    from_sourcemap, infer, infer_llm, to_toml,
 };
 use sourcemap_translate::SourcemapIndex;
 
@@ -116,13 +117,58 @@ enum Command {
     },
 
     /// Produce a TOML rename list from a minified-only source via an
-    /// LLM (§P7.4 — not yet implemented).
+    /// LLM (§P7.4).
+    ///
+    /// POSTs the minified source to the Anthropic Messages API and
+    /// asks the model to propose renames with self-rated confidences.
+    /// Requires `CT_LLM_API_KEY` (preferred) or `ANTHROPIC_API_KEY` in
+    /// the environment; exits 0 with a `SKIP infer-llm` message when
+    /// neither is set so the subcommand is safe to call in CI without
+    /// guards.
     InferLlm {
         /// Minified source.
         minified: PathBuf,
+        /// Source language for the prompt's syntax hint.  `auto` (the
+        /// default) derives from `<minified>`'s extension.
+        #[arg(long = "language", value_name = "LANG", default_value = "auto")]
+        language: String,
+        /// `file = "..."` value written into every emitted
+        /// `[[rename]]` row.  Defaults to the minified file's basename.
+        #[arg(long = "file-name", value_name = "NAME")]
+        file_name: Option<String>,
         /// Output file (default: stdout).
         #[arg(long = "out", value_name = "PATH")]
         out: Option<PathBuf>,
+        /// Anthropic model ID.
+        #[arg(
+            long = "model",
+            value_name = "MODEL",
+            default_value = "claude-haiku-4-5-20251001"
+        )]
+        model: String,
+        /// API base URL — override to point at a mock server in tests.
+        #[arg(
+            long = "api-base",
+            value_name = "URL",
+            default_value = "https://api.anthropic.com/v1"
+        )]
+        api_base: String,
+        /// Minimum self-rated confidence.  Lower than the `infer`
+        /// default because LLM proposals are inherently best-effort.
+        #[arg(
+            long = "min-confidence",
+            value_name = "F64",
+            default_value_t = 0.5
+        )]
+        min_confidence: f64,
+        /// Cap the number of proposals the model returns (keeps the
+        /// prompt + parse cost bounded).
+        #[arg(
+            long = "max-bindings",
+            value_name = "N",
+            default_value_t = 50
+        )]
+        max_bindings: usize,
     },
 
     /// Operations on the curated mapping catalog (§P8.2 — not yet
@@ -164,9 +210,25 @@ fn main() -> Result<()> {
             min_confidence,
             out,
         } => run_infer(&minified, &original, file_name, &language, min_confidence, out.as_deref()),
-        Command::InferLlm { .. } => {
-            bail!("`infer-llm` is not yet implemented — planned for milestone §P7.4.")
-        }
+        Command::InferLlm {
+            minified,
+            language,
+            file_name,
+            out,
+            model,
+            api_base,
+            min_confidence,
+            max_bindings,
+        } => run_infer_llm(
+            &minified,
+            &language,
+            file_name,
+            out.as_deref(),
+            model,
+            api_base,
+            min_confidence,
+            max_bindings,
+        ),
         Command::Catalog { .. } => {
             bail!("`catalog` is not yet implemented — planned for milestone §P8.2.")
         }
@@ -287,6 +349,91 @@ fn run_infer(
         .map_err(|e| anyhow!("inference failed: {e}"))?;
 
     write_toml_output(&result.entries, out)
+}
+
+/// Implementation of the `infer-llm` subcommand (§P7.4).
+///
+/// Resolves the language (auto-detect via extension when
+/// `--language auto`), reads the env var for the API key, and
+/// dispatches to [`infer_llm`].  When no API key is set, prints a
+/// loud `SKIP` message and exits 0 — the §P7.4 spec calls this
+/// behaviour out so CI environments without a key don't fail the
+/// command.
+#[allow(clippy::too_many_arguments)]
+fn run_infer_llm(
+    minified: &Path,
+    language: &str,
+    file_name: Option<String>,
+    out: Option<&Path>,
+    model: String,
+    api_base: String,
+    min_confidence: f64,
+    max_bindings: usize,
+) -> Result<()> {
+    if !(0.0..=1.0).contains(&min_confidence) {
+        bail!(
+            "--min-confidence must be in [0.0, 1.0]; got {}",
+            min_confidence
+        );
+    }
+
+    // Env-var priority: `CT_LLM_API_KEY` (workspace-specific name) wins
+    // over `ANTHROPIC_API_KEY` (the upstream default).  Empty-string
+    // values count as unset so a user can opt out by setting the var
+    // to "" without unsetting it.
+    let api_key = std::env::var("CT_LLM_API_KEY")
+        .ok()
+        .or_else(|| std::env::var("ANTHROPIC_API_KEY").ok())
+        .filter(|k| !k.is_empty());
+
+    let Some(api_key) = api_key else {
+        // Skip-loud: print to stdout (NOT stderr) so it shows up in
+        // `cargo run` capture and CI logs without being mistaken for
+        // an error.  Exit 0 — the spec's contract for "no key, no
+        // harm".
+        println!("SKIP infer-llm: no API key configured.");
+        println!(
+            "Set CT_LLM_API_KEY=<your-anthropic-api-key> or ANTHROPIC_API_KEY=<...> to enable."
+        );
+        return Ok(());
+    };
+
+    let lang = resolve_language(language, minified)?;
+    let minified_src = fs::read_to_string(minified)
+        .with_context(|| format!("failed to read minified source {}", minified.display()))?;
+
+    let file_name = file_name.or_else(|| {
+        minified
+            .file_name()
+            .and_then(|s| s.to_str())
+            .map(|s| s.to_string())
+    });
+
+    let opts = InferLlmOptions {
+        language: lang,
+        file_name,
+        model,
+        api_base,
+        min_confidence,
+        max_bindings,
+    };
+
+    let result = match infer_llm(&minified_src, &api_key, &opts) {
+        Ok(r) => r,
+        Err(InferLlmError::NoApiKey) => {
+            // Defensive: env-var path above should have intercepted
+            // this, but the library returns it for empty keys as
+            // well — handle uniformly.
+            println!("SKIP infer-llm: no API key configured.");
+            return Ok(());
+        }
+        Err(other) => return Err(anyhow!("infer-llm failed: {other}")),
+    };
+
+    // The §P5 TOML schema doesn't carry confidence today; strip it
+    // before emitting.  Future schema versions can extend the row.
+    let entries: Vec<RenameEntry> = result.entries.into_iter().map(|r| r.entry).collect();
+    write_toml_output(&entries, out)
 }
 
 /// Resolve a CLI `--language` string to a [`Language`] handle.

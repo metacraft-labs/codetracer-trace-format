@@ -62,3 +62,12 @@ tree-sitter = "0.26"
 tree-sitter-javascript = "0.25"
 tree-sitter-typescript = "0.23"
 tree-sitter-python = "0.25"
+
+# §P7.4 `infer-llm` subcommand: HTTP client + JSON parser.
+#
+# `reqwest` with the blocking + rustls flavor: a CLI tool doesn't
+# need async I/O, and rustls keeps the build closure dependency-
+# free (no system OpenSSL).  `serde_json` is used to construct the
+# Anthropic Messages API request body and parse the response.
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+serde_json = "1"

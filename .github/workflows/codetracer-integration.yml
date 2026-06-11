@@ -84,6 +84,24 @@ jobs:
           path: codetracer-native-recorder
           gh-token: ${{ steps.app-token.outputs.token }}
 
+      # codetracer_trace_writer_nim/build.rs (in *this* repo, but
+      # invoked again here through the codetracer build graph that
+      # pulls in this trace-format crate via path = "../codetracer-trace-format/...")
+      # needs the codetracer-trace-format-nim sibling for the
+      # codetracer_trace_writer_ffi.nim entry point.  Without it the
+      # build panics with "Nim FFI entry point not found".  The override
+      # env var CODETRACER_TRACE_FORMAT_NIM_DIR is honoured.
+      - name: Clone codetracer-trace-format-nim (sibling for trace_writer_nim FFI)
+        uses: metacraft-labs/metacraft-github-actions/clone-repo@main
+        with:
+          repo: metacraft-labs/codetracer-trace-format-nim
+          ref: main
+          path: codetracer-trace-format-nim
+          gh-token: ${{ steps.app-token.outputs.token }}
+      - name: Export Nim sibling path
+        run: |
+          echo "CODETRACER_TRACE_FORMAT_NIM_DIR=${GITHUB_WORKSPACE}/codetracer-trace-format-nim" >> "$GITHUB_ENV"
+
       # codetracer/src/db-backend/build.rs (line 762) invokes
       # `direnv exec <native-recorder-dir> bash ct_emulator/build_native_api.sh`
       # to compile the Nim MCR emulator's C generation pipeline.  On

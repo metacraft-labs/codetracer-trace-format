@@ -71,6 +71,45 @@ jobs:
           gh-token: ${{ steps.app-token.outputs.token }}
           submodules: 'true'
 
+      # Strip the NimYAML test/yaml-test-suite sub-submodule. NimYAML's
+      # .gitmodules pins it at the dead upstream branch
+      # `data-2022-01-17` (yaml/yaml-test-suite no longer publishes that
+      # branch), so `git submodule update --recursive` leaves it as an
+      # empty directory.  Nix's flake fetcher in the next step walks
+      # `?submodules=1` recursively and panics with
+      # "does not appear to be a git repository" on that empty dir.
+      # The suite is only NimYAML's own test data, never linked against
+      # by NimYAML-as-a-library, so dropping it from .gitmodules + the
+      # working tree is safe for downstream consumers like codetracer.
+      - name: Drop dead yaml-test-suite sub-submodule from NimYAML
+        run: |
+          set -euo pipefail
+          NIMYAML_DIR=codetracer/libs/NimYAML
+          if [[ -f "${NIMYAML_DIR}/.gitmodules" ]] \
+             && grep -q "test/yaml-test-suite" "${NIMYAML_DIR}/.gitmodules"; then
+            cd "${NIMYAML_DIR}"
+            git submodule deinit -f test/yaml-test-suite 2>/dev/null || true
+            git config -f .gitmodules --remove-section submodule."test/yaml-test-suite" 2>/dev/null || true
+            # If .gitmodules ended up with no sections left, remove it
+            # entirely so Nix does not try to walk an empty file.
+            if [[ ! -s .gitmodules ]] || ! grep -q '\[submodule' .gitmodules; then
+              git rm -f .gitmodules 2>/dev/null || rm -f .gitmodules
+            else
+              git add .gitmodules
+            fi
+            rm -rf test/yaml-test-suite
+            git add -A test/yaml-test-suite 2>/dev/null || true
+            git -c user.name="CI" -c user.email="ci@local" commit --no-gpg-sign \
+              -m "CI: drop dead yaml-test-suite sub-submodule (upstream branch removed)" || true
+            cd - >/dev/null
+            # Re-stage NimYAML at codetracer level so the parent repo sees
+            # the new commit pointer.
+            cd codetracer
+            git add libs/NimYAML
+            git -c user.name="CI" -c user.email="ci@local" commit --no-gpg-sign \
+              -m "CI: bump NimYAML to drop yaml-test-suite sub-submodule" || true
+          fi
+
       - name: Replace trace-format submodule with PR code
         run: |
           rm -rf codetracer/libs/codetracer-trace-format

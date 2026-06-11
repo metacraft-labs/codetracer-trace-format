@@ -1750,6 +1750,32 @@ pub trait TraceWriter: Send {
         self.register_path(path);
         Ok(self.ensure_path_id(path))
     }
+
+    /// P6.2: buffer one alternate source view for `path` — typically a
+    /// `black`-reformatted version of a minified Python source produced
+    /// by the recorder-side autoformat pass.  See
+    /// [`NimTraceWriter::register_source_view`] for the canonical
+    /// contract (view_kind enum, view_name semantics, sourcemap-V3
+    /// shape).
+    ///
+    /// Default implementation is a no-op so test doubles and legacy
+    /// writers without the `source_views.dat` stream silently drop the
+    /// view rather than failing the recorder's hot path; the
+    /// CTFS-emitting [`NimTraceWriter`] overrides this to thread the
+    /// view through the FFI entry point.  Returns the new view's
+    /// 0-based index on success; default returns 0 for the no-op path
+    /// since callers only inspect the `Result` for error handling.
+    fn register_source_view(
+        &mut self,
+        _path: PathId,
+        _view_kind: u8,
+        _view_name: &str,
+        _content: &[u8],
+        _sourcemap: &[u8],
+    ) -> Result<u64, Box<dyn Error>> {
+        Ok(0)
+    }
+
     fn register_call(&mut self, function_id: FunctionId, args: Vec<FullValueRecord>);
     fn arg(&mut self, name: &str, value: ValueRecord) -> FullValueRecord;
     fn register_return(&mut self, return_value: ValueRecord);
@@ -1931,6 +1957,16 @@ impl TraceWriter for NimTraceWriter {
         line_lengths: &[u32],
     ) -> Result<PathId, Box<dyn Error>> {
         NimTraceWriter::register_path_with_line_lengths(self, path, line_lengths)
+    }
+    fn register_source_view(
+        &mut self,
+        path: PathId,
+        view_kind: u8,
+        view_name: &str,
+        content: &[u8],
+        sourcemap: &[u8],
+    ) -> Result<u64, Box<dyn Error>> {
+        NimTraceWriter::register_source_view(self, path, view_kind, view_name, content, sourcemap)
     }
     fn register_call(&mut self, function_id: FunctionId, args: Vec<FullValueRecord>) {
         NimTraceWriter::register_call(self, function_id, args)

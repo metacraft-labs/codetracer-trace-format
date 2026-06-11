@@ -345,8 +345,7 @@ impl CtfsWriter {
             level += 1;
 
             if level > 5 {
-                return Err(CtfsError::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
+                return Err(CtfsError::Io(std::io::Error::other(
                     "file too large: exceeds 5-level mapping",
                 )));
             }

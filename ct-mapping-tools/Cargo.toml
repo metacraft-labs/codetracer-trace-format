@@ -31,6 +31,11 @@ path = "src/lib.rs"
 # edge case (sparse mappings, `sourcesContent: null`, indexed maps).
 sourcemap-translate = { path = "../sourcemap-translate" }
 
+# §P8 — shared catalog crate.  `ct-mapping-tools catalog ...` and the
+# replay-server's auto-load both consume `Catalog` from this crate so
+# the two agree on path resolution, index schema, and SHA semantics.
+mapping-catalog = { path = "../mapping-catalog" }
+
 # `clap` derive-style CLI — the conventional choice in this workspace.
 clap = { version = "4", features = ["derive"] }
 
@@ -71,3 +76,9 @@ tree-sitter-python = "0.25"
 # Anthropic Messages API request body and parse the response.
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde_json = "1"
+
+[dev-dependencies]
+# Integration tests construct on-disk catalogs in a fresh tempdir per
+# test so they don't depend on the curated catalog under
+# `codetracer-mapping-catalog/`.
+tempfile = "3"

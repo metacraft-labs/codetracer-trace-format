@@ -1,15 +1,17 @@
 //! `ct-mapping-tools` CLI.
 //!
-//! Subcommand surface (`from-sourcemap` + `infer` are implemented):
+//! Subcommand surface (every subcommand is implemented as of §P8.2):
 //!
 //! ```text
 //! ct-mapping-tools from-sourcemap <map_file> [--minified <path>] [--file-name <name>] [--per-function] [--out <output.toml>]
 //! ct-mapping-tools infer        <minified> <original> [--file-name <name>] [--language js|ts|python|auto] [--min-confidence <0.0-1.0>] [--out <output.toml>]
-//! ct-mapping-tools infer-llm    <minified>            [--out <output.toml>]    # §P7.4 (stub)
-//! ct-mapping-tools catalog      <list|install>        ...                       # §P8.2 (stub)
+//! ct-mapping-tools infer-llm    <minified>            [--out <output.toml>]
+//! ct-mapping-tools catalog list                       [--filter <substring>]   [--catalog-path <path>]
+//! ct-mapping-tools catalog install <library> [--version <v>] [--recording-dir <dir>] [--catalog-path <path>]
+//! ct-mapping-tools catalog update                                                [--catalog-path <path>]
 //! ```
 //!
-//! Spec: `codetracer-specs/Planned-Features/Column-Aware-Tracing-And-Deminification.milestones.org` §P7.
+//! Spec: `codetracer-specs/Planned-Features/Column-Aware-Tracing-And-Deminification.milestones.org` §P7 + §P8.
 
 use std::fs;
 use std::io::Write;
@@ -22,6 +24,7 @@ use ct_mapping_tools::{
     FromSourcemapOptions, InferLlmError, InferLlmOptions, InferOptions, Language, RenameEntry,
     from_sourcemap, infer, infer_llm, to_toml,
 };
+use mapping_catalog::{Catalog, CatalogEntry, catalog_path_from_env};
 use sourcemap_translate::SourcemapIndex;
 
 /// Top-level CLI parser.
@@ -171,8 +174,7 @@ enum Command {
         max_bindings: usize,
     },
 
-    /// Operations on the curated mapping catalog (§P8.2 — not yet
-    /// implemented).
+    /// Operations on the curated mapping catalog (§P8.2).
     Catalog {
         #[command(subcommand)]
         op: CatalogOp,
@@ -181,14 +183,58 @@ enum Command {
 
 #[derive(Debug, Subcommand)]
 enum CatalogOp {
-    /// List the catalog index.
-    List,
-    /// Install a catalog entry into the conventional sibling
-    /// location for a trace.
+    /// List entries in the local catalog index.
+    ///
+    /// Resolves the catalog path from `--catalog-path`, then
+    /// `CT_CATALOG_PATH`, then the user's cache dir.  Prints one row
+    /// per matching entry as a plain-text table on stdout.
+    List {
+        /// Case-insensitive substring filter across the `library`,
+        /// `version`, and `file` columns.  When omitted, every entry
+        /// is printed.
+        #[arg(long = "filter", value_name = "SUBSTRING")]
+        filter: Option<String>,
+        /// Override the default catalog directory resolution.  Useful
+        /// in tests + for users who keep multiple catalogs.
+        #[arg(long = "catalog-path", value_name = "PATH")]
+        catalog_path: Option<PathBuf>,
+    },
+    /// Install a catalog entry's rename TOML into the conventional
+    /// sibling location for a trace.
+    ///
+    /// Writes the cataloged `<file>.toml` to
+    /// `<recording-dir>/renames.toml`, mirroring the §P5 sibling-file
+    /// convention.  The replay-server picks it up at the next trace
+    /// open just like a hand-authored `renames.toml`.
     Install {
+        /// Library name to install (`lodash`, `jquery`, ...).
         library: String,
-        #[arg(long = "version")]
+        /// Version to install.  When omitted and the catalog has
+        /// exactly one entry for the library, that entry is used.
+        /// When multiple versions exist, the user MUST disambiguate.
+        #[arg(long = "version", value_name = "VERSION")]
         version: Option<String>,
+        /// Trace recording directory.  Defaults to the current
+        /// working directory.
+        #[arg(long = "recording-dir", value_name = "PATH")]
+        recording_dir: Option<PathBuf>,
+        /// Catalog directory override (same semantics as `list`).
+        #[arg(long = "catalog-path", value_name = "PATH")]
+        catalog_path: Option<PathBuf>,
+    },
+    /// Best-effort refresh of the local catalog from the canonical
+    /// upstream Git repository.
+    ///
+    /// Runs `git pull` inside the catalog directory when it's already
+    /// a git checkout; otherwise prints the manual update steps and
+    /// exits non-zero.  Network failure is surfaced as a non-zero
+    /// exit code — operators relying on the catalog should run
+    /// `update` as part of their refresh job, not silently swallow
+    /// failures.
+    Update {
+        /// Catalog directory override.
+        #[arg(long = "catalog-path", value_name = "PATH")]
+        catalog_path: Option<PathBuf>,
     },
 }
 
@@ -229,10 +275,222 @@ fn main() -> Result<()> {
             min_confidence,
             max_bindings,
         ),
-        Command::Catalog { .. } => {
-            bail!("`catalog` is not yet implemented — planned for milestone §P8.2.")
-        }
+        Command::Catalog { op } => match op {
+            CatalogOp::List {
+                filter,
+                catalog_path,
+            } => run_catalog_list(filter.as_deref(), catalog_path.as_deref()),
+            CatalogOp::Install {
+                library,
+                version,
+                recording_dir,
+                catalog_path,
+            } => run_catalog_install(
+                &library,
+                version.as_deref(),
+                recording_dir.as_deref(),
+                catalog_path.as_deref(),
+            ),
+            CatalogOp::Update { catalog_path } => run_catalog_update(catalog_path.as_deref()),
+        },
     }
+}
+
+/// Resolve the effective catalog path: explicit `--catalog-path` wins,
+/// otherwise fall through to [`catalog_path_from_env`].
+fn resolve_catalog_path(explicit: Option<&Path>) -> PathBuf {
+    match explicit {
+        Some(p) => p.to_path_buf(),
+        None => catalog_path_from_env(),
+    }
+}
+
+/// Implementation of `catalog list [--filter <substring>]`.
+///
+/// Prints one fixed-width row per matching entry.  Columns:
+/// `library`, `version`, `file`, `sha256` (truncated to 16 chars for
+/// readability), `provenance`.
+///
+/// Non-zero exit on:
+/// * The catalog directory has no `index.toml` (typo / missing
+///   checkout).  We surface a friendly hint pointing at
+///   `catalog update` and `CT_CATALOG_PATH`.
+fn run_catalog_list(filter: Option<&str>, catalog_path: Option<&Path>) -> Result<()> {
+    let path = resolve_catalog_path(catalog_path);
+    let catalog = Catalog::load(&path).map_err(|e| anyhow!(
+        "could not load catalog at {}: {e}\n  (override with --catalog-path or set CT_CATALOG_PATH; run `ct-mapping-tools catalog update` to refresh)",
+        path.display()
+    ))?;
+
+    let rows: Vec<&CatalogEntry> = match filter {
+        Some(f) if !f.is_empty() => catalog.filter_substring(f),
+        _ => catalog.entries().iter().collect(),
+    };
+
+    if rows.is_empty() {
+        // Exit 0 — "nothing matches" is a valid state, NOT an error.
+        // Print to stderr so a downstream `| wc -l` of the table still
+        // reports 0 rows.
+        let label = filter.unwrap_or("");
+        eprintln!(
+            "catalog at {} has no entries matching {:?}",
+            path.display(),
+            label
+        );
+        return Ok(());
+    }
+
+    // Print a header + one row per entry.  We use a fixed-width
+    // formatter rather than introducing a `prettytable`-style dep —
+    // the columns are stable and small.
+    let mut stdout = std::io::stdout().lock();
+    writeln!(
+        stdout,
+        "{:<24} {:<12} {:<28} {:<18} {:<14}",
+        "LIBRARY", "VERSION", "FILE", "SHA-256 (prefix)", "PROVENANCE"
+    )
+    .ok();
+    for e in rows {
+        let sha_prefix: String = e.sha256.chars().take(16).collect();
+        writeln!(
+            stdout,
+            "{:<24} {:<12} {:<28} {:<18} {:<14}",
+            truncate(&e.library, 23),
+            truncate(&e.version, 11),
+            truncate(&e.file, 27),
+            sha_prefix,
+            truncate(&e.provenance, 13),
+        )
+        .ok();
+    }
+    Ok(())
+}
+
+/// Trim `s` to at most `max` chars; the resulting string is owned so
+/// the formatter macro can borrow it without lifetime gymnastics.
+fn truncate(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_string()
+    } else {
+        let mut out: String = s.chars().take(max.saturating_sub(1)).collect();
+        out.push('…');
+        out
+    }
+}
+
+/// Implementation of `catalog install <library> [--version] [--recording-dir] [--catalog-path]`.
+///
+/// Behaviour:
+///
+/// * Resolves the catalog directory.
+/// * Finds the matching entry (`library` + optional `version`).
+///   * If multiple entries match and no `--version` was supplied, fails
+///     with an actionable message listing the available versions.
+/// * Copies the entry's TOML to `<recording-dir>/renames.toml`.
+/// * On a pre-existing `renames.toml`, refuses to overwrite —
+///   the user must move it out of the way first.  Better to surface
+///   the conflict than silently clobber a hand-authored list.
+pub(crate) fn run_catalog_install(
+    library: &str,
+    version: Option<&str>,
+    recording_dir: Option<&Path>,
+    catalog_path: Option<&Path>,
+) -> Result<()> {
+    let path = resolve_catalog_path(catalog_path);
+    let catalog = Catalog::load(&path).map_err(|e| anyhow!(
+        "could not load catalog at {}: {e}\n  (override with --catalog-path or set CT_CATALOG_PATH)",
+        path.display()
+    ))?;
+
+    let hits = catalog.lookup_by_library(library, version);
+    let entry = match hits.as_slice() {
+        [] => bail!(
+            "no catalog entry for {library}{}",
+            version.map(|v| format!("@{v}")).unwrap_or_default()
+        ),
+        [only] => *only,
+        many => {
+            // Multiple versions and no explicit choice — list them
+            // and bail.  The user can pick.
+            let versions: Vec<&str> = many.iter().map(|e| e.version.as_str()).collect();
+            bail!(
+                "multiple catalog versions for {library}: {} — pass --version <v> to pick one",
+                versions.join(", ")
+            );
+        }
+    };
+
+    let recording_dir = match recording_dir {
+        Some(p) => p.to_path_buf(),
+        None => std::env::current_dir().context("could not resolve current working dir")?,
+    };
+    if !recording_dir.is_dir() {
+        bail!(
+            "recording dir {} does not exist or is not a directory",
+            recording_dir.display()
+        );
+    }
+
+    let src = catalog.entry_toml_path(entry);
+    if !src.is_file() {
+        bail!(
+            "cataloged TOML missing on disk: {}\n  (the index.toml row points at a file that doesn't exist — the catalog may be corrupted)",
+            src.display()
+        );
+    }
+    let dst = recording_dir.join("renames.toml");
+    if dst.exists() {
+        bail!(
+            "{} already exists — refusing to overwrite a pre-existing rename list (move it aside first)",
+            dst.display()
+        );
+    }
+
+    fs::copy(&src, &dst).with_context(|| format!(
+        "failed to copy {} → {}",
+        src.display(),
+        dst.display()
+    ))?;
+    eprintln!(
+        "installed {library}@{version} → {}",
+        dst.display(),
+        version = entry.version
+    );
+    Ok(())
+}
+
+/// Implementation of `catalog update [--catalog-path]`.
+///
+/// Best-effort: when the catalog directory is a git checkout, run `git
+/// -C <catalog> pull --ff-only`.  Otherwise, print the manual update
+/// recipe and exit non-zero so a CI job that relied on the refresh
+/// fails loudly.
+pub(crate) fn run_catalog_update(catalog_path: Option<&Path>) -> Result<()> {
+    let path = resolve_catalog_path(catalog_path);
+    let git_dir = path.join(".git");
+    if !git_dir.exists() {
+        bail!(
+            "catalog at {} is not a git checkout — clone the canonical repo first:\n  git clone https://github.com/metacraft-labs/codetracer-mapping-catalog.git {}",
+            path.display(),
+            path.display()
+        );
+    }
+    let status = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&path)
+        .arg("pull")
+        .arg("--ff-only")
+        .status()
+        .context("failed to spawn `git pull` — is git on PATH?")?;
+    if !status.success() {
+        bail!(
+            "git pull failed in {} (exit {:?})",
+            path.display(),
+            status.code()
+        );
+    }
+    eprintln!("catalog refreshed at {}", path.display());
+    Ok(())
 }
 
 /// Implementation of the `from-sourcemap` subcommand.  Pulled into a

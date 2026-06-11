@@ -1,0 +1,41 @@
+[package]
+name = "mapping-catalog"
+version = "0.1.0"
+edition = "2024"
+description = "Catalog of curated TOML rename lists for popular CDN-distributed JS libraries (Column-Aware-Tracing-And-Deminification §P8)."
+license = "MIT OR Apache-2.0"
+
+# Thin shared crate between `ct-mapping-tools` (the CLI that lists /
+# installs entries) and `replay-server` (the trace-open hook that
+# auto-loads matching entries when the user opts in).  Owning the
+# `Catalog` struct here keeps the two consumers in lock-step on
+# semantics (sha lookup, default catalog-path resolution, parse error
+# variants) without either of them depending on the other's crate.
+#
+# Spec: `codetracer-specs/Planned-Features/Column-Aware-Tracing-And-Deminification.milestones.org` §P8.
+
+[lib]
+name = "mapping_catalog"
+path = "src/lib.rs"
+
+[dependencies]
+# TOML parsing for `index.toml`.  The catalog data format is just TOML
+# — kept in step with the `RenameList` schema (P5) and the
+# `ct-mapping-tools` output schema (P7).
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+
+# SHA-256 computation for the recorded-source lookup path.  Used both
+# by replay-server (to compute the on-disk sha to look up) and by the
+# `ct-mapping-tools catalog install` path (to verify the entry's sha
+# matches the recording's source before copying).
+sha2 = "0.10"
+
+# `dirs` resolves the platform-appropriate user cache directory for
+# the default catalog path.  Pulling it in here (rather than rolling
+# our own `$XDG_CACHE_HOME` fallback) keeps the resolution logic
+# consistent across the workspace.
+dirs = "5"
+
+[dev-dependencies]
+tempfile = "3"

@@ -163,6 +163,31 @@ extern "C" {
         line_lengths: *const u32,
     ) -> i32;
 
+    // Alternate Source Views (Deminification Support — spec section
+    // "Alternate Source Views" in
+    // `codetracer-trace-format-spec/internal-files.md`).  Buffers one
+    // formatted view of one source path; emitted into the trace's
+    // `source_views.dat` / `source_views.off` files at close time and
+    // sets `FLAG_HAS_ALTERNATE_SOURCE_VIEWS` (bit 5) on `meta.dat`.
+    //
+    // `path_id` must refer to a path already registered.  `view_name`
+    // does not need to be NUL-terminated — pass the explicit length.
+    // `content` and `sourcemap` are byte buffers (content is UTF-8
+    // formatted source; sourcemap is Sourcemap V3 JSON, may be empty
+    // for "no sourcemap").  Returns the new view's 0-based index on
+    // success, or -1 on error.
+    fn trace_writer_register_source_view(
+        handle: *mut std::ffi::c_void,
+        path_id: u64,
+        view_kind: u8,
+        view_name: *const std::os::raw::c_char,
+        view_name_len: usize,
+        content: *const u8,
+        content_len: usize,
+        sourcemap: *const u8,
+        sourcemap_len: usize,
+    ) -> i64;
+
     // ----- trace-filter provenance (TF-M7, spec §7) -----
     //
     // Recorders integrating `codetracer_trace_filter` call these to embed
@@ -516,6 +541,91 @@ mod tests {
             "legacy (non-column-aware) traces must return None for every lineLength query"
         );
         assert_eq!(reader.line_length(0, 1), None);
+    }
+
+    /// Smoke test for the alternate-source-views API: register a path,
+    /// then register two source views against it via the high-level
+    /// Rust wrapper, then close the trace cleanly and re-open it via
+    /// the reader handle to confirm it's a well-formed CTFS trace
+    /// (path count is preserved; the trace doesn't fall over because
+    /// of the extra `source_views.dat` / `source_views.off` files).
+    ///
+    /// Byte-for-byte round-trip of every per-view field is exercised
+    /// on the Nim side by `tests/test_source_views.nim`; this test
+    /// guards the Rust → C → Nim path against signature drift.
+    #[test]
+    fn nim_writer_register_source_view_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let events_path = dir.path().join("trace.json");
+        let metadata_path = dir.path().join("trace_metadata.json");
+        let paths_path = dir.path().join("trace_paths.json");
+
+        let mut writer = NimTraceWriter::new("ctfs_source_views", &[], TraceEventsFileFormat::Ctfs);
+        writer.begin_writing_trace_events(&events_path).unwrap();
+        writer.begin_writing_trace_metadata(&metadata_path).unwrap();
+        writer.begin_writing_trace_paths(&paths_path).unwrap();
+
+        let source_path = Path::new("/tmp/ctfs_source_views.min.js");
+        // Register the source path explicitly so its id (0) is known
+        // ahead of the source-view registrations.
+        writer
+            .register_path_with_line_lengths(source_path, &[])
+            .expect("register_path_with_line_lengths should succeed");
+
+        // The exec stream needs at least one step so the trace is valid.
+        writer.start(source_path, Line(1));
+
+        // First view: prettier-formatted view with a non-empty sourcemap.
+        let v0 = writer
+            .register_source_view(
+                PathId(0),
+                1, // prettier_format
+                "ctfs_source_views.fmt.js",
+                b"var x = 1;\nvar y = 2;\n",
+                b"{\"version\":3,\"mappings\":\"\"}",
+            )
+            .expect("register_source_view should succeed for path 0");
+        assert_eq!(v0, 0, "first registered view should have index 0");
+
+        // Second view: same path, different kind, empty sourcemap.
+        let v1 = writer
+            .register_source_view(
+                PathId(0),
+                2, // black_format (hypothetical — exercises a different kind)
+                "ctfs_source_views.fmt2.js",
+                b"// formatted\n",
+                b"",
+            )
+            .expect("register_source_view should succeed for the second view");
+        assert_eq!(v1, 1, "second registered view should have index 1");
+
+        // Error path: an unknown path_id must surface as `Err`.
+        let stray = writer.register_source_view(
+            PathId(99),
+            1,
+            "stray.fmt.js",
+            b"x",
+            b"",
+        );
+        assert!(
+            stray.is_err(),
+            "register_source_view with out-of-range path_id must fail"
+        );
+
+        writer.finish_writing_trace_events().unwrap();
+        writer.finish_writing_trace_metadata().unwrap();
+        writer.finish_writing_trace_paths().unwrap();
+        writer.close().unwrap();
+
+        // Re-open the trace to confirm it is well-formed (we'd parse
+        // bit 5 here too if the reader handle exposed it; the Nim
+        // round-trip test does the byte-level verification).
+        let trace_path = dir.path().join("ctfs_source_views.ct");
+        let reader = NimTraceReaderHandle::open(trace_path.to_str().unwrap()).unwrap();
+        assert!(
+            reader.path_count() >= 1,
+            "trace must register at least one path"
+        );
     }
 }
 
@@ -1204,6 +1314,67 @@ impl NimTraceWriter {
             return Err(last_error().into());
         }
         Ok(PathId(0))
+    }
+
+    /// Buffer an alternate source view (formatted/deminified variant
+    /// of a source path) for emission into `source_views.dat` /
+    /// `source_views.off` at close time.  See
+    /// `codetracer-trace-format-spec/internal-files.md` §
+    /// "Alternate Source Views (Deminification Support)".
+    ///
+    /// `path` MUST refer to a path already registered on this writer
+    /// (via `register_path_with_line_lengths` or the implicit
+    /// registration done by `register_step`).  `view_kind` follows the
+    /// spec's enum: `0` = raw, `1` = `prettier_format`,
+    /// `2` = `black_format`, `3..=127` reserved, `128..` vendor-specific.
+    /// `sourcemap` is the Sourcemap V3 JSON bytes mapping
+    /// `(generated, line, col)` in `content` back to the original
+    /// source at `path`; pass an empty slice for "no sourcemap".
+    ///
+    /// Returns the new view's 0-based index on success.  Errors from
+    /// the underlying Nim writer (e.g. unknown `path_id`, writer not
+    /// ready) are surfaced via the thread-local
+    /// `trace_writer_last_error` channel and returned as `Err`.
+    pub fn register_source_view(
+        &mut self,
+        path: PathId,
+        view_kind: u8,
+        view_name: &str,
+        content: &[u8],
+        sourcemap: &[u8],
+    ) -> Result<u64, Box<dyn Error>> {
+        // `view_name` is a Rust `&str` — pass it as raw bytes plus
+        // length so we don't need a NUL terminator (and don't have to
+        // round-trip through CString just to get the pointer).
+        let name_ptr = view_name.as_ptr() as *const std::os::raw::c_char;
+        let name_len = view_name.len();
+        let content_ptr = if content.is_empty() {
+            std::ptr::null()
+        } else {
+            content.as_ptr()
+        };
+        let sourcemap_ptr = if sourcemap.is_empty() {
+            std::ptr::null()
+        } else {
+            sourcemap.as_ptr()
+        };
+        let rc = unsafe {
+            trace_writer_register_source_view(
+                self.handle,
+                path.0 as u64,
+                view_kind,
+                name_ptr,
+                name_len,
+                content_ptr,
+                content.len(),
+                sourcemap_ptr,
+                sourcemap.len(),
+            )
+        };
+        if rc < 0 {
+            return Err(last_error().into());
+        }
+        Ok(rc as u64)
     }
 
     // --- Methods that are no-ops in the Nim backend ---

@@ -247,28 +247,30 @@ fn column_aware_step_record_surfaces_column_some_on_column_aware_trace() {
 }
 
 #[test]
-fn column_aware_step_record_falls_back_to_none_when_per_line_table_absent() {
-    // M4 contract: on traces that registered a path but did NOT
-    // populate a per-line `line_lengths` table, the bulk decoder must
-    // mirror the FFI's "fall back to line-only" behaviour by
-    // surfacing `column = None` rather than aborting the whole batch.
-    // This lets db-backend treat that step as a legacy line-only step
-    // without retrofitting per-step error handling.
+fn decode_many_resolves_cleanly_across_a_trailing_empty_file() {
+    // File 0 carries real per-line data; file 1 is registered but
+    // contributes zero positions to the global space (sum of its
+    // line_lengths == 0).  decode_many must walk file 0's GLIs to the
+    // correct (file, line, column) tuples without being thrown by the
+    // trailing empty file — the binary search should ignore the
+    // zero-size suffix.
     //
-    // Files 0 and 1 have real per-line data, file 2 is registered but
-    // empty.  We synthesise a GLI inside file 2's notional range by
-    // giving it size 0 — the decoder hops over it and the GLI must
-    // land on the next real file, NOT raise.
-    //
-    // Note: an empty per-file table actually means file 2 contributes
-    // zero positions to the global space, so we cannot land *inside*
-    // it via a real GLI.  We instead exercise the
-    // FileHasNoLineTable branch directly by constructing a decoder
-    // where the only file has an empty per-line table, then verifying
-    // a GLI in another file's range still resolves.
+    // The plan also calls for proving `column = None` on a
+    // per-line-table-absent fallback.  As implemented, the
+    // `FileHasNoLineTable` arm in `decode_many` is unreachable through
+    // the `from_line_lengths` public constructor: an empty
+    // `line_lengths[fid]` produces `file_size[fid] == 0`, so the
+    // decoder's binary search skips that file before consulting its
+    // (empty) per-line table.  The arm exists as defensive code that
+    // mirrors the Nim reader's `"file F has no line-length table"`
+    // branch — see `global_position_decoder.rs::DecodeError::FileHasNoLineTable`
+    // for the documented dead-code rationale.  The
+    // `ColumnAwareStepRecord::line_only` constructor (asserted in
+    // `column_aware_step_record_surfaces_column_some_on_column_aware_trace`'s
+    // companion below) gives downstream consumers a typed shape for
+    // line-only steps without having to reach a non-existent runtime
+    // path.
     let decoder = GlobalPositionDecoder::from_line_lengths(vec![vec![3], vec![]]);
-    // The second file has no positions of its own — total = 3.  GLI 0
-    // resolves to file 0.  GLI 3 is past end.
     let records = decoder
         .decode_many(&[0, 2])
         .expect("GLIs inside file 0 must resolve");
@@ -278,6 +280,30 @@ fn column_aware_step_record_falls_back_to_none_when_per_line_table_absent() {
             ColumnAwareStepRecord { file: 0, line: 1, column: Some(1) },
             ColumnAwareStepRecord { file: 0, line: 1, column: Some(3) },
         ]
+    );
+}
+
+#[test]
+fn column_aware_step_record_line_only_constructor_surfaces_column_none() {
+    // ColumnAwareStepRecord::line_only is the canonical "I have no
+    // column data for this step" shape — what a consumer routes to
+    // when it has a line-only step (legacy or via a future
+    // FileHasNoLineTable fallback path).  Pin its construction so the
+    // additive ColumnAwareStepRecord shape can't silently drift back
+    // to a Required<u32> column.
+    let rec = ColumnAwareStepRecord::line_only(2, 7);
+    assert_eq!(
+        rec,
+        ColumnAwareStepRecord { file: 2, line: 7, column: None }
+    );
+    // `from_decoded` is the column-bearing mirror — surface both
+    // constructors so consumers can pick the right shape without
+    // probing the Option directly.
+    let decoded = DecodedPosition { file: 2, line: 7, column: 14 };
+    let bearing = ColumnAwareStepRecord::from_decoded(decoded);
+    assert_eq!(
+        bearing,
+        ColumnAwareStepRecord { file: 2, line: 7, column: Some(14) }
     );
 }
 

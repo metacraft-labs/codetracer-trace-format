@@ -1,5 +1,12 @@
 pub mod trace_readers;
 
+/// M4 — pure-Rust port of the Nim `decodeGlobalPositionIndex`
+/// algorithm.  Lives outside the `cfg(not(target_arch = "wasm32"))`
+/// gating because the decoder is pure-arithmetic (no I/O, no CTFS
+/// container access) and is the natural building block for the
+/// browser-replay path's column-aware step rendering.
+pub mod global_position_decoder;
+
 #[cfg(target_arch = "wasm32")]
 #[path = "./cbor_zstd_reader_wasm.rs"]
 pub mod cbor_zstd_reader;

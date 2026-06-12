@@ -29,3 +29,10 @@ serde_json = "1.0"
 
 [dev-dependencies]
 tempfile = "3"
+# M4 — cross-reader consistency test drives the same column-aware
+# fixture through both the Nim `decodeGlobalPositionIndex` (via this
+# crate's FFI) and the pure-Rust port in `codetracer_trace_reader`,
+# then asserts the two decoders agree byte-for-byte.  Lives here
+# rather than in `codetracer_trace_reader/tests/` because constructing
+# the fixture requires the Nim writer.
+codetracer_trace_reader = { path = "../codetracer_trace_reader" }

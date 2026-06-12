@@ -269,6 +269,27 @@ extern "C" {
     /// Returns the number of entries written, or u64::MAX on error.
     fn ct_reader_step_locations(h: *mut std::ffi::c_void, start_n: u64, count: u64, out_path_ids: *mut u64, out_lines: *mut u64) -> u64;
 
+    /// M1 — column-aware bulk variant of `ct_reader_step_locations`.
+    ///
+    /// Same contract as `ct_reader_step_locations` plus a third
+    /// parallel buffer `out_columns` carrying the 1-indexed column
+    /// each step landed on.  On legacy line-only traces every column
+    /// slot is set to 0 (caller treats 0 as "no column").  Returns
+    /// the number of entries written, or `u64::MAX` on error.
+    fn ct_reader_step_locations_with_columns(
+        h: *mut std::ffi::c_void,
+        start_n: u64,
+        count: u64,
+        out_path_ids: *mut u64,
+        out_lines: *mut u64,
+        out_columns: *mut u64,
+    ) -> u64;
+
+    /// M1 — return 1 when the trace is column-aware (the recorder
+    /// emitted column-bearing step events), 0 otherwise, -1 on a NULL
+    /// handle.
+    fn ct_reader_has_column_aware_steps(h: *mut std::ffi::c_void) -> i32;
+
     /// Number of variable values at step N.
     fn ct_reader_step_value_count(h: *mut std::ffi::c_void, n: u64) -> u64;
 
@@ -2398,6 +2419,66 @@ impl NimTraceReaderHandle {
         } else {
             Ok(written)
         }
+    }
+
+    /// M1 — column-aware bulk step locations.
+    ///
+    /// Mirrors [`step_locations`] but also drains a `columns` buffer.
+    /// On legacy line-only traces every column slot is `0`; the
+    /// caller MUST treat `0` as "no column recorded" (the M1 spec
+    /// keeps columns 1-indexed when present).
+    ///
+    /// [`step_locations`]: Self::step_locations
+    pub fn step_locations_with_columns(
+        &self,
+        start_n: u64,
+        count: u64,
+        path_ids: &mut [u64],
+        lines: &mut [u64],
+        columns: &mut [u64],
+    ) -> Result<u64, Box<dyn Error>> {
+        let count_usize = usize::try_from(count)
+            .map_err(|_| "step_locations_with_columns count does not fit usize")?;
+        if path_ids.len() < count_usize
+            || lines.len() < count_usize
+            || columns.len() < count_usize
+        {
+            return Err(format!(
+                "step_locations_with_columns buffers too small: count={count}, \
+                 path_ids={}, lines={}, columns={}",
+                path_ids.len(),
+                lines.len(),
+                columns.len()
+            )
+            .into());
+        }
+        if count == 0 {
+            return Ok(0);
+        }
+
+        let written = unsafe {
+            ct_reader_step_locations_with_columns(
+                self.handle,
+                start_n,
+                count,
+                path_ids.as_mut_ptr(),
+                lines.as_mut_ptr(),
+                columns.as_mut_ptr(),
+            )
+        };
+        if written == u64::MAX {
+            Err(last_error().into())
+        } else {
+            Ok(written)
+        }
+    }
+
+    /// M1 — true when the trace declared `has_column_aware_steps` in
+    /// its `meta.dat`.  Used by the bulk-ingest path to decide
+    /// whether to call `step_locations_with_columns` (which decodes
+    /// column data) or the cheaper line-only variant.
+    pub fn has_column_aware_steps(&self) -> bool {
+        unsafe { ct_reader_has_column_aware_steps(self.handle) == 1 }
     }
 
     /// Number of variable values at step N.

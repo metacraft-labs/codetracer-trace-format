@@ -950,6 +950,17 @@ pub struct NimTraceWriter {
     /// string to call `register_variable_with_full_value`.  Populated from
     /// preceding `VariableName(String)` / `Variable(String)` events.
     variable_table: Vec<String>,
+    /// C1: latched true once [`enable_column_aware_steps`] is called.  Used
+    /// by [`register_step_with_column`] to decide whether to follow the
+    /// `register_step` + `write_delta_column` cursor-nudge pattern (the JS
+    /// recorder's emission pattern, see
+    /// `codetracer-js-recorder/crates/recorder_native/src/lib.rs:1331-1356`)
+    /// or fall back to the column-less single-stream-safe path.  The Nim
+    /// `trace_writer_register_delta_column` entry point is a hard error on
+    /// the legacy single-stream backend and on multi-stream writers that
+    /// haven't opted in, so the wrapper must gate the call locally rather
+    /// than relying on the Nim side to silently no-op.
+    column_aware: bool,
 }
 
 // The Nim library is single-threaded but callers hold exclusive &mut self,
@@ -980,6 +991,7 @@ impl NimTraceWriter {
             streaming_encoder: StreamingValueEncoder::new(),
             path_table: Vec::new(),
             variable_table: Vec::new(),
+            column_aware: false,
         }
     }
 
@@ -1111,22 +1123,58 @@ impl NimTraceWriter {
         unsafe { trace_writer_register_step(self.handle, c_path.as_ptr(), line.0 as i64) }
     }
 
-    /// M14: column-aware register_step.  The Nim FFI exposes
-    /// `ct_assignment_with_column` for this purpose.  When no Nim symbol
-    /// matches (e.g. the old single-stream writer running without the M14
-    /// FFI), we fall back to the column-less path so the event still
-    /// lands.  Recorders that want the column-bearing event must invoke
-    /// the FFI directly; this Rust wrapper is here for code paths that
-    /// shovel `TraceLowLevelEvent::Step` straight through `add_event`.
-    pub fn register_step_with_column(&mut self, path: &Path, line: Line, _column: Option<Line>) {
-        // The Nim shared library exposes ~ct_assignment_with_column~ but
-        // not a Rust binding by that name; we route through
-        // ~trace_writer_register_step~ to preserve the existing wire
-        // shape until the Nim writer's column-bearing API stabilises.
-        // The column is intentionally dropped here so older Nim writers
-        // do not crash on the missing symbol; the M14 FFI tests exercise
-        // the column path via the FFI directly.
+    /// C1: column-aware register_step.  The Nim multi-stream writer
+    /// emits column-bearing Step events as the pair
+    /// `trace_writer_register_step(path, line)` + `trace_writer_register_delta_column(col - 1)`:
+    /// `register_step` lands the cursor at column 1 of the requested
+    /// line (per the multi-stream writer's
+    /// `lastGlobalLineIndex = toGlobalLineIndex(path, line)` reset, see
+    /// `codetracer-trace-format-nim/src/codetracer_trace_writer/multi_stream_writer.nim:467,494`)
+    /// and `register_delta_column(col - 1)` advances the cursor's
+    /// column to the desired 1-based target.  This mirrors the JS
+    /// recorder's emission pattern (see
+    /// `codetracer-js-recorder/crates/recorder_native/src/lib.rs:1331-1356`),
+    /// so non-JS recorders calling this wrapper now get the same
+    /// `DeltaColumn` (tag 0x07) wire shape on the trace.
+    ///
+    /// Pre-conditions:
+    ///   * [`enable_column_aware_steps`] must have been called before
+    ///     this writer emitted any step — the column-aware flag is
+    ///     trace-global and gates the `DeltaColumn` emission path.
+    ///   * The writer must be a multi-stream (CTFS) writer — the
+    ///     legacy single-stream backend has no column-only event and
+    ///     `trace_writer_register_delta_column` is a hard error on it.
+    ///
+    /// When column-aware mode is off OR `column` is `None`, we fall
+    /// back to the column-less `register_step` path so the event still
+    /// lands and older traces remain bit-for-bit compatible.
+    pub fn register_step_with_column(&mut self, path: &Path, line: Line, column: Option<Line>) {
+        // Always land the line transition first.  The Nim writer interns
+        // the path and resets its column cursor to column 1 of `line`.
         self.register_step(path, line);
+
+        // Layer the column nudge on top only when the writer has opted
+        // into column-aware mode AND the caller supplied a column.  We
+        // gate on the local `column_aware` flag rather than relying on
+        // the Nim side to silently no-op — `trace_writer_register_delta_column`
+        // sets a thread-local error string when called on a non-column-
+        // aware writer, which would leak into unrelated `last_error()`
+        // queries.
+        if !self.column_aware {
+            return;
+        }
+        let Some(col) = column else {
+            return;
+        };
+        // CTFS uses 1-based columns; column 1 needs no nudge.  Any
+        // larger column needs a `DeltaColumn(col - 1)` to advance from
+        // the just-reset cursor.  This is the same arithmetic the JS
+        // recorder uses ("new_col - 1, regardless of whether the
+        // previous step was on the same line").
+        let delta = col.0 - 1;
+        if delta != 0 {
+            self.write_delta_column(delta);
+        }
     }
 
     pub fn register_call(&mut self, function_id: FunctionId, _args: Vec<FullValueRecord>) {
@@ -1265,6 +1313,10 @@ impl NimTraceWriter {
     /// `DeltaColumn` (chosen)" and §"Reader Behaviour and Back-Compat".
     pub fn enable_column_aware_steps(&mut self) {
         unsafe { trace_writer_enable_column_aware_steps(self.handle) }
+        // C1: latch locally so `register_step_with_column` knows it
+        // may emit `DeltaColumn` events without provoking the Nim
+        // side's "not column-aware" error path.
+        self.column_aware = true;
     }
 
     /// Emit a column-only step event (`sekDeltaColumn`, tag 0x07) that

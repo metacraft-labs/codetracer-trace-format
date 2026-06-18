@@ -149,6 +149,18 @@ extern "C" {
         column_delta: i64,
     );
 
+    // ----- Column-aware capability flags (M-capability-flags) -----
+    //
+    // The Nim FFI exposes two capability opt-ins that flip dedicated
+    // meta.dat header bits separate from `FLAG_HAS_COLUMN_AWARE_STEPS`.
+    // The GUI uses them to decide whether to expose per-column
+    // breakpoints and per-column motions.  See spec
+    // `codetracer-trace-format-spec/internal-files.md` § "Column-Aware
+    // Capability Flags".  Both calls implicitly enable column-aware
+    // step encoding so a recorder doesn't have to call both APIs.
+    fn trace_writer_enable_column_breakpoints_support(handle: *mut std::ffi::c_void);
+    fn trace_writer_enable_column_motions_support(handle: *mut std::ffi::c_void);
+
     // P1.3: register a path together with its per-line column counts
     // (paths.dat Layout A).  `line_count` is the number of u32 entries in
     // `line_lengths`; pass 0 + NULL when the per-line data isn't available
@@ -289,6 +301,16 @@ extern "C" {
     /// emitted column-bearing step events), 0 otherwise, -1 on a NULL
     /// handle.
     fn ct_reader_has_column_aware_steps(h: *mut std::ffi::c_void) -> i32;
+
+    /// M-capability-flags — return 1 when the trace's recorder
+    /// advertised support for per-column breakpoints (meta.dat bit 6),
+    /// 0 otherwise, -1 on a NULL handle.
+    fn ct_reader_supports_column_breakpoints(h: *mut std::ffi::c_void) -> i32;
+
+    /// M-capability-flags — return 1 when the trace's recorder
+    /// advertised support for per-column step motions (meta.dat bit 7),
+    /// 0 otherwise, -1 on a NULL handle.
+    fn ct_reader_supports_column_motions(h: *mut std::ffi::c_void) -> i32;
 
     /// Number of variable values at step N.
     fn ct_reader_step_value_count(h: *mut std::ffi::c_void, n: u64) -> u64;
@@ -562,6 +584,88 @@ mod tests {
             "legacy (non-column-aware) traces must return None for every lineLength query"
         );
         assert_eq!(reader.line_length(0, 1), None);
+    }
+
+    /// M-capability-flags round-trip: a column-aware writer that opts
+    /// into both capability flags sets the corresponding bits on
+    /// meta.dat (6 and 7), and the reader surfaces them via
+    /// [`NimTraceReaderHandle::supports_column_breakpoints`] /
+    /// [`NimTraceReaderHandle::supports_column_motions`].  Mirrors the
+    /// Nim-side `test_capability_flags_round_trip` so the Rust→C→Nim
+    /// FFI shim is exercised end-to-end as well.
+    #[test]
+    fn nim_writer_capability_flags_round_trip() {
+        let dir = tempfile::tempdir().unwrap();
+        let events_path = dir.path().join("trace.json");
+        let metadata_path = dir.path().join("trace_metadata.json");
+        let paths_path = dir.path().join("trace_paths.json");
+
+        let mut writer = NimTraceWriter::new("ctfs_caps", &[], TraceEventsFileFormat::Ctfs);
+        writer.begin_writing_trace_events(&events_path).unwrap();
+        writer.begin_writing_trace_metadata(&metadata_path).unwrap();
+        writer.begin_writing_trace_paths(&paths_path).unwrap();
+
+        // Both capability opt-ins implicitly enable column-aware mode.
+        writer.enable_column_breakpoints_support();
+        writer.enable_column_motions_support();
+
+        let source_path = Path::new("/tmp/ctfs_caps.py");
+        writer.start(source_path, Line(1));
+
+        writer.finish_writing_trace_events().unwrap();
+        writer.finish_writing_trace_metadata().unwrap();
+        writer.finish_writing_trace_paths().unwrap();
+        writer.close().unwrap();
+
+        let trace_path = dir.path().join("ctfs_caps.ct");
+        let reader = NimTraceReaderHandle::open(trace_path.to_str().unwrap()).unwrap();
+        assert!(
+            reader.has_column_aware_steps(),
+            "capability opt-ins must imply column-aware mode"
+        );
+        assert!(reader.supports_column_breakpoints(),
+            "FLAG_SUPPORTS_COLUMN_BREAKPOINTS bit must round-trip");
+        assert!(reader.supports_column_motions(),
+            "FLAG_SUPPORTS_COLUMN_MOTIONS bit must round-trip");
+    }
+
+    /// Default-state contract: a writer that does NOT call either
+    /// capability opt-in produces a trace whose
+    /// `supports_column_breakpoints` and `supports_column_motions`
+    /// readers return `false`.  Pins the back-compat contract for the
+    /// "legacy column-aware recorder" case (the bits stay clear even
+    /// when `enable_column_aware_steps` is called).
+    #[test]
+    fn nim_writer_capability_flags_default_off_when_only_column_aware() {
+        let dir = tempfile::tempdir().unwrap();
+        let events_path = dir.path().join("trace.json");
+        let metadata_path = dir.path().join("trace_metadata.json");
+        let paths_path = dir.path().join("trace_paths.json");
+
+        let mut writer = NimTraceWriter::new("ctfs_caps_default", &[], TraceEventsFileFormat::Ctfs);
+        writer.begin_writing_trace_events(&events_path).unwrap();
+        writer.begin_writing_trace_metadata(&metadata_path).unwrap();
+        writer.begin_writing_trace_paths(&paths_path).unwrap();
+
+        // Column-aware but no capability opt-in.  The recorder advertises
+        // column data on the wire while leaving both capability bits clear.
+        writer.enable_column_aware_steps();
+
+        let source_path = Path::new("/tmp/ctfs_caps_default.py");
+        writer.start(source_path, Line(1));
+
+        writer.finish_writing_trace_events().unwrap();
+        writer.finish_writing_trace_metadata().unwrap();
+        writer.finish_writing_trace_paths().unwrap();
+        writer.close().unwrap();
+
+        let trace_path = dir.path().join("ctfs_caps_default.ct");
+        let reader = NimTraceReaderHandle::open(trace_path.to_str().unwrap()).unwrap();
+        assert!(reader.has_column_aware_steps());
+        assert!(!reader.supports_column_breakpoints(),
+            "capability bit must stay clear unless the writer opts in");
+        assert!(!reader.supports_column_motions(),
+            "capability bit must stay clear unless the writer opts in");
     }
 
     /// Smoke test for the alternate-source-views API: register a path,
@@ -1319,6 +1423,40 @@ impl NimTraceWriter {
         self.column_aware = true;
     }
 
+    /// Capability opt-in (M-capability-flags): declare that this
+    /// trace's recorder emits columns sharp enough for per-column
+    /// breakpoint placement.  Sets `FLAG_SUPPORTS_COLUMN_BREAKPOINTS`
+    /// (bit 6) on the meta.dat header at close time so the GUI can
+    /// expose its M6 Alt+click column-breakpoint affordance.
+    ///
+    /// Implicitly enables column-aware step encoding because
+    /// capability flags presuppose wire-format column data (see spec
+    /// `codetracer-trace-format-spec/internal-files.md` §"Column-Aware
+    /// Capability Flags").  Recorders that have already called
+    /// [`enable_column_aware_steps`](Self::enable_column_aware_steps)
+    /// can call this in any order; recorders that haven't get the
+    /// flip for free.
+    pub fn enable_column_breakpoints_support(&mut self) {
+        unsafe { trace_writer_enable_column_breakpoints_support(self.handle) }
+        // Mirror the Nim writer's implicit column-aware flip so the
+        // local `column_aware` latch stays consistent with the
+        // backing writer state.
+        self.column_aware = true;
+    }
+
+    /// Capability opt-in (M-capability-flags): declare that this
+    /// trace's recorder supports per-column step motions (the step
+    /// predicate fires per statement, not per line).  Sets
+    /// `FLAG_SUPPORTS_COLUMN_MOTIONS` (bit 7) on the meta.dat header
+    /// at close time so the GUI can offer sub-statement step-over /
+    /// step-in / step-out.  Like
+    /// [`enable_column_breakpoints_support`](Self::enable_column_breakpoints_support)
+    /// the call also enables column-aware step encoding.
+    pub fn enable_column_motions_support(&mut self) {
+        unsafe { trace_writer_enable_column_motions_support(self.handle) }
+        self.column_aware = true;
+    }
+
     /// Emit a column-only step event (`sekDeltaColumn`, tag 0x07) that
     /// advances the cursor's column within the current line by
     /// `column_delta` (signed zigzag varint on the wire; ±63 fits in 1
@@ -1799,6 +1937,18 @@ pub trait TraceWriter: Send {
     /// [`NimTraceWriter::enable_column_aware_steps`] for the contract.
     fn enable_column_aware_steps(&mut self) {}
 
+    /// M-capability-flags: opt the writer in to advertising support
+    /// for per-column breakpoints.  Sets meta.dat bit 6 at close.
+    /// Default no-op so test doubles compile unchanged.  See
+    /// [`NimTraceWriter::enable_column_breakpoints_support`].
+    fn enable_column_breakpoints_support(&mut self) {}
+
+    /// M-capability-flags: opt the writer in to advertising support
+    /// for per-column step motions.  Sets meta.dat bit 7 at close.
+    /// Default no-op so test doubles compile unchanged.  See
+    /// [`NimTraceWriter::enable_column_motions_support`].
+    fn enable_column_motions_support(&mut self) {}
+
     /// P1.2: emit a column-only step event (`sekDeltaColumn`, tag 0x07).
     /// Default no-op so backends without column support keep compiling.
     /// Only the canonical multi-stream backend
@@ -2020,6 +2170,12 @@ impl TraceWriter for NimTraceWriter {
     }
     fn enable_column_aware_steps(&mut self) {
         NimTraceWriter::enable_column_aware_steps(self)
+    }
+    fn enable_column_breakpoints_support(&mut self) {
+        NimTraceWriter::enable_column_breakpoints_support(self)
+    }
+    fn enable_column_motions_support(&mut self) {
+        NimTraceWriter::enable_column_motions_support(self)
     }
     fn write_delta_column(&mut self, column_delta: i64) {
         NimTraceWriter::write_delta_column(self, column_delta)
@@ -2531,6 +2687,24 @@ impl NimTraceReaderHandle {
     /// column data) or the cheaper line-only variant.
     pub fn has_column_aware_steps(&self) -> bool {
         unsafe { ct_reader_has_column_aware_steps(self.handle) == 1 }
+    }
+
+    /// M-capability-flags — true when the trace's recorder
+    /// advertised support for per-column breakpoints (meta.dat bit 6).
+    /// GUI consumers gate the M6 Alt+click column-breakpoint affordance
+    /// on this.  Returns `false` on a NULL handle or on traces that
+    /// predate the capability bit (back-compat clean: legacy traces
+    /// look like "no, doesn't support it").
+    pub fn supports_column_breakpoints(&self) -> bool {
+        unsafe { ct_reader_supports_column_breakpoints(self.handle) == 1 }
+    }
+
+    /// M-capability-flags — true when the trace's recorder
+    /// advertised support for per-column step motions (meta.dat bit 7).
+    /// GUI consumers gate sub-statement step-over / step-in /
+    /// step-out on this.
+    pub fn supports_column_motions(&self) -> bool {
+        unsafe { ct_reader_supports_column_motions(self.handle) == 1 }
     }
 
     /// Number of variable values at step N.

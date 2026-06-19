@@ -302,6 +302,44 @@ extern "C" {
     /// handle.
     fn ct_reader_has_column_aware_steps(h: *mut std::ffi::c_void) -> i32;
 
+    /// Bulk raw-GLI accessor.  Returns the absolute
+    /// `global_position_index` value for every step in
+    /// `[start_n, start_n + count)` without applying any (path_id, line)
+    /// interpretation.  Used by Rust consumers driving
+    /// `codetracer_trace_reader::global_position_decoder` natively
+    /// (bypasses the Nim FFI's `decodeGlobalPositionIndex` gate which
+    /// can be incorrectly off on traces whose writer emitted Layout A
+    /// `paths.dat` data but failed to flip `meta.dat` bit 4 at close
+    /// time).  Returns the number of entries written, or `u64::MAX`
+    /// on error.
+    fn ct_reader_step_global_line_indices(
+        h: *mut std::ffi::c_void,
+        start_n: u64,
+        count: u64,
+        out_glis: *mut u64,
+    ) -> u64;
+
+    /// Ungated sibling of `ct_reader_line_length` — surfaces the
+    /// addressable column count for `(file_id, line_index0)` even when
+    /// the trace's `meta.hasColumnAwareSteps` bit is clear.  Returns 0
+    /// on success and writes the per-line count into `out_value`,
+    /// non-zero when the file has no Layout A data, when `file_id` is
+    /// out of range, or when `line_index0` is past the file's known
+    /// line table.  See the Nim-side `lineLengthRaw` proc for the
+    /// recorder-side context this exists to recover from.
+    fn ct_reader_line_length_raw(
+        h: *mut std::ffi::c_void,
+        file_id: u64,
+        line_index0: u32,
+        out_value: *mut u32,
+    ) -> i32;
+
+    /// Companion to `ct_reader_line_length_raw`: returns the number of
+    /// lines the trace has registered for `file_id` via paths.dat
+    /// Layout A.  Returns 0 when no Layout A data is available for that
+    /// file (the legitimate "no per-line data" sentinel).
+    fn ct_reader_line_count_raw(h: *mut std::ffi::c_void, file_id: u64) -> u64;
+
     /// M-capability-flags — return 1 when the trace's recorder
     /// advertised support for per-column breakpoints (meta.dat bit 6),
     /// 0 otherwise, -1 on a NULL handle.
@@ -2687,6 +2725,76 @@ impl NimTraceReaderHandle {
     /// column data) or the cheaper line-only variant.
     pub fn has_column_aware_steps(&self) -> bool {
         unsafe { ct_reader_has_column_aware_steps(self.handle) == 1 }
+    }
+
+    /// Drain raw `global_position_index` values for steps
+    /// `[start_n, start_n + count)` into the caller-supplied buffer.
+    ///
+    /// Unlike [`step_locations`] / [`step_locations_with_columns`] the
+    /// returned values carry no `(path_id, line)` interpretation — the
+    /// caller is expected to feed them through the pure-Rust
+    /// `codetracer_trace_reader::global_position_decoder::GlobalPositionDecoder`
+    /// (or equivalent) using per-file line-length tables harvested via
+    /// [`line_length_raw`] and [`line_count_raw`].
+    ///
+    /// [`step_locations`]: Self::step_locations
+    /// [`step_locations_with_columns`]: Self::step_locations_with_columns
+    /// [`line_length_raw`]: Self::line_length_raw
+    /// [`line_count_raw`]: Self::line_count_raw
+    pub fn step_global_line_indices(
+        &self,
+        start_n: u64,
+        count: u64,
+        out: &mut [u64],
+    ) -> Result<u64, Box<dyn Error>> {
+        let count_usize = usize::try_from(count)
+            .map_err(|_| "step_global_line_indices count does not fit usize")?;
+        if out.len() < count_usize {
+            return Err(format!(
+                "step_global_line_indices buffer too small: count={count}, out={}",
+                out.len()
+            )
+            .into());
+        }
+        if count == 0 {
+            return Ok(0);
+        }
+        let written = unsafe {
+            ct_reader_step_global_line_indices(self.handle, start_n, count, out.as_mut_ptr())
+        };
+        if written == u64::MAX {
+            Err(last_error().into())
+        } else {
+            Ok(written)
+        }
+    }
+
+    /// Ungated counterpart of [`line_length`] — returns the addressable
+    /// column count for `(file_id, line_index0)` whenever paths.dat
+    /// Layout A data is available, irrespective of the trace's
+    /// `meta.hasColumnAwareSteps` bit.  See the Nim-side `lineLengthRaw`
+    /// docstring for the recorder-side context this exists to recover
+    /// from.
+    ///
+    /// [`line_length`]: Self::line_length
+    pub fn line_length_raw(&self, file_id: u64, line_index0: u32) -> Option<u32> {
+        let mut value: u32 = 0;
+        let rc =
+            unsafe { ct_reader_line_length_raw(self.handle, file_id, line_index0, &mut value) };
+        if rc == 0 {
+            Some(value)
+        } else {
+            None
+        }
+    }
+
+    /// Number of lines in `file_id` per paths.dat Layout A.  Returns
+    /// `0` when no per-line data is available for that file — the same
+    /// legitimate "no data" sentinel [`line_length_raw`] uses.
+    ///
+    /// [`line_length_raw`]: Self::line_length_raw
+    pub fn line_count_raw(&self, file_id: u64) -> u64 {
+        unsafe { ct_reader_line_count_raw(self.handle, file_id) }
     }
 
     /// M-capability-flags — true when the trace's recorder

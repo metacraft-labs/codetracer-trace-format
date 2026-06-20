@@ -12,6 +12,10 @@ mod cbor_zstd_writer;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod ctfs_writer;
 
+pub mod call_stream;
+
+pub mod meta_dat;
+
 pub mod split_binary;
 
 #[cfg(not(target_arch = "wasm32"))]

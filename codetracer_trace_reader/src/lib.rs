@@ -21,6 +21,9 @@ pub mod seekable_reader;
 pub mod ctfs_reader;
 
 #[cfg(not(target_arch = "wasm32"))]
+pub mod call_stream_reader;
+
+#[cfg(not(target_arch = "wasm32"))]
 pub mod streaming_ctfs_reader;
 
 #[derive(Debug, Clone, Copy)]

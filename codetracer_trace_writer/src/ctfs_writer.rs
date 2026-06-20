@@ -8,9 +8,15 @@ use zeekstd::{EncodeOptions, Encoder, FrameSizePolicy};
 
 use crate::{
     abstract_trace_writer::{AbstractTraceWriter, AbstractTraceWriterData},
+    call_stream::{encode_call_stream, CallStreamBuilder, DEFAULT_CALLS_CHUNK_SIZE},
+    meta_dat::{encode_meta_dat, FLAG_HAS_CALL_STREAM},
     trace_writer::TraceWriter,
 };
 use codetracer_trace_types::TraceLowLevelEvent;
+
+/// Default Zstd level for the dedicated call stream, matching the unified
+/// stream and seekable-zstd.md §Configuration.
+const DEFAULT_CALLS_ZSTD_LEVEL: i32 = 3;
 
 /// Default flush threshold: 64 KiB of uncompressed data triggers a flush.
 const DEFAULT_FLUSH_THRESHOLD: usize = 64 * 1024;
@@ -108,6 +114,18 @@ pub struct CtfsTraceWriter {
     flush_count: usize,
     /// Whether HEADERV1 has been written to the CTFS file.
     header_written: bool,
+
+    // --- M17a: dedicated call stream ---
+    /// When set, the writer ALSO emits a dedicated `calls.dat` call stream
+    /// (plus its companion `calls.idx`), derived from the same Call/Return/Step
+    /// events that feed `events.log`, and sets the `has_call_stream` meta.dat
+    /// flag. Off by default so existing recorders are byte-for-byte unchanged.
+    emit_call_stream: bool,
+    /// Builds the call records from the observed event sequence (present only
+    /// while `emit_call_stream` is on and a trace is being written).
+    call_stream_builder: Option<CallStreamBuilder>,
+    /// Records-per-chunk for `calls.dat`.
+    calls_chunk_size: usize,
 }
 
 impl CtfsTraceWriter {
@@ -149,7 +167,36 @@ impl CtfsTraceWriter {
             flush_threshold,
             flush_count: 0,
             header_written: false,
+            emit_call_stream: false,
+            call_stream_builder: None,
+            calls_chunk_size: DEFAULT_CALLS_CHUNK_SIZE,
         }
+    }
+
+    /// Enable the dedicated `calls.dat` call stream (M17a).
+    ///
+    /// When enabled, `finish_writing_trace_events` writes, in addition to the
+    /// unchanged `events.log`, a `calls.dat` stream of complete call records and
+    /// its companion seekable index `calls.idx`, and stamps a `meta.dat` with
+    /// the `has_call_stream` capability flag set. The call records are derived
+    /// from the same Call/Return/Step events, so they are guaranteed consistent
+    /// with the unified stream. This is additive: old readers ignore the extra
+    /// files. Returns `self` for builder-style chaining.
+    pub fn with_call_stream(mut self, enable: bool) -> Self {
+        self.emit_call_stream = enable;
+        self
+    }
+
+    /// Set the records-per-chunk for `calls.dat` (seek granularity). Smaller
+    /// chunks give finer seeks at a slightly lower compression ratio.
+    pub fn with_calls_chunk_size(mut self, chunk_size: usize) -> Self {
+        self.calls_chunk_size = chunk_size.max(1);
+        self
+    }
+
+    /// Whether the dedicated call stream is enabled.
+    pub fn call_stream_enabled(&self) -> bool {
+        self.emit_call_stream
     }
 
     /// Create a new CTFS trace writer using the legacy CBOR format.
@@ -248,6 +295,11 @@ impl AbstractTraceWriter for CtfsTraceWriter {
     }
 
     fn add_event(&mut self, event: TraceLowLevelEvent) {
+        // M17a: feed the dedicated call-stream builder from the SAME event
+        // sequence that produces events.log, so calls.dat stays consistent.
+        if let Some(ref mut builder) = self.call_stream_builder {
+            builder.observe(&event);
+        }
         match self.serialization_format {
             EventSerializationFormat::Cbor => {
                 let buf: Vec<u8> = Vec::new();
@@ -320,6 +372,9 @@ impl TraceWriter for CtfsTraceWriter {
         self.flush_count = 0;
         self.header_written = false;
 
+        // M17a: arm the call-stream builder when the dedicated stream is enabled.
+        self.call_stream_builder = if self.emit_call_stream { Some(CallStreamBuilder::new()) } else { None };
+
         Ok(())
     }
 
@@ -378,6 +433,36 @@ impl TraceWriter for CtfsTraceWriter {
             let paths_json = serde_json::to_string(&self.base.path_list)?;
             let paths_handle = writer.add_file("paths.json")?;
             writer.write(paths_handle, paths_json.as_bytes())?;
+
+            // M17a: emit the dedicated call stream + companion index + a
+            // meta.dat carrying the has_call_stream capability flag. This is
+            // ADDITIVE: events.log / events.fmt / meta.json / paths.json above
+            // are unchanged, and a reader that does not know the flag simply
+            // ignores calls.dat / calls.idx / meta.dat.
+            if self.emit_call_stream {
+                let records = self.call_stream_builder.take().map(|b| b.finish()).unwrap_or_default();
+                let encoded = encode_call_stream(&records, self.calls_chunk_size, DEFAULT_CALLS_ZSTD_LEVEL).map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+
+                let calls_handle = writer.add_file("calls.dat")?;
+                writer.write(calls_handle, &encoded.dat)?;
+                let calls_idx_handle = writer.add_file("calls.idx")?;
+                writer.write(calls_idx_handle, &encoded.idx)?;
+
+                // Stamp meta.dat with the has_call_stream flag. The recording_id
+                // mirrors the meta.json minted above so the two metadata files
+                // agree on the recording identity.
+                let meta_dat = encode_meta_dat(
+                    &trace_metadata.recording_id,
+                    &self.base.program,
+                    &self.base.args,
+                    &self.base.workdir.to_string_lossy(),
+                    "",
+                    &self.base.path_list.iter().map(|p| p.to_string_lossy().into_owned()).collect::<Vec<_>>(),
+                    FLAG_HAS_CALL_STREAM,
+                );
+                let meta_dat_handle = writer.add_file("meta.dat")?;
+                writer.write(meta_dat_handle, &meta_dat)?;
+            }
         }
 
         // Close the CTFS container (takes ownership)

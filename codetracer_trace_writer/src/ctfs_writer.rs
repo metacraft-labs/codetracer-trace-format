@@ -167,13 +167,27 @@ impl CtfsTraceWriter {
             flush_threshold,
             flush_count: 0,
             header_written: false,
-            emit_call_stream: false,
+            // M20: the dedicated `calls.dat` call stream is emitted BY DEFAULT so
+            // every recorder driving `CtfsTraceWriter` (Ruby, Python, JS, shell,
+            // Wasm, …) materializes the calls/steps split without an explicit
+            // opt-in. This is additive and backward-compatible: old readers ignore
+            // the extra `calls.dat`/`calls.idx` files and the unset-aware `meta.dat`
+            // flag; new readers (ct-print, the engine, the db-backend seekable
+            // reader) use the `has_call_stream` flag to read the call tree on
+            // demand. Disable explicitly with `with_call_stream(false)` if a caller
+            // must reproduce the pre-M20 flag-off output (e.g. a legacy golden).
+            emit_call_stream: true,
             call_stream_builder: None,
             calls_chunk_size: DEFAULT_CALLS_CHUNK_SIZE,
         }
     }
 
-    /// Enable the dedicated `calls.dat` call stream (M17a).
+    /// Enable or disable the dedicated `calls.dat` call stream (M17a / M20).
+    ///
+    /// As of M20 the call stream is emitted BY DEFAULT (see `with_options`), so
+    /// this method is primarily a DISABLE lever — pass `false` to reproduce the
+    /// pre-M20 flag-off bundle (no `calls.dat`/`calls.idx`, `has_call_stream`
+    /// clear), e.g. when regenerating a legacy golden fixture.
     ///
     /// When enabled, `finish_writing_trace_events` writes, in addition to the
     /// unchanged `events.log`, a `calls.dat` stream of complete call records and

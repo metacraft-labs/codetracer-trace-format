@@ -18,6 +18,8 @@ pub mod step_stream;
 
 pub mod value_stream;
 
+pub mod event_stream;
+
 pub mod meta_dat;
 
 pub mod split_binary;

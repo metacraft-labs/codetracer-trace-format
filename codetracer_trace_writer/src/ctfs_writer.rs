@@ -9,7 +9,8 @@ use zeekstd::{EncodeOptions, Encoder, FrameSizePolicy};
 use crate::{
     abstract_trace_writer::{AbstractTraceWriter, AbstractTraceWriterData},
     call_stream::{encode_call_stream, CallStreamBuilder, DEFAULT_CALLS_CHUNK_SIZE},
-    meta_dat::{encode_meta_dat, FLAG_HAS_CALL_STREAM, FLAG_HAS_STEP_STREAM, FLAG_HAS_VALUE_STREAM},
+    event_stream::{encode_io_event_stream, IoEventStreamBuilder, DEFAULT_EVENTS_CHUNK_SIZE},
+    meta_dat::{encode_meta_dat, FLAG_HAS_CALL_STREAM, FLAG_HAS_IO_EVENT_STREAM, FLAG_HAS_STEP_STREAM, FLAG_HAS_VALUE_STREAM},
     step_stream::{encode_step_stream, StepStreamBuilder, DEFAULT_STEPS_CHUNK_SIZE},
     trace_writer::TraceWriter,
     value_stream::{encode_value_stream, ValueStreamBuilder, DEFAULT_VALUES_CHUNK_SIZE},
@@ -157,6 +158,21 @@ pub struct CtfsTraceWriter {
     value_stream_builder: Option<ValueStreamBuilder>,
     /// Records-per-chunk for `values.dat`.
     values_chunk_size: usize,
+
+    // --- M23c: dedicated I/O event stream ---
+    /// When set, the writer ALSO emits a dedicated `events.dat` I/O event stream
+    /// (plus its companion `events.idx`), derived from the same `Event` records
+    /// (the `EventLogKind`-tagged I/O / log events) that feed `events.log`, and
+    /// sets the `has_io_event_stream` meta.dat flag. Each record carries kind /
+    /// step_id (cross-ref to the execution stream) / metadata / content.
+    /// Additive and backward-compatible exactly like the call/step/value streams.
+    /// NOTE: this `events.dat` is DISTINCT from the legacy `events.log`.
+    emit_io_event_stream: bool,
+    /// Builds the I/O event records from the observed event sequence (present
+    /// only while `emit_io_event_stream` is on and a trace is being written).
+    io_event_stream_builder: Option<IoEventStreamBuilder>,
+    /// Records-per-chunk for `events.dat`.
+    events_chunk_size: usize,
 }
 
 impl CtfsTraceWriter {
@@ -228,6 +244,15 @@ impl CtfsTraceWriter {
             emit_value_stream: false,
             value_stream_builder: None,
             values_chunk_size: DEFAULT_VALUES_CHUNK_SIZE,
+            // M23c: the dedicated `events.dat` I/O event stream is OPT-IN (off by
+            // default), exactly like the M23a `steps.dat` / M23b `values.dat`
+            // splits. This keeps every existing recorder's `.ct` output
+            // byte-for-byte unchanged (no `events.dat`/`events.idx`,
+            // `has_io_event_stream` clear) until the consumer migration is ready.
+            // Enable explicitly with `with_io_event_stream(true)`.
+            emit_io_event_stream: false,
+            io_event_stream_builder: None,
+            events_chunk_size: DEFAULT_EVENTS_CHUNK_SIZE,
         }
     }
 
@@ -315,6 +340,36 @@ impl CtfsTraceWriter {
     /// Whether the dedicated parallel value stream is enabled.
     pub fn value_stream_enabled(&self) -> bool {
         self.emit_value_stream
+    }
+
+    /// Enable or disable the dedicated `events.dat` I/O event stream (M23c).
+    ///
+    /// When enabled, `finish_writing_trace_events` writes, in addition to the
+    /// unchanged `events.log`, an `events.dat` I/O event stream (the
+    /// `EventLogKind`-tagged stdout/stderr/file/network/error/log events, each
+    /// record carrying kind / step_id / metadata / content) and its companion
+    /// seekable index `events.idx`, and sets the `has_io_event_stream`
+    /// capability flag in `meta.dat`. The I/O event records are derived from the
+    /// same `Event` records, so they are guaranteed consistent with the unified
+    /// stream. This is additive: old readers ignore the extra files. NOTE the
+    /// distinct file naming — `events.dat` is NOT the legacy `events.log`.
+    /// Returns `self` for builder-style chaining.
+    pub fn with_io_event_stream(mut self, enable: bool) -> Self {
+        self.emit_io_event_stream = enable;
+        self
+    }
+
+    /// Set the records-per-chunk for `events.dat` (the event-log page
+    /// granularity). Smaller chunks give finer pages at a slightly lower
+    /// compression ratio.
+    pub fn with_events_chunk_size(mut self, chunk_size: usize) -> Self {
+        self.events_chunk_size = chunk_size.max(1);
+        self
+    }
+
+    /// Whether the dedicated I/O event stream is enabled.
+    pub fn io_event_stream_enabled(&self) -> bool {
+        self.emit_io_event_stream
     }
 
     /// Create a new CTFS trace writer using the legacy CBOR format.
@@ -429,6 +484,11 @@ impl AbstractTraceWriter for CtfsTraceWriter {
         if let Some(ref mut builder) = self.value_stream_builder {
             builder.observe(&event);
         }
+        // M23c: feed the dedicated I/O event-stream builder from the SAME event
+        // sequence that produces events.log, so events.dat stays consistent.
+        if let Some(ref mut builder) = self.io_event_stream_builder {
+            builder.observe(&event);
+        }
         match self.serialization_format {
             EventSerializationFormat::Cbor => {
                 let buf: Vec<u8> = Vec::new();
@@ -507,6 +567,8 @@ impl TraceWriter for CtfsTraceWriter {
         self.step_stream_builder = if self.emit_step_stream { Some(StepStreamBuilder::new()) } else { None };
         // M23b: arm the value-stream builder when the dedicated stream is enabled.
         self.value_stream_builder = if self.emit_value_stream { Some(ValueStreamBuilder::new()) } else { None };
+        // M23c: arm the I/O event-stream builder when the dedicated stream is enabled.
+        self.io_event_stream_builder = if self.emit_io_event_stream { Some(IoEventStreamBuilder::new()) } else { None };
 
         Ok(())
     }
@@ -610,6 +672,22 @@ impl TraceWriter for CtfsTraceWriter {
                 let values_idx_handle = writer.add_file("values.idx")?;
                 writer.write(values_idx_handle, &encoded.idx)?;
                 stream_flags |= FLAG_HAS_VALUE_STREAM;
+            }
+
+            // M23c: the dedicated I/O event stream + companion index. Holds the
+            // EventLogKind-tagged I/O / log events split out of events.log; each
+            // record carries kind / step_id (cross-ref to the execution stream)
+            // / metadata / content. NOTE: this `events.dat` is DISTINCT from the
+            // legacy `events.log` written above — do not collide the names.
+            if self.emit_io_event_stream {
+                let records = self.io_event_stream_builder.take().map(|b| b.finish()).unwrap_or_default();
+                let encoded = encode_io_event_stream(&records, self.events_chunk_size, DEFAULT_CALLS_ZSTD_LEVEL).map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+
+                let events_handle = writer.add_file("events.dat")?;
+                writer.write(events_handle, &encoded.dat)?;
+                let events_idx_handle = writer.add_file("events.idx")?;
+                writer.write(events_idx_handle, &encoded.idx)?;
+                stream_flags |= FLAG_HAS_IO_EVENT_STREAM;
             }
 
             // Stamp meta.dat with the combined stream-capability flags. The

@@ -9,7 +9,8 @@ use zeekstd::{EncodeOptions, Encoder, FrameSizePolicy};
 use crate::{
     abstract_trace_writer::{AbstractTraceWriter, AbstractTraceWriterData},
     call_stream::{encode_call_stream, CallStreamBuilder, DEFAULT_CALLS_CHUNK_SIZE},
-    meta_dat::{encode_meta_dat, FLAG_HAS_CALL_STREAM},
+    meta_dat::{encode_meta_dat, FLAG_HAS_CALL_STREAM, FLAG_HAS_STEP_STREAM},
+    step_stream::{encode_step_stream, StepStreamBuilder, DEFAULT_STEPS_CHUNK_SIZE},
     trace_writer::TraceWriter,
 };
 use codetracer_trace_types::TraceLowLevelEvent;
@@ -126,6 +127,19 @@ pub struct CtfsTraceWriter {
     call_stream_builder: Option<CallStreamBuilder>,
     /// Records-per-chunk for `calls.dat`.
     calls_chunk_size: usize,
+
+    // --- M23a: dedicated execution (step) stream ---
+    /// When set, the writer ALSO emits a dedicated `steps.dat` compact
+    /// execution stream (plus its companion `steps.idx`), derived from the same
+    /// Step/Call/Return/ThreadSwitch events that feed `events.log`, and sets the
+    /// `has_step_stream` meta.dat flag. Additive and backward-compatible exactly
+    /// like the call stream.
+    emit_step_stream: bool,
+    /// Builds the compact step records from the observed event sequence (present
+    /// only while `emit_step_stream` is on and a trace is being written).
+    step_stream_builder: Option<StepStreamBuilder>,
+    /// Records-per-chunk for `steps.dat`.
+    steps_chunk_size: usize,
 }
 
 impl CtfsTraceWriter {
@@ -179,6 +193,15 @@ impl CtfsTraceWriter {
             emit_call_stream: true,
             call_stream_builder: None,
             calls_chunk_size: DEFAULT_CALLS_CHUNK_SIZE,
+            // M23a: the dedicated `steps.dat` execution stream is OPT-IN (off by
+            // default), exactly like the M17a `calls.dat` split was before M20
+            // flipped it on. This keeps every existing recorder's `.ct` output
+            // byte-for-byte unchanged (no `steps.dat`/`steps.idx`, `has_step_stream`
+            // clear) until the consumer migration (M22) is ready. Enable
+            // explicitly with `with_step_stream(true)`.
+            emit_step_stream: false,
+            step_stream_builder: None,
+            steps_chunk_size: DEFAULT_STEPS_CHUNK_SIZE,
         }
     }
 
@@ -211,6 +234,33 @@ impl CtfsTraceWriter {
     /// Whether the dedicated call stream is enabled.
     pub fn call_stream_enabled(&self) -> bool {
         self.emit_call_stream
+    }
+
+    /// Enable or disable the dedicated `steps.dat` execution stream (M23a).
+    ///
+    /// When enabled, `finish_writing_trace_events` writes, in addition to the
+    /// unchanged `events.log`, a `steps.dat` compact execution stream
+    /// (AbsoluteStep/DeltaStep + Raise/Catch/ThreadSwitch) and its companion
+    /// seekable index `steps.idx`, and sets the `has_step_stream` capability
+    /// flag in `meta.dat`. The step records are derived from the same
+    /// Step/Call/Return/ThreadSwitch events, so they are guaranteed consistent
+    /// with the unified stream. This is additive: old readers ignore the extra
+    /// files. Returns `self` for builder-style chaining.
+    pub fn with_step_stream(mut self, enable: bool) -> Self {
+        self.emit_step_stream = enable;
+        self
+    }
+
+    /// Set the records-per-chunk for `steps.dat` (seek granularity). Smaller
+    /// chunks give finer seeks at a slightly lower compression ratio.
+    pub fn with_steps_chunk_size(mut self, chunk_size: usize) -> Self {
+        self.steps_chunk_size = chunk_size.max(1);
+        self
+    }
+
+    /// Whether the dedicated execution (step) stream is enabled.
+    pub fn step_stream_enabled(&self) -> bool {
+        self.emit_step_stream
     }
 
     /// Create a new CTFS trace writer using the legacy CBOR format.
@@ -314,6 +364,11 @@ impl AbstractTraceWriter for CtfsTraceWriter {
         if let Some(ref mut builder) = self.call_stream_builder {
             builder.observe(&event);
         }
+        // M23a: feed the dedicated step-stream builder from the SAME event
+        // sequence that produces events.log, so steps.dat stays consistent.
+        if let Some(ref mut builder) = self.step_stream_builder {
+            builder.observe(&event);
+        }
         match self.serialization_format {
             EventSerializationFormat::Cbor => {
                 let buf: Vec<u8> = Vec::new();
@@ -388,6 +443,8 @@ impl TraceWriter for CtfsTraceWriter {
 
         // M17a: arm the call-stream builder when the dedicated stream is enabled.
         self.call_stream_builder = if self.emit_call_stream { Some(CallStreamBuilder::new()) } else { None };
+        // M23a: arm the step-stream builder when the dedicated stream is enabled.
+        self.step_stream_builder = if self.emit_step_stream { Some(StepStreamBuilder::new()) } else { None };
 
         Ok(())
     }
@@ -448,11 +505,15 @@ impl TraceWriter for CtfsTraceWriter {
             let paths_handle = writer.add_file("paths.json")?;
             writer.write(paths_handle, paths_json.as_bytes())?;
 
-            // M17a: emit the dedicated call stream + companion index + a
-            // meta.dat carrying the has_call_stream capability flag. This is
-            // ADDITIVE: events.log / events.fmt / meta.json / paths.json above
-            // are unchanged, and a reader that does not know the flag simply
-            // ignores calls.dat / calls.idx / meta.dat.
+            // M17a/M23a: emit the dedicated call stream and/or the dedicated
+            // execution (step) stream, each with its companion seekable index,
+            // plus a single meta.dat carrying the corresponding capability
+            // flags. This is ADDITIVE: events.log / events.fmt / meta.json /
+            // paths.json above are unchanged, and a reader that does not know a
+            // flag simply ignores the extra dat/idx files and meta.dat.
+            let mut stream_flags: u16 = 0;
+
+            // M17a: the dedicated call stream + companion index.
             if self.emit_call_stream {
                 let records = self.call_stream_builder.take().map(|b| b.finish()).unwrap_or_default();
                 let encoded = encode_call_stream(&records, self.calls_chunk_size, DEFAULT_CALLS_ZSTD_LEVEL).map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
@@ -461,10 +522,27 @@ impl TraceWriter for CtfsTraceWriter {
                 writer.write(calls_handle, &encoded.dat)?;
                 let calls_idx_handle = writer.add_file("calls.idx")?;
                 writer.write(calls_idx_handle, &encoded.idx)?;
+                stream_flags |= FLAG_HAS_CALL_STREAM;
+            }
 
-                // Stamp meta.dat with the has_call_stream flag. The recording_id
-                // mirrors the meta.json minted above so the two metadata files
-                // agree on the recording identity.
+            // M23a: the dedicated execution (step) stream + companion index.
+            if self.emit_step_stream {
+                let stream = self.step_stream_builder.take().map(|b| b.finish()).unwrap_or_else(|| StepStreamBuilder::new().finish());
+                let encoded = encode_step_stream(&stream, self.steps_chunk_size, DEFAULT_CALLS_ZSTD_LEVEL).map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+
+                let steps_handle = writer.add_file("steps.dat")?;
+                writer.write(steps_handle, &encoded.dat)?;
+                let steps_idx_handle = writer.add_file("steps.idx")?;
+                writer.write(steps_idx_handle, &encoded.idx)?;
+                stream_flags |= FLAG_HAS_STEP_STREAM;
+            }
+
+            // Stamp meta.dat with the combined stream-capability flags. The
+            // recording_id mirrors the meta.json minted above so the two
+            // metadata files agree on the recording identity. Only written when
+            // at least one dedicated stream is present, so a flags-off bundle is
+            // byte-for-byte the legacy container.
+            if stream_flags != 0 {
                 let meta_dat = encode_meta_dat(
                     &trace_metadata.recording_id,
                     &self.base.program,
@@ -472,7 +550,7 @@ impl TraceWriter for CtfsTraceWriter {
                     &self.base.workdir.to_string_lossy(),
                     "",
                     &self.base.path_list.iter().map(|p| p.to_string_lossy().into_owned()).collect::<Vec<_>>(),
-                    FLAG_HAS_CALL_STREAM,
+                    stream_flags,
                 );
                 let meta_dat_handle = writer.add_file("meta.dat")?;
                 writer.write(meta_dat_handle, &meta_dat)?;

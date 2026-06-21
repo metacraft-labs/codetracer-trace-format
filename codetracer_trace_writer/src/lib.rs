@@ -14,6 +14,8 @@ pub mod ctfs_writer;
 
 pub mod call_stream;
 
+pub mod step_stream;
+
 pub mod meta_dat;
 
 pub mod split_binary;

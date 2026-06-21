@@ -153,6 +153,21 @@ impl CallStreamReader {
         self.record_count
     }
 
+    /// The fixed number of records per chunk (the seek granularity). Exposed so
+    /// a downstream seekable reader (the db-backend, M17b) can account for
+    /// bounded decompression — e.g. assert that fetching a single call by
+    /// `call_key` decompresses at most one chunk.
+    pub fn chunk_size(&self) -> usize {
+        self.index.chunk_size
+    }
+
+    /// The chunk number currently held in the one-chunk decompression cache, or
+    /// `None` if nothing has been decompressed yet. Lets a downstream reader
+    /// observe exactly which chunks were inflated (bounded-decompression probe).
+    pub fn cached_chunk(&self) -> Option<usize> {
+        self.cached_chunk.as_ref().map(|(c, _)| *c)
+    }
+
     /// Read the call record at `call_key`, decompressing only its chunk.
     pub fn read(&mut self, call_key: u64) -> Result<CallStreamRecord, String> {
         if call_key >= self.record_count {

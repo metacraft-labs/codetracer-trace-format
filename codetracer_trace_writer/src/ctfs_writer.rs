@@ -10,7 +10,8 @@ use crate::{
     abstract_trace_writer::{AbstractTraceWriter, AbstractTraceWriterData},
     call_stream::{encode_call_stream, CallStreamBuilder, DEFAULT_CALLS_CHUNK_SIZE},
     event_stream::{encode_io_event_stream, IoEventStreamBuilder, DEFAULT_EVENTS_CHUNK_SIZE},
-    meta_dat::{encode_meta_dat, FLAG_HAS_CALL_STREAM, FLAG_HAS_IO_EVENT_STREAM, FLAG_HAS_STEP_STREAM, FLAG_HAS_VALUE_STREAM},
+    interning_tables::InterningTablesBuilder,
+    meta_dat::{encode_meta_dat, FLAG_HAS_CALL_STREAM, FLAG_HAS_INTERNING_TABLES, FLAG_HAS_IO_EVENT_STREAM, FLAG_HAS_STEP_STREAM, FLAG_HAS_VALUE_STREAM},
     step_stream::{encode_step_stream, StepStreamBuilder, DEFAULT_STEPS_CHUNK_SIZE},
     trace_writer::TraceWriter,
     value_stream::{encode_value_stream, ValueStreamBuilder, DEFAULT_VALUES_CHUNK_SIZE},
@@ -173,6 +174,21 @@ pub struct CtfsTraceWriter {
     io_event_stream_builder: Option<IoEventStreamBuilder>,
     /// Records-per-chunk for `events.dat`.
     events_chunk_size: usize,
+
+    // --- M23d: binary varint interning tables ---
+    /// When set, the writer ALSO emits the binary varint interning tables
+    /// (`paths.dat`+`paths.off`, `funcs.dat`+`funcs.off`, `types.dat`+`types.off`,
+    /// `varnames.dat`+`varnames.off`), derived from the SAME
+    /// Path/Function/Type/VariableName interning that feeds `events.log` /
+    /// `paths.json`, and sets the `has_interning_tables` meta.dat flag. These use
+    /// the Variable-Size Record Table (`.dat` + `.off`) pattern. Additive and
+    /// backward-compatible exactly like the call/step/value/I-O-event streams;
+    /// `events.log` / `paths.json` are unchanged.
+    emit_interning_tables: bool,
+    /// Builds the interning-table records from the observed event sequence
+    /// (present only while `emit_interning_tables` is on and a trace is being
+    /// written).
+    interning_tables_builder: Option<InterningTablesBuilder>,
 }
 
 impl CtfsTraceWriter {
@@ -253,6 +269,15 @@ impl CtfsTraceWriter {
             emit_io_event_stream: false,
             io_event_stream_builder: None,
             events_chunk_size: DEFAULT_EVENTS_CHUNK_SIZE,
+            // M23d: the binary varint interning tables are OPT-IN (off by
+            // default), exactly like the M23a/M23b/M23c stream splits. This keeps
+            // every existing recorder's `.ct` output byte-for-byte unchanged (no
+            // `*.dat`/`*.off` interning files, `has_interning_tables` clear; the
+            // existing `paths.json` interning is untouched) until the consumer
+            // migration is ready. Enable explicitly with
+            // `with_interning_tables(true)`.
+            emit_interning_tables: false,
+            interning_tables_builder: None,
         }
     }
 
@@ -372,6 +397,28 @@ impl CtfsTraceWriter {
         self.emit_io_event_stream
     }
 
+    /// Enable or disable the binary varint interning tables (M23d).
+    ///
+    /// When enabled, `finish_writing_trace_events` writes, in addition to the
+    /// unchanged `events.log` / `paths.json`, the four interning tables
+    /// (`paths.dat`+`paths.off`, `funcs.dat`+`funcs.off`, `types.dat`+`types.off`,
+    /// `varnames.dat`+`varnames.off`) using the Variable-Size Record Table
+    /// (`.dat` + `.off`) pattern, and sets the `has_interning_tables` capability
+    /// flag in `meta.dat`. The records are derived from the same
+    /// Path/Function/Type/VariableName interning events, so they resolve exactly
+    /// the ids the event streams reference. This is additive: old readers ignore
+    /// the extra files; the existing `paths.json` interning is untouched. Returns
+    /// `self` for builder-style chaining.
+    pub fn with_interning_tables(mut self, enable: bool) -> Self {
+        self.emit_interning_tables = enable;
+        self
+    }
+
+    /// Whether the binary varint interning tables are enabled.
+    pub fn interning_tables_enabled(&self) -> bool {
+        self.emit_interning_tables
+    }
+
     /// Create a new CTFS trace writer using the legacy CBOR format.
     pub fn new_cbor(program: &str, args: &[String]) -> Self {
         Self::with_options(program, args, EventSerializationFormat::Cbor, DEFAULT_FLUSH_THRESHOLD, DEFAULT_CHUNK_SIZE)
@@ -489,6 +536,13 @@ impl AbstractTraceWriter for CtfsTraceWriter {
         if let Some(ref mut builder) = self.io_event_stream_builder {
             builder.observe(&event);
         }
+        // M23d: feed the interning-tables builder from the SAME
+        // Path/Function/Type/VariableName events that intern into events.log /
+        // paths.json, so the binary tables resolve exactly the ids the streams
+        // reference.
+        if let Some(ref mut builder) = self.interning_tables_builder {
+            builder.observe(&event);
+        }
         match self.serialization_format {
             EventSerializationFormat::Cbor => {
                 let buf: Vec<u8> = Vec::new();
@@ -569,6 +623,8 @@ impl TraceWriter for CtfsTraceWriter {
         self.value_stream_builder = if self.emit_value_stream { Some(ValueStreamBuilder::new()) } else { None };
         // M23c: arm the I/O event-stream builder when the dedicated stream is enabled.
         self.io_event_stream_builder = if self.emit_io_event_stream { Some(IoEventStreamBuilder::new()) } else { None };
+        // M23d: arm the interning-tables builder when the tables are enabled.
+        self.interning_tables_builder = if self.emit_interning_tables { Some(InterningTablesBuilder::new()) } else { None };
 
         Ok(())
     }
@@ -688,6 +744,38 @@ impl TraceWriter for CtfsTraceWriter {
                 let events_idx_handle = writer.add_file("events.idx")?;
                 writer.write(events_idx_handle, &encoded.idx)?;
                 stream_flags |= FLAG_HAS_IO_EVENT_STREAM;
+            }
+
+            // M23d: the binary varint interning tables. Each is a Variable-Size
+            // Record Table — a `.dat` of serialized records plus a `.off` u64-LE
+            // offset index — built from the SAME Path/Function/Type/VariableName
+            // interning that feeds events.log / paths.json, so the i-th record in
+            // each `.dat` resolves the id the event streams reference. ADDITIVE:
+            // the existing paths.json interning above is untouched.
+            if self.emit_interning_tables {
+                let tables = self.interning_tables_builder.take().map(|b| b.finish()).unwrap_or_else(|| InterningTablesBuilder::new().finish());
+
+                let paths_dat_handle = writer.add_file("paths.dat")?;
+                writer.write(paths_dat_handle, &tables.paths_dat)?;
+                let paths_off_handle = writer.add_file("paths.off")?;
+                writer.write(paths_off_handle, &tables.paths_off)?;
+
+                let funcs_dat_handle = writer.add_file("funcs.dat")?;
+                writer.write(funcs_dat_handle, &tables.funcs_dat)?;
+                let funcs_off_handle = writer.add_file("funcs.off")?;
+                writer.write(funcs_off_handle, &tables.funcs_off)?;
+
+                let types_dat_handle = writer.add_file("types.dat")?;
+                writer.write(types_dat_handle, &tables.types_dat)?;
+                let types_off_handle = writer.add_file("types.off")?;
+                writer.write(types_off_handle, &tables.types_off)?;
+
+                let varnames_dat_handle = writer.add_file("varnames.dat")?;
+                writer.write(varnames_dat_handle, &tables.varnames_dat)?;
+                let varnames_off_handle = writer.add_file("varnames.off")?;
+                writer.write(varnames_off_handle, &tables.varnames_off)?;
+
+                stream_flags |= FLAG_HAS_INTERNING_TABLES;
             }
 
             // Stamp meta.dat with the combined stream-capability flags. The

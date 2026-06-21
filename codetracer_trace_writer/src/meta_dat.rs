@@ -60,6 +60,19 @@ pub const FLAG_HAS_VALUE_STREAM: u16 = 0x400;
 /// `meta_dat.nim` bit 11 and the db-backend
 /// `ctfs_trace_reader::meta_dat::FLAG_HAS_IO_EVENT_STREAM`.
 pub const FLAG_HAS_IO_EVENT_STREAM: u16 = 0x800;
+/// Bit 12 — M23d: the binary varint interning tables (`paths.dat`+`paths.off`,
+/// `funcs.dat`+`funcs.off`, `types.dat`+`types.off`, `varnames.dat`+`varnames.off`)
+/// are present, emitted from the SAME Path/Function/Type/VariableName interning
+/// the writer already does for `events.log` / `paths.json`. These use the
+/// Variable-Size Record Table (`.dat` + `.off`) pattern — a `.dat` of serialized
+/// records plus a `u64`-LE offset index — for O(1) random access by id. Additive
+/// and backward-compatible exactly like [`FLAG_HAS_CALL_STREAM`] /
+/// [`FLAG_HAS_STEP_STREAM`] / [`FLAG_HAS_VALUE_STREAM`] / [`FLAG_HAS_IO_EVENT_STREAM`]:
+/// a reader that does not know the bit ignores the eight new files and reads
+/// `events.log` / `paths.json` unchanged. Must match the canonical Nim writer's
+/// `meta_dat.nim` bit 12 and the db-backend
+/// `ctfs_trace_reader::meta_dat::FLAG_HAS_INTERNING_TABLES`.
+pub const FLAG_HAS_INTERNING_TABLES: u16 = 0x1000;
 
 fn encode_varint(mut value: u64, out: &mut Vec<u8>) {
     loop {
@@ -178,6 +191,17 @@ pub fn meta_dat_has_io_event_stream(data: &[u8]) -> bool {
     }
 }
 
+/// Convenience: returns whether the `has_interning_tables` capability flag (bit
+/// 12) is set in a `meta.dat` buffer. A missing/invalid `meta.dat` ⇒ `false`
+/// (the legacy interning path — `events.log` / `paths.json` only), never an
+/// error.
+pub fn meta_dat_has_interning_tables(data: &[u8]) -> bool {
+    match read_meta_dat_flags(data) {
+        Ok(flags) => flags & FLAG_HAS_INTERNING_TABLES != 0,
+        Err(_) => false,
+    }
+}
+
 /// Decode just the `program` string from a `meta.dat` buffer (used by tests
 /// asserting on the header round-trip).
 pub fn read_meta_dat_program(data: &[u8]) -> Result<String, String> {
@@ -286,5 +310,32 @@ mod tests {
         assert!(!meta_dat_has_value_stream(&buf_io));
         assert!(!meta_dat_has_step_stream(&buf_io));
         assert!(!meta_dat_has_call_stream(&buf_io));
+    }
+
+    #[test]
+    fn meta_dat_interning_tables_flag_roundtrip() {
+        // M23d: a real bundle sets call+step+value+io-event+interning bits together.
+        let buf = encode_meta_dat(
+            "01949fcc-7d92-7e9c-aaaa-bbbbbbbbbbbb",
+            "prog",
+            &[],
+            "/wd",
+            "rec",
+            &[],
+            FLAG_HAS_CALL_STREAM | FLAG_HAS_STEP_STREAM | FLAG_HAS_VALUE_STREAM | FLAG_HAS_IO_EVENT_STREAM | FLAG_HAS_INTERNING_TABLES,
+        );
+        assert!(meta_dat_has_call_stream(&buf));
+        assert!(meta_dat_has_step_stream(&buf));
+        assert!(meta_dat_has_value_stream(&buf));
+        assert!(meta_dat_has_io_event_stream(&buf));
+        assert!(meta_dat_has_interning_tables(&buf));
+
+        // Interning tables alone.
+        let buf_it = encode_meta_dat("01949fcc-7d92-7e9c-aaaa-bbbbbbbbbbbb", "prog", &[], "", "", &[], FLAG_HAS_INTERNING_TABLES);
+        assert!(meta_dat_has_interning_tables(&buf_it));
+        assert!(!meta_dat_has_io_event_stream(&buf_it));
+        assert!(!meta_dat_has_value_stream(&buf_it));
+        assert!(!meta_dat_has_step_stream(&buf_it));
+        assert!(!meta_dat_has_call_stream(&buf_it));
     }
 }

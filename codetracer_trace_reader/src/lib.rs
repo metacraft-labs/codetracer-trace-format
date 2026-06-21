@@ -33,6 +33,9 @@ pub mod value_stream_reader;
 pub mod io_event_stream_reader;
 
 #[cfg(not(target_arch = "wasm32"))]
+pub mod interning_tables_reader;
+
+#[cfg(not(target_arch = "wasm32"))]
 pub mod streaming_ctfs_reader;
 
 #[derive(Debug, Clone, Copy)]

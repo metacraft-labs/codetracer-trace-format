@@ -20,6 +20,8 @@ pub mod value_stream;
 
 pub mod event_stream;
 
+pub mod interning_tables;
+
 pub mod meta_dat;
 
 pub mod split_binary;

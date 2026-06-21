@@ -73,6 +73,16 @@ impl Write for SharedBuffer {
 /// - `meta.json`  — trace metadata (program, args, workdir)
 /// - `paths.json` — registered source paths
 ///
+/// As of M23e-4 it ALSO emits, BY DEFAULT, the spec multi-stream split files
+/// (the same layout the production Nim writer produces) — `calls.dat`/`.idx`,
+/// `steps.dat`/`.idx`, `values.dat`/`.idx`, `events.dat`/`.idx`, the
+/// `paths`/`funcs`/`types`/`varnames` `.dat`+`.off` interning tables, and a
+/// `meta.dat` carrying the capability flags. This is additive: `events.log`
+/// is still written (M23e-5 will remove it), so old readers keep working while
+/// new readers consume the split streams. Each split can be turned off with the
+/// corresponding `with_*_stream(false)` lever (used by tests of the legacy
+/// `events.log` postprocessing path).
+///
 /// In `SplitBinary` mode (the default), events are serialized using the compact
 /// split binary encoding and accumulated into chunks of `chunk_size` events.
 /// Each chunk is independently Zstd-compressed with an inline header for
@@ -131,12 +141,13 @@ pub struct CtfsTraceWriter {
     /// Records-per-chunk for `calls.dat`.
     calls_chunk_size: usize,
 
-    // --- M23a: dedicated execution (step) stream ---
+    // --- M23a / M23e-4: dedicated execution (step) stream (default-on) ---
     /// When set, the writer ALSO emits a dedicated `steps.dat` compact
     /// execution stream (plus its companion `steps.idx`), derived from the same
     /// Step/Call/Return/ThreadSwitch events that feed `events.log`, and sets the
-    /// `has_step_stream` meta.dat flag. Additive and backward-compatible exactly
-    /// like the call stream.
+    /// `has_step_stream` meta.dat flag. ON by default (M23e-4) — the secondary
+    /// Rust writer emits the spec split format; `events.log` is still written
+    /// alongside (additive). Disable with `with_step_stream(false)`.
     emit_step_stream: bool,
     /// Builds the compact step records from the observed event sequence (present
     /// only while `emit_step_stream` is on and a trace is being written).
@@ -144,14 +155,15 @@ pub struct CtfsTraceWriter {
     /// Records-per-chunk for `steps.dat`.
     steps_chunk_size: usize,
 
-    // --- M23b: dedicated parallel value stream ---
+    // --- M23b / M23e-4: dedicated parallel value stream (default-on) ---
     /// When set, the writer ALSO emits a dedicated `values.dat` parallel value
     /// stream (plus its companion `values.idx`), derived from the same
     /// Value/BindVariable/Cell/Assign… events that feed `events.log`, and sets
     /// the `has_value_stream` meta.dat flag. The value stream is parallel-indexed
     /// to the execution stream — value record N ↔ step N — with an empty record
-    /// for steps that have no variable activity. Additive and backward-compatible
-    /// exactly like the call/step streams.
+    /// for steps that have no variable activity. ON by default (M23e-4);
+    /// `events.log` is still written alongside (additive). Disable with
+    /// `with_value_stream(false)`.
     emit_value_stream: bool,
     /// Builds the per-step value records from the observed event sequence
     /// (present only while `emit_value_stream` is on and a trace is being
@@ -160,14 +172,15 @@ pub struct CtfsTraceWriter {
     /// Records-per-chunk for `values.dat`.
     values_chunk_size: usize,
 
-    // --- M23c: dedicated I/O event stream ---
+    // --- M23c / M23e-4: dedicated I/O event stream (default-on) ---
     /// When set, the writer ALSO emits a dedicated `events.dat` I/O event stream
     /// (plus its companion `events.idx`), derived from the same `Event` records
     /// (the `EventLogKind`-tagged I/O / log events) that feed `events.log`, and
     /// sets the `has_io_event_stream` meta.dat flag. Each record carries kind /
-    /// step_id (cross-ref to the execution stream) / metadata / content.
-    /// Additive and backward-compatible exactly like the call/step/value streams.
-    /// NOTE: this `events.dat` is DISTINCT from the legacy `events.log`.
+    /// step_id (cross-ref to the execution stream) / metadata / content. ON by
+    /// default (M23e-4); `events.log` is still written alongside (additive).
+    /// NOTE: this `events.dat` is DISTINCT from the legacy `events.log`. Disable
+    /// with `with_io_event_stream(false)`.
     emit_io_event_stream: bool,
     /// Builds the I/O event records from the observed event sequence (present
     /// only while `emit_io_event_stream` is on and a trace is being written).
@@ -175,15 +188,15 @@ pub struct CtfsTraceWriter {
     /// Records-per-chunk for `events.dat`.
     events_chunk_size: usize,
 
-    // --- M23d: binary varint interning tables ---
+    // --- M23d / M23e-4: binary varint interning tables (default-on) ---
     /// When set, the writer ALSO emits the binary varint interning tables
     /// (`paths.dat`+`paths.off`, `funcs.dat`+`funcs.off`, `types.dat`+`types.off`,
     /// `varnames.dat`+`varnames.off`), derived from the SAME
     /// Path/Function/Type/VariableName interning that feeds `events.log` /
     /// `paths.json`, and sets the `has_interning_tables` meta.dat flag. These use
-    /// the Variable-Size Record Table (`.dat` + `.off`) pattern. Additive and
-    /// backward-compatible exactly like the call/step/value/I-O-event streams;
-    /// `events.log` / `paths.json` are unchanged.
+    /// the Variable-Size Record Table (`.dat` + `.off`) pattern. ON by default
+    /// (M23e-4); `events.log` / `paths.json` are still written alongside
+    /// (additive). Disable with `with_interning_tables(false)`.
     emit_interning_tables: bool,
     /// Builds the interning-table records from the observed event sequence
     /// (present only while `emit_interning_tables` is on and a trace is being
@@ -242,41 +255,38 @@ impl CtfsTraceWriter {
             emit_call_stream: true,
             call_stream_builder: None,
             calls_chunk_size: DEFAULT_CALLS_CHUNK_SIZE,
-            // M23a: the dedicated `steps.dat` execution stream is OPT-IN (off by
-            // default), exactly like the M17a `calls.dat` split was before M20
-            // flipped it on. This keeps every existing recorder's `.ct` output
-            // byte-for-byte unchanged (no `steps.dat`/`steps.idx`, `has_step_stream`
-            // clear) until the consumer migration (M22) is ready. Enable
-            // explicitly with `with_step_stream(true)`.
-            emit_step_stream: false,
+            // M23e-4: the dedicated `steps.dat` execution stream is now emitted
+            // BY DEFAULT, joining the M20 `calls.dat` default. The secondary Rust
+            // `CtfsTraceWriter` thus produces the spec multi-stream format (the
+            // same split layout the production Nim writer emits) even for its
+            // non-production (tests/legacy) bundles. This is ADDITIVE: `events.log`
+            // is still written alongside (M23e-5 removes it), so old readers keep
+            // working. Disable explicitly with `with_step_stream(false)` to
+            // reproduce the legacy `events.log`-only bundle (tests of the legacy
+            // postprocessing path use this lever).
+            emit_step_stream: true,
             step_stream_builder: None,
             steps_chunk_size: DEFAULT_STEPS_CHUNK_SIZE,
-            // M23b: the dedicated `values.dat` parallel value stream is OPT-IN
-            // (off by default), exactly like the M23a `steps.dat` split. This
-            // keeps every existing recorder's `.ct` output byte-for-byte
-            // unchanged (no `values.dat`/`values.idx`, `has_value_stream` clear)
-            // until the consumer migration (M22) is ready. Enable explicitly with
-            // `with_value_stream(true)`.
-            emit_value_stream: false,
+            // M23e-4: the dedicated `values.dat` parallel value stream is now
+            // emitted BY DEFAULT, parallel-indexed to the default `steps.dat`.
+            // Additive (events.log retained). Disable explicitly with
+            // `with_value_stream(false)` for the legacy-path bundle.
+            emit_value_stream: true,
             value_stream_builder: None,
             values_chunk_size: DEFAULT_VALUES_CHUNK_SIZE,
-            // M23c: the dedicated `events.dat` I/O event stream is OPT-IN (off by
-            // default), exactly like the M23a `steps.dat` / M23b `values.dat`
-            // splits. This keeps every existing recorder's `.ct` output
-            // byte-for-byte unchanged (no `events.dat`/`events.idx`,
-            // `has_io_event_stream` clear) until the consumer migration is ready.
-            // Enable explicitly with `with_io_event_stream(true)`.
-            emit_io_event_stream: false,
+            // M23e-4: the dedicated `events.dat` I/O event stream is now emitted
+            // BY DEFAULT. Additive (events.log retained). Disable explicitly with
+            // `with_io_event_stream(false)` for the legacy-path bundle.
+            emit_io_event_stream: true,
             io_event_stream_builder: None,
             events_chunk_size: DEFAULT_EVENTS_CHUNK_SIZE,
-            // M23d: the binary varint interning tables are OPT-IN (off by
-            // default), exactly like the M23a/M23b/M23c stream splits. This keeps
-            // every existing recorder's `.ct` output byte-for-byte unchanged (no
-            // `*.dat`/`*.off` interning files, `has_interning_tables` clear; the
-            // existing `paths.json` interning is untouched) until the consumer
-            // migration is ready. Enable explicitly with
-            // `with_interning_tables(true)`.
-            emit_interning_tables: false,
+            // M23e-4: the binary varint interning tables are now emitted BY
+            // DEFAULT, so the split bundle is self-describing (the new-format
+            // reader resolves path/func/type/varname ids from the binary tables
+            // rather than `paths.json`). Additive — the existing `paths.json`
+            // interning is untouched. Disable explicitly with
+            // `with_interning_tables(false)` for the legacy-path bundle.
+            emit_interning_tables: true,
             interning_tables_builder: None,
         }
     }
@@ -312,7 +322,13 @@ impl CtfsTraceWriter {
         self.emit_call_stream
     }
 
-    /// Enable or disable the dedicated `steps.dat` execution stream (M23a).
+    /// Enable or disable the dedicated `steps.dat` execution stream (M23a / M23e-4).
+    ///
+    /// As of M23e-4 the step stream is emitted BY DEFAULT (see `with_options`),
+    /// so this method is primarily a DISABLE lever — pass `false` to reproduce a
+    /// legacy `events.log`-only bundle (no `steps.dat`/`steps.idx`,
+    /// `has_step_stream` clear), e.g. for tests that exercise the old-format
+    /// postprocessing path.
     ///
     /// When enabled, `finish_writing_trace_events` writes, in addition to the
     /// unchanged `events.log`, a `steps.dat` compact execution stream
@@ -339,7 +355,12 @@ impl CtfsTraceWriter {
         self.emit_step_stream
     }
 
-    /// Enable or disable the dedicated `values.dat` parallel value stream (M23b).
+    /// Enable or disable the dedicated `values.dat` parallel value stream
+    /// (M23b / M23e-4).
+    ///
+    /// As of M23e-4 the value stream is emitted BY DEFAULT (see `with_options`),
+    /// so this method is primarily a DISABLE lever — pass `false` for a legacy
+    /// `events.log`-only bundle.
     ///
     /// When enabled, `finish_writing_trace_events` writes, in addition to the
     /// unchanged `events.log`, a `values.dat` parallel value stream
@@ -367,7 +388,12 @@ impl CtfsTraceWriter {
         self.emit_value_stream
     }
 
-    /// Enable or disable the dedicated `events.dat` I/O event stream (M23c).
+    /// Enable or disable the dedicated `events.dat` I/O event stream
+    /// (M23c / M23e-4).
+    ///
+    /// As of M23e-4 the I/O event stream is emitted BY DEFAULT (see
+    /// `with_options`), so this method is primarily a DISABLE lever — pass
+    /// `false` for a legacy `events.log`-only bundle.
     ///
     /// When enabled, `finish_writing_trace_events` writes, in addition to the
     /// unchanged `events.log`, an `events.dat` I/O event stream (the
@@ -397,7 +423,11 @@ impl CtfsTraceWriter {
         self.emit_io_event_stream
     }
 
-    /// Enable or disable the binary varint interning tables (M23d).
+    /// Enable or disable the binary varint interning tables (M23d / M23e-4).
+    ///
+    /// As of M23e-4 the interning tables are emitted BY DEFAULT (see
+    /// `with_options`), so this method is primarily a DISABLE lever — pass
+    /// `false` for a legacy `events.log`-only bundle.
     ///
     /// When enabled, `finish_writing_trace_events` writes, in addition to the
     /// unchanged `events.log` / `paths.json`, the four interning tables

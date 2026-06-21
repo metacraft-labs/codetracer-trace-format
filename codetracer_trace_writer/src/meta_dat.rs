@@ -38,6 +38,15 @@ pub const FLAG_HAS_CALL_STREAM: u16 = 0x100;
 /// match the canonical Nim writer's `meta_dat.nim` bit 9 and the db-backend
 /// `ctfs_trace_reader::meta_dat::FLAG_HAS_STEP_STREAM`.
 pub const FLAG_HAS_STEP_STREAM: u16 = 0x200;
+/// Bit 10 — M23b: a dedicated `values.dat` parallel value stream (+ its
+/// companion `values.idx`) is present, parallel-indexed to `steps.dat` (value
+/// record N ↔ step N). Additive and backward-compatible exactly like
+/// [`FLAG_HAS_CALL_STREAM`] / [`FLAG_HAS_STEP_STREAM`]: a reader that does not
+/// know the bit ignores `values.dat`/`values.idx` and reads the unified
+/// `events.log` unchanged. Must match the canonical Nim writer's `meta_dat.nim`
+/// bit 10 and the db-backend
+/// `ctfs_trace_reader::meta_dat::FLAG_HAS_VALUE_STREAM`.
+pub const FLAG_HAS_VALUE_STREAM: u16 = 0x400;
 
 fn encode_varint(mut value: u64, out: &mut Vec<u8>) {
     loop {
@@ -136,6 +145,16 @@ pub fn meta_dat_has_step_stream(data: &[u8]) -> bool {
     }
 }
 
+/// Convenience: returns whether the `has_value_stream` capability flag (bit 10)
+/// is set in a `meta.dat` buffer. A missing/invalid `meta.dat` ⇒ `false`
+/// (the legacy unified-stream path), never an error.
+pub fn meta_dat_has_value_stream(data: &[u8]) -> bool {
+    match read_meta_dat_flags(data) {
+        Ok(flags) => flags & FLAG_HAS_VALUE_STREAM != 0,
+        Err(_) => false,
+    }
+}
+
 /// Decode just the `program` string from a `meta.dat` buffer (used by tests
 /// asserting on the header round-trip).
 pub fn read_meta_dat_program(data: &[u8]) -> Result<String, String> {
@@ -196,5 +215,28 @@ mod tests {
         let buf_step = encode_meta_dat("01949fcc-7d92-7e9c-aaaa-bbbbbbbbbbbb", "prog", &[], "", "", &[], FLAG_HAS_STEP_STREAM);
         assert!(meta_dat_has_step_stream(&buf_step));
         assert!(!meta_dat_has_call_stream(&buf_step));
+    }
+
+    #[test]
+    fn meta_dat_value_stream_flag_roundtrip() {
+        // M23b: a real bundle sets call+step+value bits together.
+        let buf = encode_meta_dat(
+            "01949fcc-7d92-7e9c-aaaa-bbbbbbbbbbbb",
+            "prog",
+            &[],
+            "/wd",
+            "rec",
+            &[],
+            FLAG_HAS_CALL_STREAM | FLAG_HAS_STEP_STREAM | FLAG_HAS_VALUE_STREAM,
+        );
+        assert!(meta_dat_has_call_stream(&buf));
+        assert!(meta_dat_has_step_stream(&buf));
+        assert!(meta_dat_has_value_stream(&buf));
+
+        // Value stream alone.
+        let buf_val = encode_meta_dat("01949fcc-7d92-7e9c-aaaa-bbbbbbbbbbbb", "prog", &[], "", "", &[], FLAG_HAS_VALUE_STREAM);
+        assert!(meta_dat_has_value_stream(&buf_val));
+        assert!(!meta_dat_has_step_stream(&buf_val));
+        assert!(!meta_dat_has_call_stream(&buf_val));
     }
 }

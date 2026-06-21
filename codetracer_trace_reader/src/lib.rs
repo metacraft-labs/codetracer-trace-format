@@ -27,6 +27,9 @@ pub mod call_stream_reader;
 pub mod step_stream_reader;
 
 #[cfg(not(target_arch = "wasm32"))]
+pub mod value_stream_reader;
+
+#[cfg(not(target_arch = "wasm32"))]
 pub mod streaming_ctfs_reader;
 
 #[derive(Debug, Clone, Copy)]

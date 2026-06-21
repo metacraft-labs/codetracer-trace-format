@@ -9,9 +9,10 @@ use zeekstd::{EncodeOptions, Encoder, FrameSizePolicy};
 use crate::{
     abstract_trace_writer::{AbstractTraceWriter, AbstractTraceWriterData},
     call_stream::{encode_call_stream, CallStreamBuilder, DEFAULT_CALLS_CHUNK_SIZE},
-    meta_dat::{encode_meta_dat, FLAG_HAS_CALL_STREAM, FLAG_HAS_STEP_STREAM},
+    meta_dat::{encode_meta_dat, FLAG_HAS_CALL_STREAM, FLAG_HAS_STEP_STREAM, FLAG_HAS_VALUE_STREAM},
     step_stream::{encode_step_stream, StepStreamBuilder, DEFAULT_STEPS_CHUNK_SIZE},
     trace_writer::TraceWriter,
+    value_stream::{encode_value_stream, ValueStreamBuilder, DEFAULT_VALUES_CHUNK_SIZE},
 };
 use codetracer_trace_types::TraceLowLevelEvent;
 
@@ -140,6 +141,22 @@ pub struct CtfsTraceWriter {
     step_stream_builder: Option<StepStreamBuilder>,
     /// Records-per-chunk for `steps.dat`.
     steps_chunk_size: usize,
+
+    // --- M23b: dedicated parallel value stream ---
+    /// When set, the writer ALSO emits a dedicated `values.dat` parallel value
+    /// stream (plus its companion `values.idx`), derived from the same
+    /// Value/BindVariable/Cell/Assign… events that feed `events.log`, and sets
+    /// the `has_value_stream` meta.dat flag. The value stream is parallel-indexed
+    /// to the execution stream — value record N ↔ step N — with an empty record
+    /// for steps that have no variable activity. Additive and backward-compatible
+    /// exactly like the call/step streams.
+    emit_value_stream: bool,
+    /// Builds the per-step value records from the observed event sequence
+    /// (present only while `emit_value_stream` is on and a trace is being
+    /// written).
+    value_stream_builder: Option<ValueStreamBuilder>,
+    /// Records-per-chunk for `values.dat`.
+    values_chunk_size: usize,
 }
 
 impl CtfsTraceWriter {
@@ -202,6 +219,15 @@ impl CtfsTraceWriter {
             emit_step_stream: false,
             step_stream_builder: None,
             steps_chunk_size: DEFAULT_STEPS_CHUNK_SIZE,
+            // M23b: the dedicated `values.dat` parallel value stream is OPT-IN
+            // (off by default), exactly like the M23a `steps.dat` split. This
+            // keeps every existing recorder's `.ct` output byte-for-byte
+            // unchanged (no `values.dat`/`values.idx`, `has_value_stream` clear)
+            // until the consumer migration (M22) is ready. Enable explicitly with
+            // `with_value_stream(true)`.
+            emit_value_stream: false,
+            value_stream_builder: None,
+            values_chunk_size: DEFAULT_VALUES_CHUNK_SIZE,
         }
     }
 
@@ -261,6 +287,34 @@ impl CtfsTraceWriter {
     /// Whether the dedicated execution (step) stream is enabled.
     pub fn step_stream_enabled(&self) -> bool {
         self.emit_step_stream
+    }
+
+    /// Enable or disable the dedicated `values.dat` parallel value stream (M23b).
+    ///
+    /// When enabled, `finish_writing_trace_events` writes, in addition to the
+    /// unchanged `events.log`, a `values.dat` parallel value stream
+    /// (StepValues / BindVariable / Cell / Assign… per step) and its companion
+    /// seekable index `values.idx`, and sets the `has_value_stream` capability
+    /// flag in `meta.dat`. The value records are derived from the same value
+    /// events, parallel-indexed to the execution stream (value record N ↔ step
+    /// N), so they are guaranteed consistent with the unified stream. This is
+    /// additive: old readers ignore the extra files. Returns `self` for
+    /// builder-style chaining.
+    pub fn with_value_stream(mut self, enable: bool) -> Self {
+        self.emit_value_stream = enable;
+        self
+    }
+
+    /// Set the records-per-chunk for `values.dat` (seek granularity). Smaller
+    /// chunks give finer seeks at a slightly lower compression ratio.
+    pub fn with_values_chunk_size(mut self, chunk_size: usize) -> Self {
+        self.values_chunk_size = chunk_size.max(1);
+        self
+    }
+
+    /// Whether the dedicated parallel value stream is enabled.
+    pub fn value_stream_enabled(&self) -> bool {
+        self.emit_value_stream
     }
 
     /// Create a new CTFS trace writer using the legacy CBOR format.
@@ -369,6 +423,12 @@ impl AbstractTraceWriter for CtfsTraceWriter {
         if let Some(ref mut builder) = self.step_stream_builder {
             builder.observe(&event);
         }
+        // M23b: feed the dedicated value-stream builder from the SAME event
+        // sequence that produces events.log, so values.dat stays consistent and
+        // parallel-indexed to the step stream.
+        if let Some(ref mut builder) = self.value_stream_builder {
+            builder.observe(&event);
+        }
         match self.serialization_format {
             EventSerializationFormat::Cbor => {
                 let buf: Vec<u8> = Vec::new();
@@ -445,6 +505,8 @@ impl TraceWriter for CtfsTraceWriter {
         self.call_stream_builder = if self.emit_call_stream { Some(CallStreamBuilder::new()) } else { None };
         // M23a: arm the step-stream builder when the dedicated stream is enabled.
         self.step_stream_builder = if self.emit_step_stream { Some(StepStreamBuilder::new()) } else { None };
+        // M23b: arm the value-stream builder when the dedicated stream is enabled.
+        self.value_stream_builder = if self.emit_value_stream { Some(ValueStreamBuilder::new()) } else { None };
 
         Ok(())
     }
@@ -535,6 +597,19 @@ impl TraceWriter for CtfsTraceWriter {
                 let steps_idx_handle = writer.add_file("steps.idx")?;
                 writer.write(steps_idx_handle, &encoded.idx)?;
                 stream_flags |= FLAG_HAS_STEP_STREAM;
+            }
+
+            // M23b: the dedicated parallel value stream + companion index.
+            // Parallel-indexed to the step stream (value record N ↔ step N).
+            if self.emit_value_stream {
+                let records = self.value_stream_builder.take().map(|b| b.finish()).unwrap_or_default();
+                let encoded = encode_value_stream(&records, self.values_chunk_size, DEFAULT_CALLS_ZSTD_LEVEL).map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+
+                let values_handle = writer.add_file("values.dat")?;
+                writer.write(values_handle, &encoded.dat)?;
+                let values_idx_handle = writer.add_file("values.idx")?;
+                writer.write(values_idx_handle, &encoded.idx)?;
+                stream_flags |= FLAG_HAS_VALUE_STREAM;
             }
 
             // Stamp meta.dat with the combined stream-capability flags. The

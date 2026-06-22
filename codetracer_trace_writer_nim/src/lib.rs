@@ -235,6 +235,7 @@ extern "C" {
     // ----- Trace reader (NewTraceReader) -----
 
     fn ct_reader_open(path: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
+    fn ct_reader_refresh(h: *mut std::ffi::c_void, path: *const std::os::raw::c_char) -> i32;
     fn ct_reader_close(h: *mut std::ffi::c_void);
 
     fn ct_reader_step_count(h: *mut std::ffi::c_void) -> u64;
@@ -2459,6 +2460,14 @@ pub struct NimTraceReaderHandle {
     handle: *mut std::ffi::c_void,
 }
 
+impl std::fmt::Debug for NimTraceReaderHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("NimTraceReaderHandle")
+            .field("handle", &self.handle)
+            .finish()
+    }
+}
+
 // Single-threaded Nim library; exclusive &mut/& self gives safety.
 unsafe impl Send for NimTraceReaderHandle {}
 
@@ -2482,6 +2491,18 @@ impl NimTraceReaderHandle {
             Err(last_error().into())
         } else {
             Ok(Self { handle: h })
+        }
+    }
+
+    /// Refresh this handle from a growing `.ct` file, preserving the opaque
+    /// handle identity while making newly-committed CTFS FileEntry sizes visible.
+    pub fn refresh(&mut self, path: &str) -> Result<(), Box<dyn Error>> {
+        let c_path = CString::new(path)?;
+        let rc = unsafe { ct_reader_refresh(self.handle, c_path.as_ptr()) };
+        if rc != 0 {
+            Err(last_error().into())
+        } else {
+            Ok(())
         }
     }
 

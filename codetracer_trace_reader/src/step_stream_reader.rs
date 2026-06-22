@@ -66,7 +66,11 @@ impl StepsIndex {
 /// Decompress one chunk and decode all of its records, carrying the running
 /// absolute `global_line_index` forward within the chunk (reset at the chunk
 /// start, since the first step of a chunk is AbsoluteStep).
-fn decode_chunk_records(compressed: &[u8]) -> Result<Vec<StepStreamRecord>, String> {
+///
+/// Exposed (`pub`) so the db-backend follow-mode split-stream reader (M1) can
+/// decode an appended `steps.dat` chunk through the EXACT same wire-format path
+/// the seekable final-file reader uses, rather than re-implementing the decode.
+pub fn decode_chunk_records(compressed: &[u8]) -> Result<Vec<StepStreamRecord>, String> {
     let raw = zstd::decode_all(std::io::Cursor::new(compressed)).map_err(|e| format!("steps.dat: zstd decode failed: {e}"))?;
     let mut records = Vec::new();
     let mut pos = 0usize;

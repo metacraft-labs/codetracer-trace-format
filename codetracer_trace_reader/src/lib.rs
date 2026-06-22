@@ -35,8 +35,14 @@ pub mod io_event_stream_reader;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod interning_tables_reader;
 
-#[cfg(not(target_arch = "wasm32"))]
-pub mod streaming_ctfs_reader;
+// `streaming_ctfs_reader` (the legacy `events.log`-tailing `StreamingCtfsReader`)
+// was retired in M1 of the CTFS Lazy/Seekable Coverage initiative. Live/streaming
+// replay now runs the REAL-PRODUCT db-backend split-stream reader over a
+// `FollowFileSource` (see `Seek-Based-CTFS-Reader.md` §5.6 and the db-backend
+// `ctfs_trace_reader::follow_stream_source` module + its `follow_stream_flow_test`).
+// The parallel `events.log` streaming reader no longer validated anything the
+// product ships, and had no remaining caller, so it was removed rather than kept
+// as a dead shim.
 
 #[derive(Debug, Clone, Copy)]
 pub enum TraceEventsFileFormat {

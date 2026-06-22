@@ -25,7 +25,7 @@
 
 use codetracer_ctfs::CtfsReader;
 use codetracer_trace_writer::meta_dat::meta_dat_has_step_stream;
-use codetracer_trace_writer::step_stream::{decode_record, StepStreamRecord};
+use codetracer_trace_writer::step_stream::{StepStreamRecord, decode_record};
 
 /// A loaded `steps.idx`: the per-chunk byte offsets into `steps.dat`.
 struct StepsIndex {
@@ -99,24 +99,15 @@ pub struct StepStreamReader {
 }
 
 impl StepStreamReader {
-    /// Open the step stream from an already-open CTFS reader. Returns
-    /// `Ok(None)` when the container has no dedicated step stream (no `meta.dat`
-    /// flag, or no `steps.dat`) — the caller falls back to the unified stream.
-    pub fn open(reader: &mut CtfsReader) -> Result<Option<StepStreamReader>, String> {
-        // Honor the meta.dat capability flag: only treat steps.dat as
-        // authoritative when has_step_stream is set.
-        let has_flag = match reader.read_file("meta.dat") {
-            Ok(meta) => meta_dat_has_step_stream(&meta),
-            Err(_) => false,
-        };
-        if !has_flag {
+    /// Open the step stream from already-loaded CTFS internal-file bytes.
+    ///
+    /// This keeps the format-level reader independent of how the container bytes
+    /// were sourced (local file, follow source, HTTP range, overlay) while
+    /// preserving the exact same decode/cache path as [`Self::open`].
+    pub fn from_files(meta: &[u8], dat: Vec<u8>, idx: Vec<u8>) -> Result<Option<StepStreamReader>, String> {
+        if !meta_dat_has_step_stream(meta) {
             return Ok(None);
         }
-        let dat = match reader.read_file("steps.dat") {
-            Ok(d) => d,
-            Err(_) => return Ok(None),
-        };
-        let idx = reader.read_file("steps.idx").map_err(|e| format!("steps.idx missing despite has_step_stream flag: {e}"))?;
         let index = StepsIndex::parse(&idx)?;
 
         // Compute the total record count: all chunks but the last hold
@@ -141,6 +132,29 @@ impl StepStreamReader {
             record_count,
             cached_chunk: None,
         }))
+    }
+
+    /// Open the step stream from an already-open CTFS reader. Returns
+    /// `Ok(None)` when the container has no dedicated step stream (no `meta.dat`
+    /// flag, or no `steps.dat`) — the caller falls back to the unified stream.
+    pub fn open(reader: &mut CtfsReader) -> Result<Option<StepStreamReader>, String> {
+        // Honor the meta.dat capability flag: only treat steps.dat as
+        // authoritative when has_step_stream is set.
+        let meta = match reader.read_file("meta.dat") {
+            Ok(meta) => meta,
+            Err(_) => return Ok(None),
+        };
+        if !meta_dat_has_step_stream(&meta) {
+            return Ok(None);
+        }
+        let dat = match reader.read_file("steps.dat") {
+            Ok(d) => d,
+            Err(_) => return Ok(None),
+        };
+        let idx = reader
+            .read_file("steps.idx")
+            .map_err(|e| format!("steps.idx missing despite has_step_stream flag: {e}"))?;
+        StepStreamReader::from_files(&meta, dat, idx)
     }
 
     /// Total number of execution-stream records in the stream.

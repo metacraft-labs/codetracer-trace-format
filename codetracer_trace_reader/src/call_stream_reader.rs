@@ -111,24 +111,15 @@ pub struct CallStreamReader {
 }
 
 impl CallStreamReader {
-    /// Open the call stream from an already-open CTFS reader. Returns
-    /// `Ok(None)` when the container has no dedicated call stream (no `meta.dat`
-    /// flag, or no `calls.dat`) — the caller falls back to the unified stream.
-    pub fn open(reader: &mut CtfsReader) -> Result<Option<CallStreamReader>, String> {
-        // Honor the meta.dat capability flag: only treat calls.dat as
-        // authoritative when has_call_stream is set.
-        let has_flag = match reader.read_file("meta.dat") {
-            Ok(meta) => meta_dat_has_call_stream(&meta),
-            Err(_) => false,
-        };
-        if !has_flag {
+    /// Open the call stream from already-loaded CTFS internal-file bytes.
+    ///
+    /// This keeps the format-level reader independent of how the container bytes
+    /// were sourced (local file, follow source, HTTP range, overlay) while
+    /// preserving the exact same decode/cache path as [`Self::open`].
+    pub fn from_files(meta: &[u8], dat: Vec<u8>, idx: Vec<u8>) -> Result<Option<CallStreamReader>, String> {
+        if !meta_dat_has_call_stream(meta) {
             return Ok(None);
         }
-        let dat = match reader.read_file("calls.dat") {
-            Ok(d) => d,
-            Err(_) => return Ok(None),
-        };
-        let idx = reader.read_file("calls.idx").map_err(|e| format!("calls.idx missing despite has_call_stream flag: {e}"))?;
         let index = CallsIndex::parse(&idx)?;
 
         // Compute the total record count: all chunks but the last hold
@@ -153,6 +144,29 @@ impl CallStreamReader {
             record_count,
             cached_chunk: None,
         }))
+    }
+
+    /// Open the call stream from an already-open CTFS reader. Returns
+    /// `Ok(None)` when the container has no dedicated call stream (no `meta.dat`
+    /// flag, or no `calls.dat`) — the caller falls back to the unified stream.
+    pub fn open(reader: &mut CtfsReader) -> Result<Option<CallStreamReader>, String> {
+        // Honor the meta.dat capability flag: only treat calls.dat as
+        // authoritative when has_call_stream is set.
+        let meta = match reader.read_file("meta.dat") {
+            Ok(meta) => meta,
+            Err(_) => return Ok(None),
+        };
+        if !meta_dat_has_call_stream(&meta) {
+            return Ok(None);
+        }
+        let dat = match reader.read_file("calls.dat") {
+            Ok(d) => d,
+            Err(_) => return Ok(None),
+        };
+        let idx = reader
+            .read_file("calls.idx")
+            .map_err(|e| format!("calls.idx missing despite has_call_stream flag: {e}"))?;
+        CallStreamReader::from_files(&meta, dat, idx)
     }
 
     /// Total number of call records in the stream.

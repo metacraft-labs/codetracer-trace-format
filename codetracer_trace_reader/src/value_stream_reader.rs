@@ -95,7 +95,12 @@ fn decode_varint(data: &[u8], pos: &mut usize) -> Result<u64, String> {
 }
 
 /// Decompress one chunk and decode all of its length-prefixed value records.
-fn decode_chunk_records(compressed: &[u8]) -> Result<Vec<ValueRecordEntry>, String> {
+///
+/// Exposed (`pub`) so the db-backend follow-mode split-stream reader (M1b) can
+/// decode an appended `values.dat` chunk through the EXACT same wire-format path
+/// the seekable final-file reader uses, rather than re-implementing the decode —
+/// mirroring [`crate::step_stream_reader::decode_chunk_records`].
+pub fn decode_chunk_records(compressed: &[u8]) -> Result<Vec<ValueRecordEntry>, String> {
     let raw = zstd::decode_all(std::io::Cursor::new(compressed)).map_err(|e| format!("values.dat: zstd decode failed: {e}"))?;
     let mut records = Vec::new();
     let mut pos = 0usize;

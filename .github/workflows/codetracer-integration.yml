@@ -40,104 +40,45 @@ jobs:
             exit 1
           fi
 
-      - name: Setup Nix and Git authentication
-        uses: metacraft-labs/nixos-modules/.github/setup-nix@main
+      # setup-dev-env installs Nix + Git auth and clones the cross-repo
+      # siblings this job needs, replacing the former
+      # nixos-modules/setup-nix + manifest-checkout + resolve-ref +
+      # per-sibling clone-repo steps.
+      #
+      #   * codetracer            — workflow_dispatch `codetracer_ref`
+      #                             override; empty ref (`=`) falls back to
+      #                             the workspace lock, matching the old
+      #                             resolver behaviour.
+      #   * codetracer-native-recorder — required by codetracer's
+      #                             db-backend build.rs at a peer location.
+      #   * codetracer-trace-format-nim — Nim FFI entry point for
+      #                             codetracer_trace_writer_nim's build.rs.
+      #
+      # The action clones siblings adjacent to ${{ github.workspace }}
+      # (i.e. at ${GITHUB_WORKSPACE}/../<name>); downstream steps below
+      # reference them through ${SIBLINGS} accordingly. This repo's own
+      # checkout stays in the `codetracer-trace-format/` subdir.
+      - name: Setup dev env
+        uses: metacraft-labs/metacraft-github-actions/setup-dev-env@main
         with:
-          push-to-cache: false
-          nix-github-token: ${{ steps.app-token.outputs.token }}
+          env-flavor: nix
+          gh-token: ${{ steps.app-token.outputs.token }}
           substituters: ${{ vars.ATTIC_SUBSTITUTER }}
           trusted-public-keys: ${{ vars.ATTIC_TRUSTED_PUBLIC_KEY }}
+          siblings: |
+            codetracer=${{ github.event.inputs.codetracer_ref }}
+            codetracer-native-recorder=main
+            codetracer-trace-format-nim=main
 
-      - name: Checkout metacraft-manifests (workspace locks)
-        uses: actions/checkout@v5
-        with:
-          repository: metacraft-labs/metacraft-manifests
-          ref: latest
-          path: _manifests
-          token: ${{ steps.app-token.outputs.token }}
-
-      - name: Resolve cross-repo workspace-lock SHA
-        shell: bash
+      # The siblings live at ${GITHUB_WORKSPACE}/../<name>. Expose that
+      # parent directory once so the remaining steps can address each
+      # sibling without repeating the `..` traversal, and point the Nim
+      # FFI override at the trace-format-nim clone.
+      - name: Export sibling paths
         run: |
-          case "${{ github.event_name }}" in
-            pull_request) CANDS="${{ github.event.pull_request.base.sha }}" ;;
-            push) CANDS="${{ github.sha }} ${{ github.event.before }}" ;;
-            *) CANDS="${{ github.sha }}" ;;
-          esac
-          LOCK_SHA=""
-          for c in $CANDS; do
-            [ -z "$c" ] && continue
-            [ "$c" = "0000000000000000000000000000000000000000" ] && continue
-            if "${{ github.workspace }}/codetracer-trace-format/scripts/resolve-sibling-rev.sh" \
-                 --repo codetracer-trace-format --sibling codetracer \
-                 --manifest-dir "${{ github.workspace }}/_manifests" \
-                 --sha "$c" --no-walk >/dev/null 2>&1; then
-              LOCK_SHA="$c"; break
-            fi
-          done
-          if [ -z "$LOCK_SHA" ]; then
-            echo "::error::No repo-workspaces workspace lock for codetracer-trace-format (candidates: $CANDS). The commit must be published through the workspace tooling."
-            exit 1
-          fi
-          echo "CT_MANIFEST_DIR=${{ github.workspace }}/_manifests" >> "$GITHUB_ENV"
-          echo "CT_LOCK_SHA=$LOCK_SHA" >> "$GITHUB_ENV"
-          echo "Resolved cross-repo lock SHA for codetracer-trace-format: $LOCK_SHA"
-
-      - name: Resolve codetracer ref
-        id: resolve-ref
-        shell: bash
-        run: |
-          # The workflow_dispatch input still overrides; otherwise resolve
-          # from the workspace lock.
-          if [[ -n "${{ github.event.inputs.codetracer_ref }}" ]]; then
-            REF="${{ github.event.inputs.codetracer_ref }}"
-          else
-            REF="$("${{ github.workspace }}/codetracer-trace-format/scripts/resolve-sibling-rev.sh" \
-              --repo codetracer-trace-format --sibling codetracer \
-              --manifest-dir "$CT_MANIFEST_DIR" --sha "$CT_LOCK_SHA" --no-walk)"
-          fi
-          echo "ref=$REF" >> "$GITHUB_OUTPUT"
-          echo "Resolved codetracer ref: $REF"
-
-      - name: Clone codetracer
-        uses: metacraft-labs/metacraft-github-actions/clone-repo@main
-        with:
-          repo: metacraft-labs/codetracer
-          ref: ${{ steps.resolve-ref.outputs.ref }}
-          path: codetracer
-          gh-token: ${{ steps.app-token.outputs.token }}
-          submodules: 'true'
-
-      # codetracer/src/db-backend/build.rs requires a sibling
-      # `codetracer-native-recorder` checkout at
-      # `<manifest>/../../../codetracer-native-recorder`, i.e. at the same
-      # workspace level as the `codetracer/` clone above. Without it the
-      # replay-server build panics before the WASM tests can compile.
-      - name: Clone codetracer-native-recorder (sibling for db-backend build)
-        uses: metacraft-labs/metacraft-github-actions/clone-repo@main
-        with:
-          repo: metacraft-labs/codetracer-native-recorder
-          ref: main
-          path: codetracer-native-recorder
-          gh-token: ${{ steps.app-token.outputs.token }}
-
-      # codetracer_trace_writer_nim/build.rs (in *this* repo, but
-      # invoked again here through the codetracer build graph that
-      # pulls in this trace-format crate via path = "../codetracer-trace-format/...")
-      # needs the codetracer-trace-format-nim sibling for the
-      # codetracer_trace_writer_ffi.nim entry point.  Without it the
-      # build panics with "Nim FFI entry point not found".  The override
-      # env var CODETRACER_TRACE_FORMAT_NIM_DIR is honoured.
-      - name: Clone codetracer-trace-format-nim (sibling for trace_writer_nim FFI)
-        uses: metacraft-labs/metacraft-github-actions/clone-repo@main
-        with:
-          repo: metacraft-labs/codetracer-trace-format-nim
-          ref: main
-          path: codetracer-trace-format-nim
-          gh-token: ${{ steps.app-token.outputs.token }}
-      - name: Export Nim sibling path
-        run: |
-          echo "CODETRACER_TRACE_FORMAT_NIM_DIR=${GITHUB_WORKSPACE}/codetracer-trace-format-nim" >> "$GITHUB_ENV"
+          SIBLINGS="$(cd "${GITHUB_WORKSPACE}/.." && pwd)"
+          echo "SIBLINGS=${SIBLINGS}" >> "$GITHUB_ENV"
+          echo "CODETRACER_TRACE_FORMAT_NIM_DIR=${SIBLINGS}/codetracer-trace-format-nim" >> "$GITHUB_ENV"
 
       # codetracer/src/db-backend/build.rs (line 762) invokes
       # `direnv exec <native-recorder-dir> bash ct_emulator/build_native_api.sh`
@@ -150,8 +91,8 @@ jobs:
       # up.
       - name: Pre-allow direnv for codetracer-native-recorder
         run: |
-          if [[ -f codetracer-native-recorder/.envrc ]]; then
-            direnv allow codetracer-native-recorder || true
+          if [[ -f "${SIBLINGS}/codetracer-native-recorder/.envrc" ]]; then
+            direnv allow "${SIBLINGS}/codetracer-native-recorder" || true
           fi
 
       # Strip the NimYAML test/yaml-test-suite sub-submodule. NimYAML's
@@ -167,7 +108,7 @@ jobs:
       - name: Drop dead yaml-test-suite sub-submodule from NimYAML
         run: |
           set -euo pipefail
-          NIMYAML_DIR=codetracer/libs/NimYAML
+          NIMYAML_DIR="${SIBLINGS}/codetracer/libs/NimYAML"
           if [[ -f "${NIMYAML_DIR}/.gitmodules" ]] \
              && grep -q "test/yaml-test-suite" "${NIMYAML_DIR}/.gitmodules"; then
             cd "${NIMYAML_DIR}"
@@ -187,7 +128,7 @@ jobs:
             cd - >/dev/null
             # Re-stage NimYAML at codetracer level so the parent repo sees
             # the new commit pointer.
-            cd codetracer
+            cd "${SIBLINGS}/codetracer"
             git add libs/NimYAML
             git -c user.name="CI" -c user.email="ci@local" commit --no-gpg-sign \
               -m "CI: bump NimYAML to drop yaml-test-suite sub-submodule" || true
@@ -195,15 +136,18 @@ jobs:
 
       - name: Replace trace-format submodule with PR code
         run: |
-          rm -rf codetracer/libs/codetracer-trace-format
-          cp -r codetracer-trace-format codetracer/libs/codetracer-trace-format
-          cd codetracer
+          rm -rf "${SIBLINGS}/codetracer/libs/codetracer-trace-format"
+          cp -r "${GITHUB_WORKSPACE}/codetracer-trace-format" "${SIBLINGS}/codetracer/libs/codetracer-trace-format"
+          cd "${SIBLINGS}/codetracer"
           git add libs/codetracer-trace-format
           git -c user.name="CI" -c user.email="ci@local" commit --no-gpg-sign -m "CI: use PR trace-format code" || true
 
+      # This step builds the *sibling* codetracer repo via its own flake's
+      # dev env (`nix develop` in codetracer/), not this repo's, so it is
+      # intentionally not routed through `dev-exec`.
       - name: Run WASM flow integration test
         run: |
-          cd codetracer
+          cd "${SIBLINGS}/codetracer"
           nix develop .?submodules=1 --command bash -c '
             set -e
             rustup target add wasm32-wasip1 2>/dev/null || true
@@ -223,6 +167,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: codetracer-integration-logs
-          path: codetracer/target/
+          path: ../codetracer/target/
           retention-days: 14
           if-no-files-found: ignore

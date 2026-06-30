@@ -41,11 +41,13 @@
             packages = [
               # Rust toolchain
               toolchainsPkgs.rust-stable
+              toolchainsPkgs.nim-2_2
+              toolchainsPkgs.nimble
 
               # Native dependencies for crates
-              pkgs.capnproto  # capnpc for codetracer_trace_format_capnp
+              pkgs.capnproto # capnpc for codetracer_trace_format_capnp
               pkgs.pkg-config
-              pkgs.zstd       # libzstd for zeekstd/zstd-sys
+              pkgs.zstd # libzstd for zeekstd/zstd-sys
 
               # Development tools
               pkgs.cargo-edit

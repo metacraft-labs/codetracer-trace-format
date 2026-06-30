@@ -272,9 +272,7 @@ impl FileWriter {
             level += 1;
 
             if level > 5 {
-                return Err(CtfsError::Io(std::io::Error::other(
-                    "file too large: exceeds 5-level mapping",
-                )));
+                return Err(CtfsError::Io(std::io::Error::other("file too large: exceeds 5-level mapping")));
             }
 
             // Follow or create the chain pointer from current_level_block[N-1]

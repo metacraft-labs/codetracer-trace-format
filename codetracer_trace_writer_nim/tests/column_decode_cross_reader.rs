@@ -154,61 +154,30 @@ fn nim_and_rust_decoders_agree_on_every_step_in_fixture() {
         .register_path_with_line_lengths(path2, &line_lengths[2])
         .expect("register path 2");
 
-    // Emit a sequence of step events whose conceptual (file, line,
-    // column) coverage hits:
-    //   - first position in the trace (file 0, line 1, col 1)
-    //   - intra-line column motion (file 0, line 1, col 1 -> col 5
-    //     via DeltaColumn)
-    //   - cross-line transition (file 0 -> file 1 line 1 via
-    //     AbsoluteStep on a different path)
-    //   - column motion inside the new line (file 1, line 1, col 3)
-    //   - jump to a later line within the same file (file 1, line 2)
-    //   - extended column motion within the middle line (file 1,
-    //     line 2, col 10)
-    //   - cross-file boundary deep into the trace (file 2, line 1)
-    //   - final column on the last file (file 2, line 1, col 4)
-    //
-    // `register_step` lands the cursor at column 1 of the requested
-    // line.  `write_delta_column(d)` then advances the cursor's
-    // column by `d` (and the GLI by `d` in the column-aware spec
-    // where GLI is one-dimensional).  The expected (file, line, col)
-    // for each step is recorded alongside the writer call so we can
-    // assert end-to-end.
+    // Emit a sequence of pending line steps annotated with column
+    // deltas.  Current split-stream FFI semantics fold a delta into the
+    // unflushed line step, so each `(register_step, write_delta_column)`
+    // pair below becomes one absolute step at the requested
+    // `(file, line, column)`.
     let mut expected: Vec<ExpectedStep> = Vec::new();
 
-    // Step 0: emit start at (file 0, line 1, col 1).  `start` is the
-    // first AbsoluteStep on the trace.
+    // Step 0: start at (file 0, line 1), then annotate column 5.
     writer.start(path0, Line(1));
-    expected.push(ExpectedStep { file: 0, line: 1, column: 1 });
-
-    // Step 1: advance to (file 0, line 1, col 5) via a +4 delta column.
     writer.write_delta_column(4);
     expected.push(ExpectedStep { file: 0, line: 1, column: 5 });
 
-    // Step 2: cross-file jump to (file 1, line 1, col 1).
+    // Step 1: cross-file jump to (file 1, line 1), then annotate column 3.
     writer.register_step(path1, Line(1));
-    expected.push(ExpectedStep { file: 1, line: 1, column: 1 });
-
-    // Step 3: advance to (file 1, line 1, col 3) via a +2 delta column.
     writer.write_delta_column(2);
     expected.push(ExpectedStep { file: 1, line: 1, column: 3 });
 
-    // Step 4: jump to (file 1, line 2, col 1) via a register_step on
-    // the same path.
+    // Step 2: jump to (file 1, line 2), then annotate column 10.
     writer.register_step(path1, Line(2));
-    expected.push(ExpectedStep { file: 1, line: 2, column: 1 });
-
-    // Step 5: advance to (file 1, line 2, col 10) via a +9 delta
-    // column — exercises a longer intra-line column run.
     writer.write_delta_column(9);
     expected.push(ExpectedStep { file: 1, line: 2, column: 10 });
 
-    // Step 6: cross-file jump to (file 2, line 1, col 1).
+    // Step 3: cross-file jump to (file 2, line 1), then annotate column 4.
     writer.register_step(path2, Line(1));
-    expected.push(ExpectedStep { file: 2, line: 1, column: 1 });
-
-    // Step 7: advance to (file 2, line 1, col 4) — the last
-    // addressable position in the trace.
     writer.write_delta_column(3);
     expected.push(ExpectedStep { file: 2, line: 1, column: 4 });
 

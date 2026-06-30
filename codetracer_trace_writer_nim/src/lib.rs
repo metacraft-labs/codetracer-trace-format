@@ -1266,19 +1266,14 @@ impl NimTraceWriter {
         unsafe { trace_writer_register_step(self.handle, c_path.as_ptr(), line.0 as i64) }
     }
 
-    /// C1: column-aware register_step.  The Nim multi-stream writer
-    /// emits column-bearing Step events as the pair
+    /// C1: column-aware register_step.  The Nim multi-stream FFI accepts
+    /// column-bearing steps as the call sequence
     /// `trace_writer_register_step(path, line)` + `trace_writer_register_delta_column(col - 1)`:
     /// `register_step` lands the cursor at column 1 of the requested
-    /// line (per the multi-stream writer's
-    /// `lastGlobalLineIndex = toGlobalLineIndex(path, line)` reset, see
-    /// `codetracer-trace-format-nim/src/codetracer_trace_writer/multi_stream_writer.nim:467,494`)
-    /// and `register_delta_column(col - 1)` advances the cursor's
-    /// column to the desired 1-based target.  This mirrors the JS
-    /// recorder's emission pattern (see
-    /// `codetracer-js-recorder/crates/recorder_native/src/lib.rs:1331-1356`),
-    /// so non-JS recorders calling this wrapper now get the same
-    /// `DeltaColumn` (tag 0x07) wire shape on the trace.
+    /// line and the following delta annotates that pending step before
+    /// it is flushed.  Current split-stream traces therefore carry one
+    /// absolute step at the requested `(line, column)` instead of an
+    /// intermediate column-1 step plus a separate delta step.
     ///
     /// Pre-conditions:
     ///   * [`enable_column_aware_steps`] must have been called before
@@ -1292,8 +1287,8 @@ impl NimTraceWriter {
     /// back to the column-less `register_step` path so the event still
     /// lands and older traces remain bit-for-bit compatible.
     pub fn register_step_with_column(&mut self, path: &Path, line: Line, column: Option<Line>) {
-        // Always land the line transition first.  The Nim writer interns
-        // the path and resets its column cursor to column 1 of `line`.
+        // Always land the line transition first.  The Nim FFI interns
+        // the path and buffers a pending step at column 1 of `line`.
         self.register_step(path, line);
 
         // Layer the column nudge on top only when the writer has opted
@@ -1310,10 +1305,8 @@ impl NimTraceWriter {
             return;
         };
         // CTFS uses 1-based columns; column 1 needs no nudge.  Any
-        // larger column needs a `DeltaColumn(col - 1)` to advance from
-        // the just-reset cursor.  This is the same arithmetic the JS
-        // recorder uses ("new_col - 1, regardless of whether the
-        // previous step was on the same line").
+        // larger column annotates the pending step with `col - 1` before
+        // the FFI flushes it into the split execution stream.
         let delta = col.0 - 1;
         if delta != 0 {
             self.write_delta_column(delta);

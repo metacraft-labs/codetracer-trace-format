@@ -114,7 +114,15 @@ fn decode_varint(data: &[u8], pos: &mut usize) -> Result<u64, String> {
 /// Serialize a `meta.dat` byte buffer. `flags` carries the capability bitfield
 /// (e.g. [`FLAG_HAS_CALL_STREAM`]).
 #[allow(clippy::too_many_arguments)]
-pub fn encode_meta_dat(recording_id: &str, program: &str, args: &[String], workdir: &str, recorder_id: &str, paths: &[String], flags: u16) -> Vec<u8> {
+pub fn encode_meta_dat(
+    recording_id: &str,
+    program: &str,
+    args: &[String],
+    workdir: &str,
+    recorder_id: &str,
+    paths: &[String],
+    flags: u16,
+) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(&META_DAT_MAGIC);
     out.extend_from_slice(&META_DAT_VERSION.to_le_bytes());
@@ -331,7 +339,15 @@ mod tests {
         assert!(meta_dat_has_interning_tables(&buf));
 
         // Interning tables alone.
-        let buf_it = encode_meta_dat("01949fcc-7d92-7e9c-aaaa-bbbbbbbbbbbb", "prog", &[], "", "", &[], FLAG_HAS_INTERNING_TABLES);
+        let buf_it = encode_meta_dat(
+            "01949fcc-7d92-7e9c-aaaa-bbbbbbbbbbbb",
+            "prog",
+            &[],
+            "",
+            "",
+            &[],
+            FLAG_HAS_INTERNING_TABLES,
+        );
         assert!(meta_dat_has_interning_tables(&buf_it));
         assert!(!meta_dat_has_io_event_stream(&buf_it));
         assert!(!meta_dat_has_value_stream(&buf_it));

@@ -10,9 +10,7 @@
 //! (`codetracer-trace-format-spec/trace-events.md` §"Decoding
 //! `global_position_index`") to a Rust-native implementation.
 
-use codetracer_trace_reader::global_position_decoder::{
-    ColumnAwareStepRecord, DecodeError, DecodedPosition, GlobalPositionDecoder,
-};
+use codetracer_trace_reader::global_position_decoder::{ColumnAwareStepRecord, DecodeError, DecodedPosition, GlobalPositionDecoder};
 
 /// Three-file fixture used by every test in this module.
 ///
@@ -37,10 +35,7 @@ fn decode_global_position_index_first_step_file_zero_line_one_column_one() {
     let pos = decoder
         .decode_global_position_index(0)
         .expect("GLI 0 must decode on a fixture with at least one column");
-    assert_eq!(
-        pos,
-        DecodedPosition { file: 0, line: 1, column: 1 }
-    );
+    assert_eq!(pos, DecodedPosition { file: 0, line: 1, column: 1 });
 }
 
 #[test]
@@ -49,16 +44,17 @@ fn decode_global_position_index_same_line_column_advances() {
 
     // GLI = 5 → file 0, line 1, column 6  (offset 5 inside line 1 of file 0).
     let pos = decoder.decode_global_position_index(5).expect("GLI 5 valid");
-    assert_eq!(
-        pos,
-        DecodedPosition { file: 0, line: 1, column: 6 }
-    );
+    assert_eq!(pos, DecodedPosition { file: 0, line: 1, column: 6 });
 
     // GLI = 9 → still file 0, line 1, column 10 (the last column of line 1).
     let pos = decoder.decode_global_position_index(9).expect("GLI 9 valid");
     assert_eq!(
         pos,
-        DecodedPosition { file: 0, line: 1, column: 10 }
+        DecodedPosition {
+            file: 0,
+            line: 1,
+            column: 10
+        }
     );
 }
 
@@ -67,21 +63,18 @@ fn decode_global_position_index_line_transition_resets_column() {
     let decoder = GlobalPositionDecoder::from_line_lengths(three_file_fixture());
 
     // GLI = 10 → first column of line 2 in file 0 (line transitions reset column to 1).
-    let pos = decoder
-        .decode_global_position_index(10)
-        .expect("GLI 10 valid");
-    assert_eq!(
-        pos,
-        DecodedPosition { file: 0, line: 2, column: 1 }
-    );
+    let pos = decoder.decode_global_position_index(10).expect("GLI 10 valid");
+    assert_eq!(pos, DecodedPosition { file: 0, line: 2, column: 1 });
 
     // GLI = 29 → last column of line 2 in file 0.
-    let pos = decoder
-        .decode_global_position_index(29)
-        .expect("GLI 29 valid");
+    let pos = decoder.decode_global_position_index(29).expect("GLI 29 valid");
     assert_eq!(
         pos,
-        DecodedPosition { file: 0, line: 2, column: 20 }
+        DecodedPosition {
+            file: 0,
+            line: 2,
+            column: 20
+        }
     );
 }
 
@@ -90,68 +83,47 @@ fn decode_global_position_index_file_transition() {
     let decoder = GlobalPositionDecoder::from_line_lengths(three_file_fixture());
 
     // GLI = 30 → first column of file 1's line 1 (crossed inter-file boundary).
-    let pos = decoder
-        .decode_global_position_index(30)
-        .expect("GLI 30 valid (first byte of file 1)");
-    assert_eq!(
-        pos,
-        DecodedPosition { file: 1, line: 1, column: 1 }
-    );
+    let pos = decoder.decode_global_position_index(30).expect("GLI 30 valid (first byte of file 1)");
+    assert_eq!(pos, DecodedPosition { file: 1, line: 1, column: 1 });
 
     // GLI = 35 → first column of file 1's line 2 (5 columns on line 1 → next file
     // 1 offset is 5 into line 2's [0, 15) range).
-    let pos = decoder
-        .decode_global_position_index(35)
-        .expect("GLI 35 valid");
-    assert_eq!(
-        pos,
-        DecodedPosition { file: 1, line: 2, column: 1 }
-    );
+    let pos = decoder.decode_global_position_index(35).expect("GLI 35 valid");
+    assert_eq!(pos, DecodedPosition { file: 1, line: 2, column: 1 });
 
     // GLI = 49 → file 1, line 2, column 15 (last column of line 2).
-    let pos = decoder
-        .decode_global_position_index(49)
-        .expect("GLI 49 valid");
+    let pos = decoder.decode_global_position_index(49).expect("GLI 49 valid");
     assert_eq!(
         pos,
-        DecodedPosition { file: 1, line: 2, column: 15 }
+        DecodedPosition {
+            file: 1,
+            line: 2,
+            column: 15
+        }
     );
 
     // GLI = 50 → file 1, line 3, column 1.
-    let pos = decoder
-        .decode_global_position_index(50)
-        .expect("GLI 50 valid");
-    assert_eq!(
-        pos,
-        DecodedPosition { file: 1, line: 3, column: 1 }
-    );
+    let pos = decoder.decode_global_position_index(50).expect("GLI 50 valid");
+    assert_eq!(pos, DecodedPosition { file: 1, line: 3, column: 1 });
 
     // GLI = 74 → last column of last line of file 1.
-    let pos = decoder
-        .decode_global_position_index(74)
-        .expect("GLI 74 valid");
+    let pos = decoder.decode_global_position_index(74).expect("GLI 74 valid");
     assert_eq!(
         pos,
-        DecodedPosition { file: 1, line: 3, column: 25 }
+        DecodedPosition {
+            file: 1,
+            line: 3,
+            column: 25
+        }
     );
 
     // GLI = 75 → file 2 line 1 column 1.
-    let pos = decoder
-        .decode_global_position_index(75)
-        .expect("GLI 75 valid");
-    assert_eq!(
-        pos,
-        DecodedPosition { file: 2, line: 1, column: 1 }
-    );
+    let pos = decoder.decode_global_position_index(75).expect("GLI 75 valid");
+    assert_eq!(pos, DecodedPosition { file: 2, line: 1, column: 1 });
 
     // GLI = 81 → last addressable column.
-    let pos = decoder
-        .decode_global_position_index(81)
-        .expect("GLI 81 valid");
-    assert_eq!(
-        pos,
-        DecodedPosition { file: 2, line: 1, column: 7 }
-    );
+    let pos = decoder.decode_global_position_index(81).expect("GLI 81 valid");
+    assert_eq!(pos, DecodedPosition { file: 2, line: 1, column: 7 });
 }
 
 #[test]
@@ -159,22 +131,14 @@ fn decode_global_position_index_past_end_is_rejected() {
     let decoder = GlobalPositionDecoder::from_line_lengths(three_file_fixture());
 
     // GLI = 82 is the first address past the final file.
-    let err = decoder
-        .decode_global_position_index(82)
-        .expect_err("GLI 82 is past end of last file");
-    assert!(
-        matches!(err, DecodeError::OutOfRange { .. }),
-        "expected OutOfRange, got {err:?}",
-    );
+    let err = decoder.decode_global_position_index(82).expect_err("GLI 82 is past end of last file");
+    assert!(matches!(err, DecodeError::OutOfRange { .. }), "expected OutOfRange, got {err:?}",);
 
     // GLI = 100_000 is far past the end.
     let err = decoder
         .decode_global_position_index(100_000)
         .expect_err("GLI 100000 is far past the trace");
-    assert!(
-        matches!(err, DecodeError::OutOfRange { .. }),
-        "expected OutOfRange, got {err:?}",
-    );
+    assert!(matches!(err, DecodeError::OutOfRange { .. }), "expected OutOfRange, got {err:?}",);
 }
 
 #[test]
@@ -184,10 +148,7 @@ fn decode_global_position_index_empty_decoder_errors_cleanly() {
     let err = decoder
         .decode_global_position_index(0)
         .expect_err("decoder with no files must reject all GLIs");
-    assert!(
-        matches!(err, DecodeError::NoFiles),
-        "expected NoFiles, got {err:?}",
-    );
+    assert!(matches!(err, DecodeError::NoFiles), "expected NoFiles, got {err:?}",);
 }
 
 #[test]
@@ -197,29 +158,14 @@ fn decode_global_position_index_file_with_no_lines_is_skipped_cleanly() {
     // no positions to the global range.
     let decoder = GlobalPositionDecoder::from_line_lengths(vec![vec![], vec![3, 4]]);
 
-    let pos = decoder
-        .decode_global_position_index(0)
-        .expect("GLI 0 must decode to file 1");
-    assert_eq!(
-        pos,
-        DecodedPosition { file: 1, line: 1, column: 1 }
-    );
+    let pos = decoder.decode_global_position_index(0).expect("GLI 0 must decode to file 1");
+    assert_eq!(pos, DecodedPosition { file: 1, line: 1, column: 1 });
 
-    let pos = decoder
-        .decode_global_position_index(2)
-        .expect("GLI 2 must decode");
-    assert_eq!(
-        pos,
-        DecodedPosition { file: 1, line: 1, column: 3 }
-    );
+    let pos = decoder.decode_global_position_index(2).expect("GLI 2 must decode");
+    assert_eq!(pos, DecodedPosition { file: 1, line: 1, column: 3 });
 
-    let pos = decoder
-        .decode_global_position_index(3)
-        .expect("GLI 3 must decode to next line");
-    assert_eq!(
-        pos,
-        DecodedPosition { file: 1, line: 2, column: 1 }
-    );
+    let pos = decoder.decode_global_position_index(3).expect("GLI 3 must decode to next line");
+    assert_eq!(pos, DecodedPosition { file: 1, line: 2, column: 1 });
 }
 
 #[test]
@@ -236,12 +182,36 @@ fn column_aware_step_record_surfaces_column_some_on_column_aware_trace() {
     assert_eq!(
         records,
         vec![
-            ColumnAwareStepRecord { file: 0, line: 1, column: Some(1) },
-            ColumnAwareStepRecord { file: 0, line: 1, column: Some(6) },
-            ColumnAwareStepRecord { file: 0, line: 2, column: Some(1) },
-            ColumnAwareStepRecord { file: 1, line: 1, column: Some(1) },
-            ColumnAwareStepRecord { file: 2, line: 1, column: Some(1) },
-            ColumnAwareStepRecord { file: 2, line: 1, column: Some(7) },
+            ColumnAwareStepRecord {
+                file: 0,
+                line: 1,
+                column: Some(1)
+            },
+            ColumnAwareStepRecord {
+                file: 0,
+                line: 1,
+                column: Some(6)
+            },
+            ColumnAwareStepRecord {
+                file: 0,
+                line: 2,
+                column: Some(1)
+            },
+            ColumnAwareStepRecord {
+                file: 1,
+                line: 1,
+                column: Some(1)
+            },
+            ColumnAwareStepRecord {
+                file: 2,
+                line: 1,
+                column: Some(1)
+            },
+            ColumnAwareStepRecord {
+                file: 2,
+                line: 1,
+                column: Some(7)
+            },
         ]
     );
 }
@@ -271,14 +241,20 @@ fn decode_many_resolves_cleanly_across_a_trailing_empty_file() {
     // line-only steps without having to reach a non-existent runtime
     // path.
     let decoder = GlobalPositionDecoder::from_line_lengths(vec![vec![3], vec![]]);
-    let records = decoder
-        .decode_many(&[0, 2])
-        .expect("GLIs inside file 0 must resolve");
+    let records = decoder.decode_many(&[0, 2]).expect("GLIs inside file 0 must resolve");
     assert_eq!(
         records,
         vec![
-            ColumnAwareStepRecord { file: 0, line: 1, column: Some(1) },
-            ColumnAwareStepRecord { file: 0, line: 1, column: Some(3) },
+            ColumnAwareStepRecord {
+                file: 0,
+                line: 1,
+                column: Some(1)
+            },
+            ColumnAwareStepRecord {
+                file: 0,
+                line: 1,
+                column: Some(3)
+            },
         ]
     );
 }
@@ -294,16 +270,28 @@ fn column_aware_step_record_line_only_constructor_surfaces_column_none() {
     let rec = ColumnAwareStepRecord::line_only(2, 7);
     assert_eq!(
         rec,
-        ColumnAwareStepRecord { file: 2, line: 7, column: None }
+        ColumnAwareStepRecord {
+            file: 2,
+            line: 7,
+            column: None
+        }
     );
     // `from_decoded` is the column-bearing mirror — surface both
     // constructors so consumers can pick the right shape without
     // probing the Option directly.
-    let decoded = DecodedPosition { file: 2, line: 7, column: 14 };
+    let decoded = DecodedPosition {
+        file: 2,
+        line: 7,
+        column: 14,
+    };
     let bearing = ColumnAwareStepRecord::from_decoded(decoded);
     assert_eq!(
         bearing,
-        ColumnAwareStepRecord { file: 2, line: 7, column: Some(14) }
+        ColumnAwareStepRecord {
+            file: 2,
+            line: 7,
+            column: Some(14)
+        }
     );
 }
 

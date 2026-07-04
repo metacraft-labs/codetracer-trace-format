@@ -151,10 +151,7 @@ impl Catalog {
             // Wrap so the error includes the index path the loader was
             // trying to read — invaluable when the user mistyped
             // `CT_CATALOG_PATH`.
-            CatalogError::Io(io::Error::new(
-                e.kind(),
-                format!("reading {}: {e}", index_path.display()),
-            ))
+            CatalogError::Io(io::Error::new(e.kind(), format!("reading {}: {e}", index_path.display())))
         })?;
         let text = std::str::from_utf8(&bytes).map_err(|e| {
             CatalogError::Io(io::Error::new(
@@ -218,9 +215,7 @@ impl Catalog {
             // fail closed rather than risk a partial hex collision.
             return None;
         }
-        self.entries
-            .iter()
-            .find(|e| e.sha256.trim().eq_ignore_ascii_case(&needle))
+        self.entries.iter().find(|e| e.sha256.trim().eq_ignore_ascii_case(&needle))
     }
 
     /// Lookup by library name (and optional version).
@@ -247,9 +242,7 @@ impl Catalog {
         self.entries
             .iter()
             .filter(|e| {
-                e.library.to_ascii_lowercase().contains(&n)
-                    || e.version.to_ascii_lowercase().contains(&n)
-                    || e.file.to_ascii_lowercase().contains(&n)
+                e.library.to_ascii_lowercase().contains(&n) || e.version.to_ascii_lowercase().contains(&n) || e.file.to_ascii_lowercase().contains(&n)
             })
             .collect()
     }
@@ -314,11 +307,7 @@ mod tests {
     fn write_test_catalog(dir: &Path) {
         fs::create_dir_all(dir.join("catalog/lodash/4.17.21")).unwrap();
         fs::create_dir_all(dir.join("catalog/tinylib/1.0.0")).unwrap();
-        fs::write(
-            dir.join("catalog/lodash/4.17.21/lodash.min.js.toml"),
-            "# placeholder\n",
-        )
-        .unwrap();
+        fs::write(dir.join("catalog/lodash/4.17.21/lodash.min.js.toml"), "# placeholder\n").unwrap();
         fs::write(
             dir.join("catalog/tinylib/1.0.0/tinylib.min.js.toml"),
             r#"

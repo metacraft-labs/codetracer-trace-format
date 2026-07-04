@@ -51,11 +51,7 @@ fn spawn_mock(status_line: &'static str, response_body: &'static str) -> (String
     spawn_mock_with_handler(status_line, response_body, Arc::new(AtomicBool::new(false)))
 }
 
-fn spawn_mock_with_handler(
-    status_line: &'static str,
-    response_body: &'static str,
-    saw_request: Arc<AtomicBool>,
-) -> (String, Arc<AtomicBool>) {
+fn spawn_mock_with_handler(status_line: &'static str, response_body: &'static str, saw_request: Arc<AtomicBool>) -> (String, Arc<AtomicBool>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock");
     let port = listener.local_addr().expect("local_addr").port();
     let saw_request_clone = saw_request.clone();
@@ -83,8 +79,7 @@ fn spawn_mock_with_handler(
                     // arrives in a single read; we break on the first
                     // `\r\n\r\n` we see and trust the body is whole.
                     if let Some(hdr_end) = total.windows(4).position(|w| w == b"\r\n\r\n") {
-                        let header_block = std::str::from_utf8(&total[..hdr_end])
-                            .unwrap_or("");
+                        let header_block = std::str::from_utf8(&total[..hdr_end]).unwrap_or("");
                         let body_start = hdr_end + 4;
                         let content_length = header_block
                             .lines()
@@ -139,10 +134,7 @@ fn no_api_key_yields_skip_loud_message() {
         output.status,
         String::from_utf8_lossy(&output.stderr)
     );
-    assert!(
-        stdout.contains("SKIP infer-llm"),
-        "expected `SKIP infer-llm` in stdout; got: {stdout}"
-    );
+    assert!(stdout.contains("SKIP infer-llm"), "expected `SKIP infer-llm` in stdout; got: {stdout}");
     assert!(
         stdout.contains("CT_LLM_API_KEY") || stdout.contains("ANTHROPIC_API_KEY"),
         "expected env-var hint in skip message; got: {stdout}"
@@ -174,20 +166,12 @@ fn infer_llm_with_mock_server() {
         min_confidence: 0.5,
         max_bindings: 50,
     };
-    let result = infer_llm("function a(b){return b();}", "fake-key", &opts)
-        .expect("mock server call should succeed");
+    let result = infer_llm("function a(b){return b();}", "fake-key", &opts).expect("mock server call should succeed");
 
-    let pairs: HashSet<(String, String)> = result
-        .entries
-        .iter()
-        .map(|e| (e.entry.from.clone(), e.entry.to.clone()))
+    let pairs: HashSet<(String, String)> = result.entries.iter().map(|e| (e.entry.from.clone(), e.entry.to.clone())).collect();
+    let expected: HashSet<(String, String)> = [("a".to_string(), "userId".to_string()), ("b".to_string(), "callback".to_string())]
+        .into_iter()
         .collect();
-    let expected: HashSet<(String, String)> = [
-        ("a".to_string(), "userId".to_string()),
-        ("b".to_string(), "callback".to_string()),
-    ]
-    .into_iter()
-    .collect();
     assert_eq!(pairs, expected, "mock-returned renames pass through");
 
     // Field-level checks: file + scope propagate to every row.
@@ -237,8 +221,7 @@ fn http_error_propagates() {
     // must turn this into `InferLlmError::HttpError` (NOT a
     // JsonParseError on the error body).
     let body = r#"{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}"#;
-    let (base, _) =
-        spawn_mock("HTTP/1.1 401 Unauthorized", Box::leak(body.to_string().into_boxed_str()));
+    let (base, _) = spawn_mock("HTTP/1.1 401 Unauthorized", Box::leak(body.to_string().into_boxed_str()));
 
     let opts = InferLlmOptions {
         api_base: base,
@@ -247,10 +230,7 @@ fn http_error_propagates() {
     let err = infer_llm("function a(){}", "fake-key", &opts).unwrap_err();
     match err {
         InferLlmError::HttpError(msg) => {
-            assert!(
-                msg.contains("401"),
-                "expected HTTP error message to mention the status code; got: {msg}"
-            );
+            assert!(msg.contains("401"), "expected HTTP error message to mention the status code; got: {msg}");
         }
         other => panic!("expected HttpError, got {other:?}"),
     }
@@ -278,17 +258,9 @@ fn min_confidence_filters() {
     };
     let result = infer_llm("function a(b,c){}", "fake-key", &opts).expect("mock call");
 
-    let pairs: HashSet<(String, String)> = result
-        .entries
-        .iter()
-        .map(|e| (e.entry.from.clone(), e.entry.to.clone()))
-        .collect();
-    let expected: HashSet<(String, String)> =
-        [("a".to_string(), "highConf".to_string())].into_iter().collect();
-    assert_eq!(
-        pairs, expected,
-        "only the high-confidence rename survives the 0.7 threshold"
-    );
+    let pairs: HashSet<(String, String)> = result.entries.iter().map(|e| (e.entry.from.clone(), e.entry.to.clone())).collect();
+    let expected: HashSet<(String, String)> = [("a".to_string(), "highConf".to_string())].into_iter().collect();
+    assert_eq!(pairs, expected, "only the high-confidence rename survives the 0.7 threshold");
 
     // Stats: all three rows count as `proposed`, only one as `above_confidence`.
     assert_eq!(result.stats.bindings_proposed, 3);

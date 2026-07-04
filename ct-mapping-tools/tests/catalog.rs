@@ -176,9 +176,7 @@ fn catalog_lookup_by_sha_matches_recorded_source() {
 fn catalog_lookup_unknown_sha_returns_none() {
     let (_guard, root) = build_test_catalog();
     let cat = Catalog::load(&root).expect("load");
-    let miss = cat.lookup_by_sha(
-        "deadbeef00000000000000000000000000000000000000000000000000000000",
-    );
+    let miss = cat.lookup_by_sha("deadbeef00000000000000000000000000000000000000000000000000000000");
     assert!(miss.is_none(), "unknown sha must not match any entry");
     // Truncated input is also a miss (defensive — we don't want a
     // partial hex prefix to false-positive against a 64-char entry).
@@ -195,10 +193,7 @@ fn compute_file_sha256_matches_recorded_value() {
     let p = dir.path().join("foo.js");
     fs::write(&p, b"hello").unwrap();
     let digest = compute_file_sha256(&p).expect("sha");
-    assert_eq!(
-        digest,
-        "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824"
-    );
+    assert_eq!(digest, "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824");
 }
 
 /// Library-name lookup with an explicit version returns the one

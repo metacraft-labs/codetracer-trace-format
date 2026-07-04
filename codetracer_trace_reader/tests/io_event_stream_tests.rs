@@ -102,14 +102,24 @@ fn events_dat_matches_events_log() {
         let events = reader.load_trace_events(&ct_path).unwrap();
         events.iter().filter(|e| matches!(e, TraceLowLevelEvent::Event(_))).count()
     };
-    assert_eq!(from_dat.len(), event_count, "io event record count must equal the Event count in events.log");
+    assert_eq!(
+        from_dat.len(),
+        event_count,
+        "io event record count must equal the Event count in events.log"
+    );
 
     // The pre-first-step event attributes to step 0; later events to their step.
     assert_eq!(from_dat[0].step_id, 0, "the startup banner (pre-first-step) attributes to step 0");
     assert!(from_dat.iter().any(|r| r.step_id > 0), "expected events attributed to later steps");
     // Variety: at least one stderr/error and one file-write record.
-    assert!(from_dat.iter().any(|r| r.kind == EventLogKind::Error as u8), "expected an error/stderr record");
-    assert!(from_dat.iter().any(|r| r.kind == EventLogKind::WriteFile as u8), "expected a file-write record");
+    assert!(
+        from_dat.iter().any(|r| r.kind == EventLogKind::Error as u8),
+        "expected an error/stderr record"
+    );
+    assert!(
+        from_dat.iter().any(|r| r.kind == EventLogKind::WriteFile as u8),
+        "expected a file-write record"
+    );
 }
 
 #[test]
@@ -117,10 +127,15 @@ fn paginated_read_across_chunk_boundary() {
     let dir = tempfile::tempdir().unwrap();
     let ct_path = write_trace(&dir, true, 8);
 
-    let mut es = codetracer_trace_reader::io_event_stream_reader::open_io_event_stream(&ct_path).unwrap().unwrap();
+    let mut es = codetracer_trace_reader::io_event_stream_reader::open_io_event_stream(&ct_path)
+        .unwrap()
+        .unwrap();
     let expected = expected_records_from_events(&ct_path);
     assert_eq!(es.count() as usize, expected.len());
-    assert!(es.count() > es.chunk_size() as u64 * 2, "need ≥3 chunks for a meaningful cross-boundary page");
+    assert!(
+        es.count() > es.chunk_size() as u64 * 2,
+        "need ≥3 chunks for a meaningful cross-boundary page"
+    );
 
     // A page that straddles the chunk-0 / chunk-1 boundary.
     let cs = es.chunk_size() as u64;
@@ -153,7 +168,9 @@ fn fetching_one_event_decompresses_only_its_chunk() {
     let dir = tempfile::tempdir().unwrap();
     let ct_path = write_trace(&dir, true, 8);
 
-    let mut es = codetracer_trace_reader::io_event_stream_reader::open_io_event_stream(&ct_path).unwrap().unwrap();
+    let mut es = codetracer_trace_reader::io_event_stream_reader::open_io_event_stream(&ct_path)
+        .unwrap()
+        .unwrap();
     let chunk_size = es.chunk_size();
     assert_eq!(chunk_size, 8);
     let count = es.count();
@@ -202,7 +219,10 @@ fn events_log_byte_identical_with_and_without_io_event_stream() {
     let mut r_on = codetracer_ctfs::CtfsReader::open(&ct_on).unwrap();
     let events_off = r_off.read_file("events.log").unwrap();
     let events_on = r_on.read_file("events.log").unwrap();
-    assert_eq!(events_off, events_on, "events.log must be byte-identical regardless of the io-event-stream flag");
+    assert_eq!(
+        events_off, events_on,
+        "events.log must be byte-identical regardless of the io-event-stream flag"
+    );
 
     // The flag-on container additionally carries events.dat + events.idx; the
     // flag-off one must not. events.dat is DISTINCT from events.log.

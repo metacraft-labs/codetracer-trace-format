@@ -36,8 +36,7 @@ fn nim_steps_dat_read_by_rust_reader() {
             return;
         }
     };
-    let glis_path = std::env::var("CT_NIM_STEP_FIXTURE_GLIS")
-        .expect("CT_NIM_STEP_FIXTURE set but CT_NIM_STEP_FIXTURE_GLIS missing");
+    let glis_path = std::env::var("CT_NIM_STEP_FIXTURE_GLIS").expect("CT_NIM_STEP_FIXTURE set but CT_NIM_STEP_FIXTURE_GLIS missing");
 
     // Expected absolute global_line_index sequence the Nim FFI reader decoded
     // out of the same bundle (one u64 per line).

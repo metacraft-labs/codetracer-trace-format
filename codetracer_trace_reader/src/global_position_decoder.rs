@@ -248,10 +248,7 @@ impl GlobalPositionDecoder {
     /// (`codetracer-trace-format-spec/trace-events.md` §"Decoding
     /// `global_position_index`") bit-for-bit.  See the module-level
     /// docs for the cost analysis and back-compat notes.
-    pub fn decode_global_position_index(
-        &self,
-        position: u64,
-    ) -> Result<DecodedPosition, DecodeError> {
+    pub fn decode_global_position_index(&self, position: u64) -> Result<DecodedPosition, DecodeError> {
         if self.file_base.is_empty() {
             return Err(DecodeError::NoFiles);
         }
@@ -284,8 +281,7 @@ impl GlobalPositionDecoder {
             // file or fall off the end of the table.
             if self.file_base[mid as usize] <= position
                 && self.file_size[mid as usize] > 0
-                && position
-                    < self.file_base[mid as usize].saturating_add(self.file_size[mid as usize])
+                && position < self.file_base[mid as usize].saturating_add(self.file_size[mid as usize])
             {
                 fid = mid;
                 break;
@@ -312,10 +308,7 @@ impl GlobalPositionDecoder {
         // forward past any zero-size successors to find the real
         // owner.
         let mut owner = fid as usize;
-        while owner < self.file_base.len()
-            && (self.file_size[owner] == 0
-                || position
-                    >= self.file_base[owner].saturating_add(self.file_size[owner]))
+        while owner < self.file_base.len() && (self.file_size[owner] == 0 || position >= self.file_base[owner].saturating_add(self.file_size[owner]))
         {
             owner += 1;
         }
@@ -382,10 +375,7 @@ impl GlobalPositionDecoder {
     /// in there).  Hard errors ([`DecodeError::NoFiles`],
     /// [`DecodeError::OutOfRange`]) short-circuit the whole call so
     /// the caller can surface a single contextual message.
-    pub fn decode_many(
-        &self,
-        positions: &[u64],
-    ) -> Result<Vec<ColumnAwareStepRecord>, DecodeError> {
+    pub fn decode_many(&self, positions: &[u64]) -> Result<Vec<ColumnAwareStepRecord>, DecodeError> {
         let mut out = Vec::with_capacity(positions.len());
         for &p in positions {
             match self.decode_global_position_index(p) {
@@ -400,11 +390,7 @@ impl GlobalPositionDecoder {
                     // would have done the actual line lookup, but
                     // without a per-line table we have no basis to
                     // pick anything else.
-                    out.push(ColumnAwareStepRecord {
-                        file,
-                        line: 1,
-                        column: None,
-                    });
+                    out.push(ColumnAwareStepRecord { file, line: 1, column: None });
                 }
                 Err(e) => return Err(e),
             }

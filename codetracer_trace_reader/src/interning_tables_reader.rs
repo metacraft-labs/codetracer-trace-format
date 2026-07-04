@@ -138,7 +138,10 @@ impl VarSizeTable {
         let start = self.offsets[id] as usize;
         let end = self.offsets[id + 1] as usize;
         if start > end || end > self.dat.len() {
-            return Err(format!("interning table: record {id} offsets [{start}, {end}) out of range (dat len {})", self.dat.len()));
+            return Err(format!(
+                "interning table: record {id} offsets [{start}, {end}) out of range (dat len {})",
+                self.dat.len()
+            ));
         }
         Ok(&self.dat[start..end])
     }

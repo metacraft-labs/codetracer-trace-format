@@ -33,9 +33,7 @@ fn parse_line(line: &str) -> IoEventRecord {
     let mut metadata: Option<Vec<u8>> = None;
     let mut content: Option<Vec<u8>> = None;
     for field in line.split(';') {
-        let (key, val) = field
-            .split_once('=')
-            .unwrap_or_else(|| panic!("malformed sidecar field: {field:?}"));
+        let (key, val) = field.split_once('=').unwrap_or_else(|| panic!("malformed sidecar field: {field:?}"));
         match key {
             "kind" => kind = Some(val.parse::<u8>().expect("parse kind")),
             "step_id" => step_id = Some(val.parse::<u64>().expect("parse step_id")),
@@ -72,8 +70,8 @@ fn nim_events_dat_read_by_rust_reader() {
             return;
         }
     };
-    let events_path = std::env::var("CT_NIM_IO_EVENT_FIXTURE_EVENTS")
-        .expect("CT_NIM_IO_EVENT_FIXTURE set but CT_NIM_IO_EVENT_FIXTURE_EVENTS missing");
+    let events_path =
+        std::env::var("CT_NIM_IO_EVENT_FIXTURE_EVENTS").expect("CT_NIM_IO_EVENT_FIXTURE set but CT_NIM_IO_EVENT_FIXTURE_EVENTS missing");
 
     // Expected per-record I/O events the Nim FFI reader decoded out of the same
     // bundle (one line per record, in stream order).

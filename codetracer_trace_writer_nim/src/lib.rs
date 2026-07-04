@@ -144,10 +144,7 @@ extern "C" {
     // §"Column Encoding — `DeltaColumn` (chosen)" and §"Reader Behaviour
     // and Back-Compat".
     fn trace_writer_enable_column_aware_steps(handle: *mut std::ffi::c_void);
-    fn trace_writer_register_delta_column(
-        handle: *mut std::ffi::c_void,
-        column_delta: i64,
-    );
+    fn trace_writer_register_delta_column(handle: *mut std::ffi::c_void, column_delta: i64);
 
     // ----- Column-aware capability flags (M-capability-flags) -----
     //
@@ -249,12 +246,7 @@ extern "C" {
     /// 0 on success (writes the value via `out_value`); returns 1 when
     /// the trace is not column-aware or no per-line data exists for
     /// `(file_id, line_index0)`.
-    fn ct_reader_line_length(
-        h: *mut std::ffi::c_void,
-        file_id: u64,
-        line_index0: u32,
-        out_value: *mut u32,
-    ) -> i32;
+    fn ct_reader_line_length(h: *mut std::ffi::c_void, file_id: u64, line_index0: u32, out_value: *mut u32) -> i32;
     fn ct_reader_function_count(h: *mut std::ffi::c_void) -> u64;
     fn ct_reader_type_count(h: *mut std::ffi::c_void) -> u64;
     fn ct_reader_varname_count(h: *mut std::ffi::c_void) -> u64;
@@ -313,12 +305,7 @@ extern "C" {
     /// `paths.dat` data but failed to flip `meta.dat` bit 4 at close
     /// time).  Returns the number of entries written, or `u64::MAX`
     /// on error.
-    fn ct_reader_step_global_line_indices(
-        h: *mut std::ffi::c_void,
-        start_n: u64,
-        count: u64,
-        out_glis: *mut u64,
-    ) -> u64;
+    fn ct_reader_step_global_line_indices(h: *mut std::ffi::c_void, start_n: u64, count: u64, out_glis: *mut u64) -> u64;
 
     /// Ungated sibling of `ct_reader_line_length` — surfaces the
     /// addressable column count for `(file_id, line_index0)` even when
@@ -328,12 +315,7 @@ extern "C" {
     /// out of range, or when `line_index0` is past the file's known
     /// line table.  See the Nim-side `lineLengthRaw` proc for the
     /// recorder-side context this exists to recover from.
-    fn ct_reader_line_length_raw(
-        h: *mut std::ffi::c_void,
-        file_id: u64,
-        line_index0: u32,
-        out_value: *mut u32,
-    ) -> i32;
+    fn ct_reader_line_length_raw(h: *mut std::ffi::c_void, file_id: u64, line_index0: u32, out_value: *mut u32) -> i32;
 
     /// Companion to `ct_reader_line_length_raw`: returns the number of
     /// lines the trace has registered for `file_id` via paths.dat
@@ -577,11 +559,7 @@ mod tests {
             None,
             "queries past the file's known line table should return None"
         );
-        assert_eq!(
-            reader.line_length(1, 0),
-            None,
-            "queries against an unknown file id should return None"
-        );
+        assert_eq!(reader.line_length(1, 0), None, "queries against an unknown file id should return None");
     }
 
     /// Back-compat smoke test: when the writer has *not* opted into
@@ -658,14 +636,12 @@ mod tests {
 
         let trace_path = dir.path().join("ctfs_caps.ct");
         let reader = NimTraceReaderHandle::open(trace_path.to_str().unwrap()).unwrap();
+        assert!(reader.has_column_aware_steps(), "capability opt-ins must imply column-aware mode");
         assert!(
-            reader.has_column_aware_steps(),
-            "capability opt-ins must imply column-aware mode"
+            reader.supports_column_breakpoints(),
+            "FLAG_SUPPORTS_COLUMN_BREAKPOINTS bit must round-trip"
         );
-        assert!(reader.supports_column_breakpoints(),
-            "FLAG_SUPPORTS_COLUMN_BREAKPOINTS bit must round-trip");
-        assert!(reader.supports_column_motions(),
-            "FLAG_SUPPORTS_COLUMN_MOTIONS bit must round-trip");
+        assert!(reader.supports_column_motions(), "FLAG_SUPPORTS_COLUMN_MOTIONS bit must round-trip");
     }
 
     /// Default-state contract: a writer that does NOT call either
@@ -701,10 +677,14 @@ mod tests {
         let trace_path = dir.path().join("ctfs_caps_default.ct");
         let reader = NimTraceReaderHandle::open(trace_path.to_str().unwrap()).unwrap();
         assert!(reader.has_column_aware_steps());
-        assert!(!reader.supports_column_breakpoints(),
-            "capability bit must stay clear unless the writer opts in");
-        assert!(!reader.supports_column_motions(),
-            "capability bit must stay clear unless the writer opts in");
+        assert!(
+            !reader.supports_column_breakpoints(),
+            "capability bit must stay clear unless the writer opts in"
+        );
+        assert!(
+            !reader.supports_column_motions(),
+            "capability bit must stay clear unless the writer opts in"
+        );
     }
 
     /// Smoke test for the alternate-source-views API: register a path,
@@ -764,17 +744,8 @@ mod tests {
         assert_eq!(v1, 1, "second registered view should have index 1");
 
         // Error path: an unknown path_id must surface as `Err`.
-        let stray = writer.register_source_view(
-            PathId(99),
-            1,
-            "stray.fmt.js",
-            b"x",
-            b"",
-        );
-        assert!(
-            stray.is_err(),
-            "register_source_view with out-of-range path_id must fail"
-        );
+        let stray = writer.register_source_view(PathId(99), 1, "stray.fmt.js", b"x", b"");
+        assert!(stray.is_err(), "register_source_view with out-of-range path_id must fail");
 
         writer.finish_writing_trace_events().unwrap();
         writer.finish_writing_trace_metadata().unwrap();
@@ -786,10 +757,7 @@ mod tests {
         // round-trip test does the byte-level verification).
         let trace_path = dir.path().join("ctfs_source_views.ct");
         let reader = NimTraceReaderHandle::open(trace_path.to_str().unwrap()).unwrap();
-        assert!(
-            reader.path_count() >= 1,
-            "trace must register at least one path"
-        );
+        assert!(reader.path_count() >= 1, "trace must register at least one path");
     }
 }
 
@@ -1525,18 +1493,15 @@ impl NimTraceWriter {
     /// channel and returned as `Err`.  The returned `PathId(0)` is a
     /// placeholder mirroring [`ensure_path_id`](Self::ensure_path_id) —
     /// the Nim library owns the real ID assignment.
-    pub fn register_path_with_line_lengths(
-        &mut self,
-        path: &Path,
-        line_lengths: &[u32],
-    ) -> Result<PathId, Box<dyn Error>> {
+    pub fn register_path_with_line_lengths(&mut self, path: &Path, line_lengths: &[u32]) -> Result<PathId, Box<dyn Error>> {
         let c_path = path_to_cstring(path);
         // Cast `usize` to `i32` (the FFI signature).  Line counts >2B
         // are not realistic — modern source files cap out long before
         // that — but we still guard against overflow for safety.
-        let line_count: i32 = line_lengths.len().try_into().map_err(|_| -> Box<dyn Error> {
-            "register_path_with_line_lengths: line_count overflows i32".into()
-        })?;
+        let line_count: i32 = line_lengths
+            .len()
+            .try_into()
+            .map_err(|_| -> Box<dyn Error> { "register_path_with_line_lengths: line_count overflows i32".into() })?;
         // Empty slices may still produce a non-NULL pointer in Rust's
         // current implementation, but it's safe to forward as-is — the
         // FFI treats `line_count == 0` as "no per-line data".
@@ -1545,14 +1510,7 @@ impl NimTraceWriter {
         } else {
             line_lengths.as_ptr()
         };
-        let rc = unsafe {
-            trace_writer_register_path_with_line_lengths(
-                self.handle,
-                c_path.as_ptr(),
-                line_count,
-                line_lengths_ptr,
-            )
-        };
+        let rc = unsafe { trace_writer_register_path_with_line_lengths(self.handle, c_path.as_ptr(), line_count, line_lengths_ptr) };
         if rc != 0 {
             return Err(last_error().into());
         }
@@ -1591,16 +1549,8 @@ impl NimTraceWriter {
         // round-trip through CString just to get the pointer).
         let name_ptr = view_name.as_ptr() as *const std::os::raw::c_char;
         let name_len = view_name.len();
-        let content_ptr = if content.is_empty() {
-            std::ptr::null()
-        } else {
-            content.as_ptr()
-        };
-        let sourcemap_ptr = if sourcemap.is_empty() {
-            std::ptr::null()
-        } else {
-            sourcemap.as_ptr()
-        };
+        let content_ptr = if content.is_empty() { std::ptr::null() } else { content.as_ptr() };
+        let sourcemap_ptr = if sourcemap.is_empty() { std::ptr::null() } else { sourcemap.as_ptr() };
         let rc = unsafe {
             trace_writer_register_source_view(
                 self.handle,
@@ -1997,11 +1947,7 @@ pub trait TraceWriter: Send {
     /// [`NimTraceWriter`] override forwards through the canonical
     /// FFI entry point.  Returns the [`PathId`] assigned by the writer
     /// (matching the contract of [`ensure_path_id`]).
-    fn register_path_with_line_lengths(
-        &mut self,
-        path: &Path,
-        _line_lengths: &[u32],
-    ) -> Result<PathId, Box<dyn Error>> {
+    fn register_path_with_line_lengths(&mut self, path: &Path, _line_lengths: &[u32]) -> Result<PathId, Box<dyn Error>> {
         self.register_path(path);
         Ok(self.ensure_path_id(path))
     }
@@ -2212,11 +2158,7 @@ impl TraceWriter for NimTraceWriter {
     fn write_delta_column(&mut self, column_delta: i64) {
         NimTraceWriter::write_delta_column(self, column_delta)
     }
-    fn register_path_with_line_lengths(
-        &mut self,
-        path: &Path,
-        line_lengths: &[u32],
-    ) -> Result<PathId, Box<dyn Error>> {
+    fn register_path_with_line_lengths(&mut self, path: &Path, line_lengths: &[u32]) -> Result<PathId, Box<dyn Error>> {
         NimTraceWriter::register_path_with_line_lengths(self, path, line_lengths)
     }
     fn register_source_view(
@@ -2455,9 +2397,7 @@ pub struct NimTraceReaderHandle {
 
 impl std::fmt::Debug for NimTraceReaderHandle {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("NimTraceReaderHandle")
-            .field("handle", &self.handle)
-            .finish()
+        f.debug_struct("NimTraceReaderHandle").field("handle", &self.handle).finish()
     }
 }
 
@@ -2697,12 +2637,8 @@ impl NimTraceReaderHandle {
         lines: &mut [u64],
         columns: &mut [u64],
     ) -> Result<u64, Box<dyn Error>> {
-        let count_usize = usize::try_from(count)
-            .map_err(|_| "step_locations_with_columns count does not fit usize")?;
-        if path_ids.len() < count_usize
-            || lines.len() < count_usize
-            || columns.len() < count_usize
-        {
+        let count_usize = usize::try_from(count).map_err(|_| "step_locations_with_columns count does not fit usize")?;
+        if path_ids.len() < count_usize || lines.len() < count_usize || columns.len() < count_usize {
             return Err(format!(
                 "step_locations_with_columns buffers too small: count={count}, \
                  path_ids={}, lines={}, columns={}",
@@ -2755,27 +2691,15 @@ impl NimTraceReaderHandle {
     /// [`step_locations_with_columns`]: Self::step_locations_with_columns
     /// [`line_length_raw`]: Self::line_length_raw
     /// [`line_count_raw`]: Self::line_count_raw
-    pub fn step_global_line_indices(
-        &self,
-        start_n: u64,
-        count: u64,
-        out: &mut [u64],
-    ) -> Result<u64, Box<dyn Error>> {
-        let count_usize = usize::try_from(count)
-            .map_err(|_| "step_global_line_indices count does not fit usize")?;
+    pub fn step_global_line_indices(&self, start_n: u64, count: u64, out: &mut [u64]) -> Result<u64, Box<dyn Error>> {
+        let count_usize = usize::try_from(count).map_err(|_| "step_global_line_indices count does not fit usize")?;
         if out.len() < count_usize {
-            return Err(format!(
-                "step_global_line_indices buffer too small: count={count}, out={}",
-                out.len()
-            )
-            .into());
+            return Err(format!("step_global_line_indices buffer too small: count={count}, out={}", out.len()).into());
         }
         if count == 0 {
             return Ok(0);
         }
-        let written = unsafe {
-            ct_reader_step_global_line_indices(self.handle, start_n, count, out.as_mut_ptr())
-        };
+        let written = unsafe { ct_reader_step_global_line_indices(self.handle, start_n, count, out.as_mut_ptr()) };
         if written == u64::MAX {
             Err(last_error().into())
         } else {
@@ -2793,8 +2717,7 @@ impl NimTraceReaderHandle {
     /// [`line_length`]: Self::line_length
     pub fn line_length_raw(&self, file_id: u64, line_index0: u32) -> Option<u32> {
         let mut value: u32 = 0;
-        let rc =
-            unsafe { ct_reader_line_length_raw(self.handle, file_id, line_index0, &mut value) };
+        let rc = unsafe { ct_reader_line_length_raw(self.handle, file_id, line_index0, &mut value) };
         if rc == 0 {
             Some(value)
         } else {

@@ -110,8 +110,7 @@ fn min_confidence_filters_ambiguous() {
 
     // `a` is ambiguous (50/50) → dropped.
     // `b` is unambiguous (100%) → kept.
-    let expected: HashSet<(String, String)> =
-        [("b".to_string(), "only".to_string())].into_iter().collect();
+    let expected: HashSet<(String, String)> = [("b".to_string(), "only".to_string())].into_iter().collect();
 
     assert_eq!(
         pairs_of(&result.entries),

@@ -18,7 +18,7 @@ use std::path::Path;
 
 use codetracer_trace_types::*;
 use codetracer_trace_writer::ctfs_writer::CtfsTraceWriter;
-use codetracer_trace_writer::step_stream::{global_line_index, StepStreamRecord};
+use codetracer_trace_writer::step_stream::{StepStreamRecord, global_line_index};
 use codetracer_trace_writer::trace_writer::TraceWriter;
 
 /// Write a trace whose steps exercise: a forced-absolute first step, sequential
@@ -201,7 +201,10 @@ fn events_log_byte_identical_with_and_without_step_stream() {
     let mut r_on = codetracer_ctfs::CtfsReader::open(&ct_on).unwrap();
     let events_off = r_off.read_file("events.log").unwrap();
     let events_on = r_on.read_file("events.log").unwrap();
-    assert_eq!(events_off, events_on, "events.log must be byte-identical regardless of the step-stream flag");
+    assert_eq!(
+        events_off, events_on,
+        "events.log must be byte-identical regardless of the step-stream flag"
+    );
 
     // The flag-on container additionally carries steps.dat + steps.idx; the
     // flag-off one must not.

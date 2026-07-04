@@ -24,8 +24,7 @@ use std::path::{Path, PathBuf};
 use codetracer_trace_types::*;
 use codetracer_trace_writer::ctfs_writer::CtfsTraceWriter;
 use codetracer_trace_writer::meta_dat::{
-    meta_dat_has_call_stream, meta_dat_has_interning_tables, meta_dat_has_io_event_stream,
-    meta_dat_has_step_stream, meta_dat_has_value_stream,
+    meta_dat_has_call_stream, meta_dat_has_interning_tables, meta_dat_has_io_event_stream, meta_dat_has_step_stream, meta_dat_has_value_stream,
 };
 use codetracer_trace_writer::trace_writer::TraceWriter;
 
@@ -63,7 +62,10 @@ fn write_trace(dir: &Path, disable_splits: bool) -> PathBuf {
         TraceWriter::register_variable_with_full_value(
             &mut writer,
             &format!("v{ln}"),
-            ValueRecord::Int { i: ln * 10, type_id: int_type },
+            ValueRecord::Int {
+                i: ln * 10,
+                type_id: int_type,
+            },
         );
     }
 
@@ -129,8 +131,7 @@ fn default_bundle_events_round_trip_via_events_log() {
     let dir = tempfile::tempdir().unwrap();
     let ct = write_trace(dir.path(), false);
 
-    let mut reader =
-        codetracer_trace_reader::create_trace_reader(codetracer_trace_reader::TraceEventsFileFormat::Ctfs);
+    let mut reader = codetracer_trace_reader::create_trace_reader(codetracer_trace_reader::TraceEventsFileFormat::Ctfs);
     let events = reader.load_trace_events(&ct).unwrap();
 
     // The four explicit steps (lines 2..=5) plus the implicit leading step are
@@ -170,10 +171,7 @@ fn disabled_bundle_is_events_log_only_legacy() {
     assert!(r.read_file("events.log").is_ok(), "legacy bundle must carry events.log");
 
     for f in SPLIT_DATA_FILES {
-        assert!(
-            r.read_file(f).is_err(),
-            "legacy (splits-off) bundle must NOT carry split file `{f}`"
-        );
+        assert!(r.read_file(f).is_err(), "legacy (splits-off) bundle must NOT carry split file `{f}`");
     }
     assert!(
         r.read_file("meta.dat").is_err(),
@@ -181,8 +179,7 @@ fn disabled_bundle_is_events_log_only_legacy() {
     );
 
     // Events still round-trip through the legacy events.log path.
-    let mut reader =
-        codetracer_trace_reader::create_trace_reader(codetracer_trace_reader::TraceEventsFileFormat::Ctfs);
+    let mut reader = codetracer_trace_reader::create_trace_reader(codetracer_trace_reader::TraceEventsFileFormat::Ctfs);
     let events = reader.load_trace_events(&ct).unwrap();
     let step_lines: Vec<i64> = events
         .iter()

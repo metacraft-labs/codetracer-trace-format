@@ -434,7 +434,6 @@ mod tests {
         let event = TraceLowLevelEvent::Step(StepRecord {
             path_id: PathId(42),
             line: Line(100),
-
         });
         let mut buf = Vec::new();
         encode_event(&event, &mut buf).unwrap();
@@ -467,7 +466,6 @@ mod tests {
             TraceLowLevelEvent::Step(StepRecord {
                 path_id: PathId(1),
                 line: Line(10),
-
             }),
             TraceLowLevelEvent::Path("/hello".into()),
             TraceLowLevelEvent::DropLastStep,
@@ -489,7 +487,6 @@ mod tests {
             TraceLowLevelEvent::Step(StepRecord {
                 path_id: PathId(1),
                 line: Line(1),
-
             }),
             TraceLowLevelEvent::BindVariable(BindVariableRecord {
                 variable_id: VariableId(5),

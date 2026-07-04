@@ -135,7 +135,9 @@ impl IoEventStreamReader {
             Ok(d) => d,
             Err(_) => return Ok(None),
         };
-        let idx = reader.read_file("events.idx").map_err(|e| format!("events.idx missing despite has_io_event_stream flag: {e}"))?;
+        let idx = reader
+            .read_file("events.idx")
+            .map_err(|e| format!("events.idx missing despite has_io_event_stream flag: {e}"))?;
         let index = EventsIndex::parse(&idx)?;
 
         // Compute the total record count: all chunks but the last hold

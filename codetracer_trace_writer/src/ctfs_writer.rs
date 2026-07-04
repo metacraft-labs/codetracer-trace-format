@@ -8,13 +8,15 @@ use zeekstd::{EncodeOptions, Encoder, FrameSizePolicy};
 
 use crate::{
     abstract_trace_writer::{AbstractTraceWriter, AbstractTraceWriterData},
-    call_stream::{encode_call_stream, CallStreamBuilder, DEFAULT_CALLS_CHUNK_SIZE},
-    event_stream::{encode_io_event_stream, IoEventStreamBuilder, DEFAULT_EVENTS_CHUNK_SIZE},
+    call_stream::{CallStreamBuilder, DEFAULT_CALLS_CHUNK_SIZE, encode_call_stream},
+    event_stream::{DEFAULT_EVENTS_CHUNK_SIZE, IoEventStreamBuilder, encode_io_event_stream},
     interning_tables::InterningTablesBuilder,
-    meta_dat::{encode_meta_dat, FLAG_HAS_CALL_STREAM, FLAG_HAS_INTERNING_TABLES, FLAG_HAS_IO_EVENT_STREAM, FLAG_HAS_STEP_STREAM, FLAG_HAS_VALUE_STREAM},
-    step_stream::{encode_step_stream, StepStreamBuilder, DEFAULT_STEPS_CHUNK_SIZE},
+    meta_dat::{
+        FLAG_HAS_CALL_STREAM, FLAG_HAS_INTERNING_TABLES, FLAG_HAS_IO_EVENT_STREAM, FLAG_HAS_STEP_STREAM, FLAG_HAS_VALUE_STREAM, encode_meta_dat,
+    },
+    step_stream::{DEFAULT_STEPS_CHUNK_SIZE, StepStreamBuilder, encode_step_stream},
     trace_writer::TraceWriter,
-    value_stream::{encode_value_stream, ValueStreamBuilder, DEFAULT_VALUES_CHUNK_SIZE},
+    value_stream::{DEFAULT_VALUES_CHUNK_SIZE, ValueStreamBuilder, encode_value_stream},
 };
 use codetracer_trace_types::TraceLowLevelEvent;
 
@@ -652,9 +654,17 @@ impl TraceWriter for CtfsTraceWriter {
         // M23b: arm the value-stream builder when the dedicated stream is enabled.
         self.value_stream_builder = if self.emit_value_stream { Some(ValueStreamBuilder::new()) } else { None };
         // M23c: arm the I/O event-stream builder when the dedicated stream is enabled.
-        self.io_event_stream_builder = if self.emit_io_event_stream { Some(IoEventStreamBuilder::new()) } else { None };
+        self.io_event_stream_builder = if self.emit_io_event_stream {
+            Some(IoEventStreamBuilder::new())
+        } else {
+            None
+        };
         // M23d: arm the interning-tables builder when the tables are enabled.
-        self.interning_tables_builder = if self.emit_interning_tables { Some(InterningTablesBuilder::new()) } else { None };
+        self.interning_tables_builder = if self.emit_interning_tables {
+            Some(InterningTablesBuilder::new())
+        } else {
+            None
+        };
 
         Ok(())
     }
@@ -726,7 +736,8 @@ impl TraceWriter for CtfsTraceWriter {
             // M17a: the dedicated call stream + companion index.
             if self.emit_call_stream {
                 let records = self.call_stream_builder.take().map(|b| b.finish()).unwrap_or_default();
-                let encoded = encode_call_stream(&records, self.calls_chunk_size, DEFAULT_CALLS_ZSTD_LEVEL).map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+                let encoded = encode_call_stream(&records, self.calls_chunk_size, DEFAULT_CALLS_ZSTD_LEVEL)
+                    .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
                 let calls_handle = writer.add_file("calls.dat")?;
                 writer.write(calls_handle, &encoded.dat)?;
@@ -737,8 +748,13 @@ impl TraceWriter for CtfsTraceWriter {
 
             // M23a: the dedicated execution (step) stream + companion index.
             if self.emit_step_stream {
-                let stream = self.step_stream_builder.take().map(|b| b.finish()).unwrap_or_else(|| StepStreamBuilder::new().finish());
-                let encoded = encode_step_stream(&stream, self.steps_chunk_size, DEFAULT_CALLS_ZSTD_LEVEL).map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+                let stream = self
+                    .step_stream_builder
+                    .take()
+                    .map(|b| b.finish())
+                    .unwrap_or_else(|| StepStreamBuilder::new().finish());
+                let encoded = encode_step_stream(&stream, self.steps_chunk_size, DEFAULT_CALLS_ZSTD_LEVEL)
+                    .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
                 let steps_handle = writer.add_file("steps.dat")?;
                 writer.write(steps_handle, &encoded.dat)?;
@@ -751,7 +767,8 @@ impl TraceWriter for CtfsTraceWriter {
             // Parallel-indexed to the step stream (value record N ↔ step N).
             if self.emit_value_stream {
                 let records = self.value_stream_builder.take().map(|b| b.finish()).unwrap_or_default();
-                let encoded = encode_value_stream(&records, self.values_chunk_size, DEFAULT_CALLS_ZSTD_LEVEL).map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+                let encoded = encode_value_stream(&records, self.values_chunk_size, DEFAULT_CALLS_ZSTD_LEVEL)
+                    .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
                 let values_handle = writer.add_file("values.dat")?;
                 writer.write(values_handle, &encoded.dat)?;
@@ -767,7 +784,8 @@ impl TraceWriter for CtfsTraceWriter {
             // legacy `events.log` written above — do not collide the names.
             if self.emit_io_event_stream {
                 let records = self.io_event_stream_builder.take().map(|b| b.finish()).unwrap_or_default();
-                let encoded = encode_io_event_stream(&records, self.events_chunk_size, DEFAULT_CALLS_ZSTD_LEVEL).map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+                let encoded = encode_io_event_stream(&records, self.events_chunk_size, DEFAULT_CALLS_ZSTD_LEVEL)
+                    .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
 
                 let events_handle = writer.add_file("events.dat")?;
                 writer.write(events_handle, &encoded.dat)?;
@@ -783,7 +801,11 @@ impl TraceWriter for CtfsTraceWriter {
             // each `.dat` resolves the id the event streams reference. ADDITIVE:
             // the existing paths.json interning above is untouched.
             if self.emit_interning_tables {
-                let tables = self.interning_tables_builder.take().map(|b| b.finish()).unwrap_or_else(|| InterningTablesBuilder::new().finish());
+                let tables = self
+                    .interning_tables_builder
+                    .take()
+                    .map(|b| b.finish())
+                    .unwrap_or_else(|| InterningTablesBuilder::new().finish());
 
                 let paths_dat_handle = writer.add_file("paths.dat")?;
                 writer.write(paths_dat_handle, &tables.paths_dat)?;

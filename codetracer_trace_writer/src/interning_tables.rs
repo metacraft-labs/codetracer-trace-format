@@ -164,8 +164,13 @@ impl InterningTablesBuilder {
                 let gli = pack_global_line_index(path_id.0, line.0);
                 self.funcs.push((gli, name.clone().into_bytes()));
             }
-            TraceLowLevelEvent::Type(TypeRecord { kind, lang_type, specific_info }) => {
-                self.types.push((*kind as u8, lang_type.clone().into_bytes(), serialize_specific_info(specific_info)));
+            TraceLowLevelEvent::Type(TypeRecord {
+                kind,
+                lang_type,
+                specific_info,
+            }) => {
+                self.types
+                    .push((*kind as u8, lang_type.clone().into_bytes(), serialize_specific_info(specific_info)));
             }
             TraceLowLevelEvent::VariableName(name) | TraceLowLevelEvent::Variable(name) => {
                 self.varnames.push(name.clone().into_bytes());

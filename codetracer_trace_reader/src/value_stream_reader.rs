@@ -35,6 +35,24 @@ use codetracer_ctfs::CtfsReader;
 use codetracer_trace_writer::meta_dat::meta_dat_has_value_stream;
 use codetracer_trace_writer::value_stream::ValueRecordEntry;
 
+#[cfg(not(target_arch = "wasm32"))]
+fn decode_zstd_chunk(compressed: &[u8]) -> Result<Vec<u8>, String> {
+    zstd::decode_all(std::io::Cursor::new(compressed)).map_err(|e| format!("values.dat: zstd decode failed: {e}"))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn decode_zstd_chunk(compressed: &[u8]) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+
+    let mut decoder =
+        ruzstd::decoding::StreamingDecoder::new(std::io::Cursor::new(compressed)).map_err(|e| format!("values.dat: zstd decode failed: {e}"))?;
+    let mut raw = Vec::new();
+    decoder
+        .read_to_end(&mut raw)
+        .map_err(|e| format!("values.dat: zstd decode failed: {e}"))?;
+    Ok(raw)
+}
+
 /// A loaded `values.idx`: the per-chunk byte offsets into `values.dat`.
 struct ValuesIndex {
     chunk_size: usize,
@@ -101,7 +119,7 @@ fn decode_varint(data: &[u8], pos: &mut usize) -> Result<u64, String> {
 /// the seekable final-file reader uses, rather than re-implementing the decode —
 /// mirroring [`crate::step_stream_reader::decode_chunk_records`].
 pub fn decode_chunk_records(compressed: &[u8]) -> Result<Vec<ValueRecordEntry>, String> {
-    let raw = zstd::decode_all(std::io::Cursor::new(compressed)).map_err(|e| format!("values.dat: zstd decode failed: {e}"))?;
+    let raw = decode_zstd_chunk(compressed)?;
     let mut records = Vec::new();
     let mut pos = 0usize;
     while pos < raw.len() {

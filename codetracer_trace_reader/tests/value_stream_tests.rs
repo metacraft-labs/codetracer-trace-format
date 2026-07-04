@@ -112,9 +112,14 @@ fn values_dat_matches_events_log() {
 
     // At least one step must be the empty-record case, and at least one must
     // carry StepValues — otherwise the test is not exercising the variety.
-    assert!(from_dat.iter().any(|r| r.events.is_empty()), "expected at least one value-less (empty) step record");
     assert!(
-        from_dat.iter().any(|r| r.events.iter().any(|e| matches!(e, ValueStreamEvent::StepValues { .. }))),
+        from_dat.iter().any(|r| r.events.is_empty()),
+        "expected at least one value-less (empty) step record"
+    );
+    assert!(
+        from_dat
+            .iter()
+            .any(|r| r.events.iter().any(|e| matches!(e, ValueStreamEvent::StepValues { .. }))),
         "expected at least one step with StepValues"
     );
 }
@@ -124,10 +129,15 @@ fn seek_to_step_values_across_chunk_boundary() {
     let dir = tempfile::tempdir().unwrap();
     let ct_path = write_trace(&dir, true, 4);
 
-    let mut vs = codetracer_trace_reader::value_stream_reader::open_value_stream(&ct_path).unwrap().unwrap();
+    let mut vs = codetracer_trace_reader::value_stream_reader::open_value_stream(&ct_path)
+        .unwrap()
+        .unwrap();
     let expected = expected_records_from_events(&ct_path);
     assert_eq!(vs.count() as usize, expected.len());
-    assert!(vs.count() > vs.chunk_size() as u64 * 2, "need ≥3 chunks for a meaningful cross-boundary seek");
+    assert!(
+        vs.count() > vs.chunk_size() as u64 * 2,
+        "need ≥3 chunks for a meaningful cross-boundary seek"
+    );
 
     // Seek to a record in a later chunk, then back into chunk 0.
     let target = expected.len() - 2;
@@ -148,7 +158,9 @@ fn fetching_one_step_decompresses_only_its_chunk() {
     let dir = tempfile::tempdir().unwrap();
     let ct_path = write_trace(&dir, true, 4);
 
-    let mut vs = codetracer_trace_reader::value_stream_reader::open_value_stream(&ct_path).unwrap().unwrap();
+    let mut vs = codetracer_trace_reader::value_stream_reader::open_value_stream(&ct_path)
+        .unwrap()
+        .unwrap();
     let chunk_size = vs.chunk_size();
     assert_eq!(chunk_size, 4);
     let count = vs.count();
@@ -192,7 +204,10 @@ fn events_log_byte_identical_with_and_without_value_stream() {
     let mut r_on = codetracer_ctfs::CtfsReader::open(&ct_on).unwrap();
     let events_off = r_off.read_file("events.log").unwrap();
     let events_on = r_on.read_file("events.log").unwrap();
-    assert_eq!(events_off, events_on, "events.log must be byte-identical regardless of the value-stream flag");
+    assert_eq!(
+        events_off, events_on,
+        "events.log must be byte-identical regardless of the value-stream flag"
+    );
 
     // The flag-on container additionally carries values.dat + values.idx; the
     // flag-off one must not.

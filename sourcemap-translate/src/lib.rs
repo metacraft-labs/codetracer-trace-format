@@ -246,12 +246,7 @@ impl SourcemapIndex {
         let column = token.get_src_col().saturating_add(1);
         let name = token.get_name().map(|s| s.to_string());
 
-        Some(OriginalPos {
-            source,
-            line,
-            column,
-            name,
-        })
+        Some(OriginalPos { source, line, column, name })
     }
 
     /// Return the inline `sourcesContent[i]` for the given source
@@ -306,10 +301,7 @@ impl SourcemapIndex {
 
     /// Internal: look up a source's index in the sources table.
     fn source_index(&self, source: &str) -> Option<u32> {
-        self.sources
-            .iter()
-            .position(|s| s == source)
-            .map(|i| i as u32)
+        self.sources.iter().position(|s| s == source).map(|i| i as u32)
     }
 
     /// The sourcemap's `file` field — the V3 spec uses this for the
@@ -503,10 +495,7 @@ fn find_source_mapping_url(haystack: &[u8]) -> Option<SourceMappingUrl> {
     let pos = memrfind(haystack, needle)?;
     let after = &haystack[pos + needle.len()..];
     // Read until newline or end of file.
-    let end = after
-        .iter()
-        .position(|&b| b == b'\n' || b == b'\r')
-        .unwrap_or(after.len());
+    let end = after.iter().position(|&b| b == b'\n' || b == b'\r').unwrap_or(after.len());
     let value = std::str::from_utf8(&after[..end]).ok()?.trim();
     if value.is_empty() {
         return None;
@@ -568,10 +557,7 @@ fn decode_base64(input: &str) -> Option<Vec<u8>> {
 
     // Strip whitespace.  Sourcemap data URLs are typically a single
     // line but defensiveness is cheap here.
-    let cleaned: Vec<u8> = input
-        .bytes()
-        .filter(|b| !b.is_ascii_whitespace() && *b != b'=')
-        .collect();
+    let cleaned: Vec<u8> = input.bytes().filter(|b| !b.is_ascii_whitespace() && *b != b'=').collect();
 
     let mut out = Vec::with_capacity(cleaned.len() * 3 / 4);
     let mut buf: u32 = 0;
@@ -800,11 +786,7 @@ mod tests {
         let map = dir.path().join("foo.bundle.map");
         // The source file does NOT have a sibling foo.min.js.map but
         // names a different relative file via the comment.
-        fs::write(
-            &src,
-            b"console.log('hi');\n//# sourceMappingURL=foo.bundle.map\n",
-        )
-        .unwrap();
+        fs::write(&src, b"console.log('hi');\n//# sourceMappingURL=foo.bundle.map\n").unwrap();
         fs::write(&map, TINY_MAP).unwrap();
         let idx = discover_sourcemap_for(&src).expect("disk error").expect("sourcemap found");
         assert_eq!(idx.sources(), &["orig.js".to_string()]);
@@ -816,9 +798,7 @@ mod tests {
         let src = dir.path().join("foo.min.js");
         // Construct an inline data URL by base64-encoding TINY_MAP.
         let encoded = base64_encode_for_test(TINY_MAP.as_bytes());
-        let comment = format!(
-            "console.log('hi');\n//# sourceMappingURL=data:application/json;charset=utf-8;base64,{encoded}\n"
-        );
+        let comment = format!("console.log('hi');\n//# sourceMappingURL=data:application/json;charset=utf-8;base64,{encoded}\n");
         fs::write(&src, comment).unwrap();
         let idx = discover_sourcemap_for(&src).expect("disk error").expect("sourcemap found");
         assert_eq!(idx.sources(), &["orig.js".to_string()]);
@@ -828,11 +808,7 @@ mod tests {
     fn discover_sourcemap_remote_url_returns_none() {
         let dir = tempfile::tempdir().unwrap();
         let src = dir.path().join("foo.min.js");
-        fs::write(
-            &src,
-            b"console.log('hi');\n//# sourceMappingURL=https://example.com/foo.map\n",
-        )
-        .unwrap();
+        fs::write(&src, b"console.log('hi');\n//# sourceMappingURL=https://example.com/foo.map\n").unwrap();
         // We don't fetch remote URLs — should return None.
         let res = discover_sourcemap_for(&src).expect("disk error");
         assert!(res.is_none());

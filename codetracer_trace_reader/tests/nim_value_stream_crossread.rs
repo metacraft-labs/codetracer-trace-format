@@ -36,9 +36,7 @@ fn parse_line(line: &str) -> Vec<(u64, Vec<u8>)> {
     }
     line.split(';')
         .map(|pair| {
-            let (name, hex) = pair
-                .split_once('=')
-                .unwrap_or_else(|| panic!("malformed sidecar pair: {pair:?}"));
+            let (name, hex) = pair.split_once('=').unwrap_or_else(|| panic!("malformed sidecar pair: {pair:?}"));
             let name_id = name.parse::<u64>().expect("parse name_id");
             let bytes = decode_hex(hex);
             (name_id, bytes)
@@ -80,8 +78,7 @@ fn nim_values_dat_read_by_rust_reader() {
             return;
         }
     };
-    let values_path = std::env::var("CT_NIM_VALUE_FIXTURE_VALUES")
-        .expect("CT_NIM_VALUE_FIXTURE set but CT_NIM_VALUE_FIXTURE_VALUES missing");
+    let values_path = std::env::var("CT_NIM_VALUE_FIXTURE_VALUES").expect("CT_NIM_VALUE_FIXTURE set but CT_NIM_VALUE_FIXTURE_VALUES missing");
 
     // Expected per-step value records the Nim FFI reader decoded out of the
     // same bundle (one line per step).
@@ -119,20 +116,14 @@ fn nim_values_dat_read_by_rust_reader() {
         );
         if exp.is_empty() {
             // Parallel-index invariant: a value-less step is an empty record.
-            assert!(
-                rec.events.is_empty(),
-                "step {step}: value-less step must decode to an empty record"
-            );
+            assert!(rec.events.is_empty(), "step {step}: value-less step must decode to an empty record");
             value_less_steps += 1;
         }
     }
 
     // The fixture deliberately interleaves value-less steps; make sure at least
     // one was exercised (so the empty-record path is actually proven).
-    assert!(
-        value_less_steps > 0,
-        "fixture must contain at least one value-less step (empty record)"
-    );
+    assert!(value_less_steps > 0, "fixture must contain at least one value-less step (empty record)");
 
     // Spot-check seeking into a later chunk decodes correctly (independent
     // per-chunk decode over the Nim-produced chunk boundaries).

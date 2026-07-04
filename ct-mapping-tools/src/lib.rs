@@ -177,11 +177,7 @@ pub fn from_sourcemap(map: &SourcemapIndex, opts: &FromSourcemapOptions) -> Vec<
     // back to an empty string only when neither is available — the
     // CLI surface treats that as an error, but the library stays
     // permissive so tests can exercise edge cases.
-    let file_name = opts
-        .file_name
-        .clone()
-        .or_else(|| map.file().map(|s| s.to_string()))
-        .unwrap_or_default();
+    let file_name = opts.file_name.clone().or_else(|| map.file().map(|s| s.to_string())).unwrap_or_default();
 
     // (minified_name, original_name) -> count.  HashMap is fine here:
     // production sourcemaps top out around 10k unique names, well
@@ -497,22 +493,14 @@ fn identifier_kinds_for(lang: Language) -> &'static [&'static str] {
 ///    = `top_count / total_count_for_min_text`.
 /// 4. Drop pairs whose `from == to` (no rename) or whose confidence
 ///    is below `opts.min_confidence`.
-pub fn infer(
-    minified_src: &str,
-    original_src: &str,
-    opts: &InferOptions,
-) -> Result<InferenceResult, InferError> {
+pub fn infer(minified_src: &str, original_src: &str, opts: &InferOptions) -> Result<InferenceResult, InferError> {
     let mut parser = tree_sitter::Parser::new();
     parser
         .set_language(&opts.language.tree_sitter_language())
         .map_err(|e| InferError::ParserSetup(e.to_string()))?;
 
-    let min_tree = parser
-        .parse(minified_src, None)
-        .ok_or(InferError::ParseFailed { which: "minified" })?;
-    let orig_tree = parser
-        .parse(original_src, None)
-        .ok_or(InferError::ParseFailed { which: "original" })?;
+    let min_tree = parser.parse(minified_src, None).ok_or(InferError::ParseFailed { which: "minified" })?;
+    let orig_tree = parser.parse(original_src, None).ok_or(InferError::ParseFailed { which: "original" })?;
 
     let id_kinds = identifier_kinds_for(opts.language);
 
@@ -534,11 +522,7 @@ pub fn infer(
     //   * the total count (denominator for confidence)
     let mut per_min: HashMap<String, HashMap<String, u32>> = HashMap::new();
     for ((min_text, orig_text), count) in tally {
-        *per_min
-            .entry(min_text)
-            .or_default()
-            .entry(orig_text)
-            .or_insert(0) += count;
+        *per_min.entry(min_text).or_default().entry(orig_text).or_insert(0) += count;
     }
 
     let minified_identifiers_seen = per_min.len();
@@ -556,9 +540,7 @@ pub fn infer(
         // original (deterministic; matches `from_sourcemap`).
         let (winner_orig, winner_count) = candidates
             .iter()
-            .max_by(|(a_name, a_count), (b_name, b_count)| {
-                a_count.cmp(b_count).then_with(|| b_name.cmp(a_name))
-            })
+            .max_by(|(a_name, a_count), (b_name, b_count)| a_count.cmp(b_count).then_with(|| b_name.cmp(a_name)))
             .map(|(n, c)| (n.clone(), *c))
             .expect("non-empty candidates");
 
@@ -652,14 +634,7 @@ fn align_nodes(
     let min_children: Vec<_> = min_node.named_children(&mut min_cursor).collect();
     let orig_children: Vec<_> = orig_node.named_children(&mut orig_cursor).collect();
     for i in 0..common {
-        align_nodes(
-            min_children[i],
-            orig_children[i],
-            min_src,
-            orig_src,
-            id_kinds,
-            tally,
-        );
+        align_nodes(min_children[i], orig_children[i], min_src, orig_src, id_kinds, tally);
     }
 }
 
@@ -877,20 +852,13 @@ fn extract_proposals_json(text: &str) -> Result<serde_json::Value, InferLlmError
         let rest = &text[after_tag..];
         if let Some(end_rel) = rest.find("```") {
             let inner = rest[..end_rel].trim();
-            return serde_json::from_str(inner).map_err(|e| {
-                InferLlmError::JsonParseError(format!(
-                    "could not parse fenced JSON proposals block: {e}"
-                ))
-            });
+            return serde_json::from_str(inner)
+                .map_err(|e| InferLlmError::JsonParseError(format!("could not parse fenced JSON proposals block: {e}")));
         }
     }
     // Fall back to whole-text parse.  We trim leading whitespace; the
     // model sometimes wraps the JSON in a single blank line.
-    serde_json::from_str(text.trim()).map_err(|e| {
-        InferLlmError::JsonParseError(format!(
-            "no fenced JSON block and whole-text parse failed: {e}"
-        ))
-    })
+    serde_json::from_str(text.trim()).map_err(|e| InferLlmError::JsonParseError(format!("no fenced JSON block and whole-text parse failed: {e}")))
 }
 
 /// Run the §P7.4 LLM-based inference.
@@ -909,11 +877,7 @@ fn extract_proposals_json(text: &str) -> Result<serde_json::Value, InferLlmError
 /// The function takes `api_key` as a `&str` parameter (NOT through
 /// env) so tests can mock without leaking real credentials and so the
 /// library has no implicit dependency on process state.
-pub fn infer_llm(
-    minified_src: &str,
-    api_key: &str,
-    opts: &InferLlmOptions,
-) -> Result<InferLlmResult, InferLlmError> {
+pub fn infer_llm(minified_src: &str, api_key: &str, opts: &InferLlmOptions) -> Result<InferLlmResult, InferLlmError> {
     if api_key.is_empty() {
         return Err(InferLlmError::NoApiKey);
     }
@@ -948,9 +912,7 @@ pub fn infer_llm(
         .map_err(|e| InferLlmError::HttpError(format!("send: {e}")))?;
 
     let status = response.status();
-    let response_text = response
-        .text()
-        .map_err(|e| InferLlmError::HttpError(format!("read body: {e}")))?;
+    let response_text = response.text().map_err(|e| InferLlmError::HttpError(format!("read body: {e}")))?;
 
     if !status.is_success() {
         // Truncate the body excerpt so an HTML error page doesn't
@@ -960,13 +922,10 @@ pub fn infer_llm(
         } else {
             response_text.clone()
         };
-        return Err(InferLlmError::HttpError(format!(
-            "status {status}: {excerpt}"
-        )));
+        return Err(InferLlmError::HttpError(format!("status {status}: {excerpt}")));
     }
 
-    let parsed: serde_json::Value = serde_json::from_str(&response_text)
-        .map_err(|e| InferLlmError::JsonParseError(format!("response body: {e}")))?;
+    let parsed: serde_json::Value = serde_json::from_str(&response_text).map_err(|e| InferLlmError::JsonParseError(format!("response body: {e}")))?;
 
     // Anthropic Messages API: response shape is
     //   { "content": [ { "type": "text", "text": "..." } ], "usage": { ... } }
@@ -978,31 +937,17 @@ pub fn infer_llm(
         .and_then(|arr| arr.first())
         .and_then(|first| first.get("text"))
         .and_then(|t| t.as_str())
-        .ok_or_else(|| {
-            InferLlmError::ResponseShapeError(
-                "expected `content[0].text` in Messages API response".to_string(),
-            )
-        })?;
+        .ok_or_else(|| InferLlmError::ResponseShapeError("expected `content[0].text` in Messages API response".to_string()))?;
 
     let usage = parsed.get("usage");
-    let tokens_in = usage
-        .and_then(|u| u.get("input_tokens"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0) as usize;
-    let tokens_out = usage
-        .and_then(|u| u.get("output_tokens"))
-        .and_then(|v| v.as_u64())
-        .unwrap_or(0) as usize;
+    let tokens_in = usage.and_then(|u| u.get("input_tokens")).and_then(|v| v.as_u64()).unwrap_or(0) as usize;
+    let tokens_out = usage.and_then(|u| u.get("output_tokens")).and_then(|v| v.as_u64()).unwrap_or(0) as usize;
 
     let proposals = extract_proposals_json(text)?;
     let renames_array = proposals
         .get("renames")
         .and_then(|r| r.as_array())
-        .ok_or_else(|| {
-            InferLlmError::ResponseShapeError(
-                "proposals JSON missing `renames` array".to_string(),
-            )
-        })?;
+        .ok_or_else(|| InferLlmError::ResponseShapeError("proposals JSON missing `renames` array".to_string()))?;
 
     let file_name = opts.file_name.clone().unwrap_or_default();
     let mut entries: Vec<RenameEntryWithConfidence> = Vec::new();
@@ -1011,10 +956,7 @@ pub fn infer_llm(
     for item in renames_array {
         let from = item.get("from").and_then(|v| v.as_str());
         let to = item.get("to").and_then(|v| v.as_str());
-        let confidence = item
-            .get("confidence")
-            .and_then(|v| v.as_f64())
-            .unwrap_or(0.0);
+        let confidence = item.get("confidence").and_then(|v| v.as_f64()).unwrap_or(0.0);
         let (Some(from), Some(to)) = (from, to) else {
             // Skip malformed proposal rows but don't fail the whole
             // call — the model occasionally elides a field and we'd
@@ -1123,11 +1065,7 @@ mod tests {
     fn extract_proposals_json_handles_fenced_block() {
         let text = "Here are my proposals:\n\n```json\n{\"renames\": [{\"from\": \"a\", \"to\": \"alpha\", \"confidence\": 0.9}]}\n```\n";
         let v = extract_proposals_json(text).expect("fenced parse");
-        assert_eq!(
-            v["renames"][0]["from"].as_str(),
-            Some("a"),
-            "fenced block parsed correctly"
-        );
+        assert_eq!(v["renames"][0]["from"].as_str(), Some("a"), "fenced block parsed correctly");
     }
 
     #[test]
@@ -1140,9 +1078,6 @@ mod tests {
     #[test]
     fn extract_proposals_json_rejects_garbage() {
         let text = "Sorry, I can't propose renames for this source.";
-        assert!(matches!(
-            extract_proposals_json(text),
-            Err(InferLlmError::JsonParseError(_))
-        ));
+        assert!(matches!(extract_proposals_json(text), Err(InferLlmError::JsonParseError(_))));
     }
 }

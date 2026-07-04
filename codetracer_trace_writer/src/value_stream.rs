@@ -97,8 +97,8 @@
 //! decompression. This mirrors `calls.dat`/`steps.dat` exactly.
 
 use codetracer_trace_types::{
-    AssignCellRecord, AssignCompoundItemRecord, AssignmentRecord, BindVariableRecord, CellValueRecord, CompoundValueRecord, FullValueRecord, PassBy, RValue,
-    TraceLowLevelEvent, ValueRecord, VariableCellRecord, VariableId,
+    AssignCellRecord, AssignCompoundItemRecord, AssignmentRecord, BindVariableRecord, CellValueRecord, CompoundValueRecord, FullValueRecord, PassBy,
+    RValue, TraceLowLevelEvent, ValueRecord, VariableCellRecord, VariableId,
 };
 
 /// Default number of value records per chunk. Value records are large (spec
@@ -454,7 +454,9 @@ impl ValueStreamBuilder {
         let name_id = fv.variable_id.0 as u64;
         let cbor = cbor_bytes(&fv.value);
         // Find or create the (single) StepValues event in the current record.
-        if let Some(ValueStreamEvent::StepValues { values }) = self.current.events.iter_mut().find(|e| matches!(e, ValueStreamEvent::StepValues { .. })) {
+        if let Some(ValueStreamEvent::StepValues { values }) =
+            self.current.events.iter_mut().find(|e| matches!(e, ValueStreamEvent::StepValues { .. }))
+        {
             values.push((name_id, cbor));
         } else {
             self.current.events.push(ValueStreamEvent::StepValues {
@@ -669,12 +671,29 @@ mod tests {
             ValueStreamEvent::BindVariable { variable_id: 3, place: -7 },
             ValueStreamEvent::DropVariable { variable_id: 4 },
             ValueStreamEvent::DropVariables { variable_ids: vec![1, 2, 3] },
-            ValueStreamEvent::CellValue { place: 5, value: cbor_bytes(&int_value(2)) },
-            ValueStreamEvent::CompoundValue { place: 6, value: cbor_bytes(&int_value(3)) },
-            ValueStreamEvent::AssignCell { place: -1, new_value: cbor_bytes(&int_value(4)) },
-            ValueStreamEvent::AssignCompoundItem { place: 0, index: 7, item_place: 9 },
+            ValueStreamEvent::CellValue {
+                place: 5,
+                value: cbor_bytes(&int_value(2)),
+            },
+            ValueStreamEvent::CompoundValue {
+                place: 6,
+                value: cbor_bytes(&int_value(3)),
+            },
+            ValueStreamEvent::AssignCell {
+                place: -1,
+                new_value: cbor_bytes(&int_value(4)),
+            },
+            ValueStreamEvent::AssignCompoundItem {
+                place: 0,
+                index: 7,
+                item_place: 9,
+            },
             ValueStreamEvent::VariableCell { variable_id: 8, place: 100 },
-            ValueStreamEvent::Assignment { to: 1, pass_by: 1, from: cbor_bytes(&RValue::Simple(VariableId(2))) },
+            ValueStreamEvent::Assignment {
+                to: 1,
+                pass_by: 1,
+                from: cbor_bytes(&RValue::Simple(VariableId(2))),
+            },
         ];
         let rec = ValueRecordEntry { events: events.clone() };
         let mut buf = Vec::new();
@@ -706,7 +725,12 @@ mod tests {
     #[test]
     fn builder_parallel_index_invariant() {
         use codetracer_trace_types::{Line, PathId, StepRecord};
-        let step = |l: i64| TraceLowLevelEvent::Step(StepRecord { path_id: PathId(0), line: Line(l) });
+        let step = |l: i64| {
+            TraceLowLevelEvent::Step(StepRecord {
+                path_id: PathId(0),
+                line: Line(l),
+            })
+        };
         let value = |id: usize, v: i64| {
             TraceLowLevelEvent::Value(FullValueRecord {
                 variable_id: VariableId(id),

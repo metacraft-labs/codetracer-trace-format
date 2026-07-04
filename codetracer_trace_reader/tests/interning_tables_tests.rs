@@ -52,7 +52,14 @@ fn write_trace(dir: &tempfile::TempDir, with_interning_tables: bool) -> std::pat
         TraceWriter::register_step(&mut writer, src_path, line);
         // Intern a variable name per function.
         let vname = format!("var_{i}");
-        TraceWriter::register_variable_with_full_value(&mut writer, &vname, ValueRecord::Int { i: i as i64, type_id: NONE_TYPE_ID });
+        TraceWriter::register_variable_with_full_value(
+            &mut writer,
+            &vname,
+            ValueRecord::Int {
+                i: i as i64,
+                type_id: NONE_TYPE_ID,
+            },
+        );
         TraceWriter::register_return(&mut writer, ValueRecord::None { type_id: NONE_TYPE_ID });
     }
 
@@ -169,7 +176,11 @@ fn interning_tables_resolve_by_id_matching_events_and_paths_json() {
             _ => None,
         })
         .collect();
-    assert_eq!(it.varname_count(), varname_events.len(), "varname table count must equal the VariableName event count");
+    assert_eq!(
+        it.varname_count(),
+        varname_events.len(),
+        "varname table count must equal the VariableName event count"
+    );
     assert!(it.varname_count() >= N, "expected at least N interned variable names");
     for (id, name) in varname_events.iter().enumerate() {
         assert_eq!(&it.varname_str(id as u64).unwrap(), name, "varname id {id}");
@@ -182,7 +193,10 @@ fn interning_tables_resolve_by_id_matching_events_and_paths_json() {
         assert_eq!(it.path(id as u64).unwrap(), expected_record(&expected.paths_dat, &expected.paths_off, id));
     }
     for id in 0..it.varname_count() {
-        assert_eq!(it.varname(id as u64).unwrap(), expected_record(&expected.varnames_dat, &expected.varnames_off, id));
+        assert_eq!(
+            it.varname(id as u64).unwrap(),
+            expected_record(&expected.varnames_dat, &expected.varnames_off, id)
+        );
     }
 }
 
@@ -194,7 +208,9 @@ fn random_access_by_mid_table_id() {
     let dir = tempfile::tempdir().unwrap();
     let ct_path = write_trace(&dir, true);
 
-    let it = codetracer_trace_reader::interning_tables_reader::open_interning_tables(&ct_path).unwrap().unwrap();
+    let it = codetracer_trace_reader::interning_tables_reader::open_interning_tables(&ct_path)
+        .unwrap()
+        .unwrap();
     let expected = expected_tables_from_events(&ct_path);
 
     // Mid-table ids (interior of each table).
@@ -204,7 +220,10 @@ fn random_access_by_mid_table_id() {
     assert!(mid_path > 0 && mid_func > 0 && mid_var > 0, "tables must have an interior");
 
     // Path: random access by the middle id.
-    assert_eq!(it.path(mid_path as u64).unwrap(), expected_record(&expected.paths_dat, &expected.paths_off, mid_path));
+    assert_eq!(
+        it.path(mid_path as u64).unwrap(),
+        expected_record(&expected.paths_dat, &expected.paths_off, mid_path)
+    );
 
     // Func: random access by the middle id, decoding the record.
     let func_rec = it.func(mid_func as u64).unwrap();
@@ -213,12 +232,18 @@ fn random_access_by_mid_table_id() {
     assert_eq!(rebuilt, expected_record(&expected.funcs_dat, &expected.funcs_off, mid_func));
 
     // Varname: random access by the middle id.
-    assert_eq!(it.varname(mid_var as u64).unwrap(), expected_record(&expected.varnames_dat, &expected.varnames_off, mid_var));
+    assert_eq!(
+        it.varname(mid_var as u64).unwrap(),
+        expected_record(&expected.varnames_dat, &expected.varnames_off, mid_var)
+    );
 
     // Reading the LAST id directly (also no preceding scan) resolves correctly —
     // exercises the trailing-sentinel-offset length recovery.
     let last_var = it.varname_count() - 1;
-    assert_eq!(it.varname(last_var as u64).unwrap(), expected_record(&expected.varnames_dat, &expected.varnames_off, last_var));
+    assert_eq!(
+        it.varname(last_var as u64).unwrap(),
+        expected_record(&expected.varnames_dat, &expected.varnames_off, last_var)
+    );
 
     // Out-of-range ids error, never panic.
     assert!(it.path(it.path_count() as u64).is_err());
@@ -257,12 +282,23 @@ fn legacy_trace_has_no_interning_tables_and_files_byte_identical() {
     assert!(r_off.read_file("types.off").is_err());
     assert!(r_off.read_file("varnames.off").is_err());
     assert!(
-        codetracer_trace_reader::interning_tables_reader::open_interning_tables(&ct_off).unwrap().is_none(),
+        codetracer_trace_reader::interning_tables_reader::open_interning_tables(&ct_off)
+            .unwrap()
+            .is_none(),
         "a flag-off trace exposes no interning tables"
     );
 
     // The flag-on container carries all eight table files.
-    for f in ["paths.dat", "paths.off", "funcs.dat", "funcs.off", "types.dat", "types.off", "varnames.dat", "varnames.off"] {
+    for f in [
+        "paths.dat",
+        "paths.off",
+        "funcs.dat",
+        "funcs.off",
+        "types.dat",
+        "types.off",
+        "varnames.dat",
+        "varnames.off",
+    ] {
         assert!(r_on.read_file(f).is_ok(), "{f} must be present when the flag is set");
     }
 }

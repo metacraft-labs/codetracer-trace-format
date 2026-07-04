@@ -188,8 +188,7 @@ fn output_roundtrips_through_renamelist() {
     let entries = from_sourcemap(&map, &opts);
     let toml_text = to_toml(&entries);
 
-    let parsed: RenameListFile =
-        toml::from_str(&toml_text).expect("produced TOML loads through the §P5 schema");
+    let parsed: RenameListFile = toml::from_str(&toml_text).expect("produced TOML loads through the §P5 schema");
     assert_eq!(parsed.rename.len(), 1);
     let entry = &parsed.rename[0];
     assert_eq!(entry.file, "lodash.min.js");

@@ -21,8 +21,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use clap::{Parser, Subcommand};
 
 use ct_mapping_tools::{
-    FromSourcemapOptions, InferLlmError, InferLlmOptions, InferOptions, Language, RenameEntry,
-    from_sourcemap, infer, infer_llm, to_toml,
+    FromSourcemapOptions, InferLlmError, InferLlmOptions, InferOptions, Language, RenameEntry, from_sourcemap, infer, infer_llm, to_toml,
 };
 use mapping_catalog::{Catalog, CatalogEntry, catalog_path_from_env};
 use sourcemap_translate::SourcemapIndex;
@@ -108,11 +107,7 @@ enum Command {
         language: String,
         /// Minimum alignment confidence (top-pair count / total).
         /// Renames below this threshold are dropped.  Default: 0.7.
-        #[arg(
-            long = "min-confidence",
-            value_name = "F64",
-            default_value_t = 0.7
-        )]
+        #[arg(long = "min-confidence", value_name = "F64", default_value_t = 0.7)]
         min_confidence: f64,
         /// Output file (default: stdout).
         #[arg(long = "out", value_name = "PATH")]
@@ -143,34 +138,18 @@ enum Command {
         #[arg(long = "out", value_name = "PATH")]
         out: Option<PathBuf>,
         /// Anthropic model ID.
-        #[arg(
-            long = "model",
-            value_name = "MODEL",
-            default_value = "claude-haiku-4-5-20251001"
-        )]
+        #[arg(long = "model", value_name = "MODEL", default_value = "claude-haiku-4-5-20251001")]
         model: String,
         /// API base URL — override to point at a mock server in tests.
-        #[arg(
-            long = "api-base",
-            value_name = "URL",
-            default_value = "https://api.anthropic.com/v1"
-        )]
+        #[arg(long = "api-base", value_name = "URL", default_value = "https://api.anthropic.com/v1")]
         api_base: String,
         /// Minimum self-rated confidence.  Lower than the `infer`
         /// default because LLM proposals are inherently best-effort.
-        #[arg(
-            long = "min-confidence",
-            value_name = "F64",
-            default_value_t = 0.5
-        )]
+        #[arg(long = "min-confidence", value_name = "F64", default_value_t = 0.5)]
         min_confidence: f64,
         /// Cap the number of proposals the model returns (keeps the
         /// prompt + parse cost bounded).
-        #[arg(
-            long = "max-bindings",
-            value_name = "N",
-            default_value_t = 50
-        )]
+        #[arg(long = "max-bindings", value_name = "N", default_value_t = 50)]
         max_bindings: usize,
     },
 
@@ -276,21 +255,13 @@ fn main() -> Result<()> {
             max_bindings,
         ),
         Command::Catalog { op } => match op {
-            CatalogOp::List {
-                filter,
-                catalog_path,
-            } => run_catalog_list(filter.as_deref(), catalog_path.as_deref()),
+            CatalogOp::List { filter, catalog_path } => run_catalog_list(filter.as_deref(), catalog_path.as_deref()),
             CatalogOp::Install {
                 library,
                 version,
                 recording_dir,
                 catalog_path,
-            } => run_catalog_install(
-                &library,
-                version.as_deref(),
-                recording_dir.as_deref(),
-                catalog_path.as_deref(),
-            ),
+            } => run_catalog_install(&library, version.as_deref(), recording_dir.as_deref(), catalog_path.as_deref()),
             CatalogOp::Update { catalog_path } => run_catalog_update(catalog_path.as_deref()),
         },
     }
@@ -332,11 +303,7 @@ fn run_catalog_list(filter: Option<&str>, catalog_path: Option<&Path>) -> Result
         // Print to stderr so a downstream `| wc -l` of the table still
         // reports 0 rows.
         let label = filter.unwrap_or("");
-        eprintln!(
-            "catalog at {} has no entries matching {:?}",
-            path.display(),
-            label
-        );
+        eprintln!("catalog at {} has no entries matching {:?}", path.display(), label);
         return Ok(());
     }
 
@@ -390,24 +357,18 @@ fn truncate(s: &str, max: usize) -> String {
 /// * On a pre-existing `renames.toml`, refuses to overwrite —
 ///   the user must move it out of the way first.  Better to surface
 ///   the conflict than silently clobber a hand-authored list.
-pub(crate) fn run_catalog_install(
-    library: &str,
-    version: Option<&str>,
-    recording_dir: Option<&Path>,
-    catalog_path: Option<&Path>,
-) -> Result<()> {
+pub(crate) fn run_catalog_install(library: &str, version: Option<&str>, recording_dir: Option<&Path>, catalog_path: Option<&Path>) -> Result<()> {
     let path = resolve_catalog_path(catalog_path);
-    let catalog = Catalog::load(&path).map_err(|e| anyhow!(
-        "could not load catalog at {}: {e}\n  (override with --catalog-path or set CT_CATALOG_PATH)",
-        path.display()
-    ))?;
+    let catalog = Catalog::load(&path).map_err(|e| {
+        anyhow!(
+            "could not load catalog at {}: {e}\n  (override with --catalog-path or set CT_CATALOG_PATH)",
+            path.display()
+        )
+    })?;
 
     let hits = catalog.lookup_by_library(library, version);
     let entry = match hits.as_slice() {
-        [] => bail!(
-            "no catalog entry for {library}{}",
-            version.map(|v| format!("@{v}")).unwrap_or_default()
-        ),
+        [] => bail!("no catalog entry for {library}{}", version.map(|v| format!("@{v}")).unwrap_or_default()),
         [only] => *only,
         many => {
             // Multiple versions and no explicit choice — list them
@@ -425,10 +386,7 @@ pub(crate) fn run_catalog_install(
         None => std::env::current_dir().context("could not resolve current working dir")?,
     };
     if !recording_dir.is_dir() {
-        bail!(
-            "recording dir {} does not exist or is not a directory",
-            recording_dir.display()
-        );
+        bail!("recording dir {} does not exist or is not a directory", recording_dir.display());
     }
 
     let src = catalog.entry_toml_path(entry);
@@ -446,16 +404,8 @@ pub(crate) fn run_catalog_install(
         );
     }
 
-    fs::copy(&src, &dst).with_context(|| format!(
-        "failed to copy {} → {}",
-        src.display(),
-        dst.display()
-    ))?;
-    eprintln!(
-        "installed {library}@{version} → {}",
-        dst.display(),
-        version = entry.version
-    );
+    fs::copy(&src, &dst).with_context(|| format!("failed to copy {} → {}", src.display(), dst.display()))?;
+    eprintln!("installed {library}@{version} → {}", dst.display(), version = entry.version);
     Ok(())
 }
 
@@ -483,11 +433,7 @@ pub(crate) fn run_catalog_update(catalog_path: Option<&Path>) -> Result<()> {
         .status()
         .context("failed to spawn `git pull` — is git on PATH?")?;
     if !status.success() {
-        bail!(
-            "git pull failed in {} (exit {:?})",
-            path.display(),
-            status.code()
-        );
+        bail!("git pull failed in {} (exit {:?})", path.display(), status.code());
     }
     eprintln!("catalog refreshed at {}", path.display());
     Ok(())
@@ -498,23 +444,13 @@ pub(crate) fn run_catalog_update(catalog_path: Option<&Path>) -> Result<()> {
 /// programmatic callers (e.g. integration tests spawning the binary
 /// or invoking it via the library) can share the resolution +
 /// I/O logic.
-fn run_from_sourcemap(
-    map_file: &Path,
-    minified: Option<&Path>,
-    file_name: Option<String>,
-    per_function: bool,
-    out: Option<&Path>,
-) -> Result<()> {
-    let map = SourcemapIndex::open(map_file)
-        .map_err(|e| anyhow!("failed to open sourcemap {}: {e}", map_file.display()))?;
+fn run_from_sourcemap(map_file: &Path, minified: Option<&Path>, file_name: Option<String>, per_function: bool, out: Option<&Path>) -> Result<()> {
+    let map = SourcemapIndex::open(map_file).map_err(|e| anyhow!("failed to open sourcemap {}: {e}", map_file.display()))?;
 
     // Resolve the minified source: explicit `--minified` first, then
     // sibling file derived from the sourcemap's `file` field.
     let minified_source = match minified {
-        Some(path) => Some(
-            fs::read_to_string(path)
-                .with_context(|| format!("failed to read --minified {}", path.display()))?,
-        ),
+        Some(path) => Some(fs::read_to_string(path).with_context(|| format!("failed to read --minified {}", path.display()))?),
         None => discover_sibling_minified(map_file, &map)?,
     };
 
@@ -539,8 +475,7 @@ fn run_from_sourcemap(
 
     match out {
         Some(path) => {
-            fs::write(path, &toml_text)
-                .with_context(|| format!("failed to write {}", path.display()))?;
+            fs::write(path, &toml_text).with_context(|| format!("failed to write {}", path.display()))?;
         }
         None => {
             // Write to stdout, but don't panic on `BrokenPipe` (e.g.
@@ -562,49 +497,31 @@ fn run_from_sourcemap(
 /// Resolves the language (auto-detect via extension when
 /// `--language auto`), reads both source files, runs the alignment
 /// inference, and writes the produced TOML to `out` (or stdout).
-fn run_infer(
-    minified: &Path,
-    original: &Path,
-    file_name: Option<String>,
-    language: &str,
-    min_confidence: f64,
-    out: Option<&Path>,
-) -> Result<()> {
+fn run_infer(minified: &Path, original: &Path, file_name: Option<String>, language: &str, min_confidence: f64, out: Option<&Path>) -> Result<()> {
     // Bounds-check confidence early — clap doesn't validate the f64
     // range, and a negative / >1 value would silently mean "let
     // everything through" / "let nothing through".  Surface as a
     // non-zero exit with the actual offending value.
     if !(0.0..=1.0).contains(&min_confidence) {
-        bail!(
-            "--min-confidence must be in [0.0, 1.0]; got {}",
-            min_confidence
-        );
+        bail!("--min-confidence must be in [0.0, 1.0]; got {}", min_confidence);
     }
 
     let lang = resolve_language(language, minified)?;
 
-    let minified_src = fs::read_to_string(minified)
-        .with_context(|| format!("failed to read minified source {}", minified.display()))?;
-    let original_src = fs::read_to_string(original)
-        .with_context(|| format!("failed to read original source {}", original.display()))?;
+    let minified_src = fs::read_to_string(minified).with_context(|| format!("failed to read minified source {}", minified.display()))?;
+    let original_src = fs::read_to_string(original).with_context(|| format!("failed to read original source {}", original.display()))?;
 
     // Default the `file = "..."` value to the minified source's
     // basename so the produced TOML records the file the rename
     // applies to (the replay-server matches renames by `file`).
-    let file_name = file_name.or_else(|| {
-        minified
-            .file_name()
-            .and_then(|s| s.to_str())
-            .map(|s| s.to_string())
-    });
+    let file_name = file_name.or_else(|| minified.file_name().and_then(|s| s.to_str()).map(|s| s.to_string()));
 
     let opts = InferOptions {
         language: lang,
         file_name,
         min_confidence,
     };
-    let result = infer(&minified_src, &original_src, &opts)
-        .map_err(|e| anyhow!("inference failed: {e}"))?;
+    let result = infer(&minified_src, &original_src, &opts).map_err(|e| anyhow!("inference failed: {e}"))?;
 
     write_toml_output(&result.entries, out)
 }
@@ -629,10 +546,7 @@ fn run_infer_llm(
     max_bindings: usize,
 ) -> Result<()> {
     if !(0.0..=1.0).contains(&min_confidence) {
-        bail!(
-            "--min-confidence must be in [0.0, 1.0]; got {}",
-            min_confidence
-        );
+        bail!("--min-confidence must be in [0.0, 1.0]; got {}", min_confidence);
     }
 
     // Env-var priority: `CT_LLM_API_KEY` (workspace-specific name) wins
@@ -650,22 +564,14 @@ fn run_infer_llm(
         // an error.  Exit 0 — the spec's contract for "no key, no
         // harm".
         println!("SKIP infer-llm: no API key configured.");
-        println!(
-            "Set CT_LLM_API_KEY=<your-anthropic-api-key> or ANTHROPIC_API_KEY=<...> to enable."
-        );
+        println!("Set CT_LLM_API_KEY=<your-anthropic-api-key> or ANTHROPIC_API_KEY=<...> to enable.");
         return Ok(());
     };
 
     let lang = resolve_language(language, minified)?;
-    let minified_src = fs::read_to_string(minified)
-        .with_context(|| format!("failed to read minified source {}", minified.display()))?;
+    let minified_src = fs::read_to_string(minified).with_context(|| format!("failed to read minified source {}", minified.display()))?;
 
-    let file_name = file_name.or_else(|| {
-        minified
-            .file_name()
-            .and_then(|s| s.to_str())
-            .map(|s| s.to_string())
-    });
+    let file_name = file_name.or_else(|| minified.file_name().and_then(|s| s.to_str()).map(|s| s.to_string()));
 
     let opts = InferLlmOptions {
         language: lang,
@@ -705,15 +611,12 @@ fn run_infer_llm(
 /// non-zero exit rather than panicking.
 fn resolve_language(language: &str, minified: &Path) -> Result<Language> {
     if language.eq_ignore_ascii_case("auto") {
-        let ext = minified
-            .extension()
-            .and_then(|s| s.to_str())
-            .ok_or_else(|| {
-                anyhow!(
-                    "couldn't auto-detect language: {} has no extension; pass --language explicitly",
-                    minified.display()
-                )
-            })?;
+        let ext = minified.extension().and_then(|s| s.to_str()).ok_or_else(|| {
+            anyhow!(
+                "couldn't auto-detect language: {} has no extension; pass --language explicitly",
+                minified.display()
+            )
+        })?;
         Language::from_extension(ext).ok_or_else(|| {
             anyhow!(
                 "couldn't auto-detect language from extension '.{}'; pass --language explicitly (supported: js, ts, python)",
@@ -721,12 +624,7 @@ fn resolve_language(language: &str, minified: &Path) -> Result<Language> {
             )
         })
     } else {
-        Language::from_name(language).ok_or_else(|| {
-            anyhow!(
-                "unsupported --language '{}' (supported: js, ts, python)",
-                language
-            )
-        })
+        Language::from_name(language).ok_or_else(|| anyhow!("unsupported --language '{}' (supported: js, ts, python)", language))
     }
 }
 
@@ -737,8 +635,7 @@ fn write_toml_output(entries: &[RenameEntry], out: Option<&Path>) -> Result<()> 
     let toml_text = to_toml(entries);
     match out {
         Some(path) => {
-            fs::write(path, &toml_text)
-                .with_context(|| format!("failed to write {}", path.display()))?;
+            fs::write(path, &toml_text).with_context(|| format!("failed to write {}", path.display()))?;
         }
         None => {
             let mut stdout = std::io::stdout().lock();
@@ -770,7 +667,6 @@ fn discover_sibling_minified(map_file: &Path, map: &SourcemapIndex) -> Result<Op
     if !candidate.is_file() {
         return Ok(None);
     }
-    let content = fs::read_to_string(&candidate)
-        .with_context(|| format!("failed to read sibling minified source {}", candidate.display()))?;
+    let content = fs::read_to_string(&candidate).with_context(|| format!("failed to read sibling minified source {}", candidate.display()))?;
     Ok(Some(content))
 }

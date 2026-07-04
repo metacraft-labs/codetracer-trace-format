@@ -25,9 +25,7 @@
 use std::path::Path;
 use std::sync::Mutex;
 
-use codetracer_trace_reader::global_position_decoder::{
-    DecodedPosition, GlobalPositionDecoder,
-};
+use codetracer_trace_reader::global_position_decoder::{DecodedPosition, GlobalPositionDecoder};
 use codetracer_trace_types::Line;
 use codetracer_trace_writer_nim::{NimTraceReaderHandle, NimTraceWriter, TraceEventsFileFormat};
 
@@ -124,15 +122,9 @@ fn nim_and_rust_decoders_agree_on_every_step_in_fixture() {
     let paths_path = dir.path().join("trace_paths.json");
 
     let mut writer = NimTraceWriter::new(program, &[], TraceEventsFileFormat::Ctfs);
-    writer
-        .begin_writing_trace_events(&events_path)
-        .expect("begin_events");
-    writer
-        .begin_writing_trace_metadata(&metadata_path)
-        .expect("begin_metadata");
-    writer
-        .begin_writing_trace_paths(&paths_path)
-        .expect("begin_paths");
+    writer.begin_writing_trace_events(&events_path).expect("begin_events");
+    writer.begin_writing_trace_metadata(&metadata_path).expect("begin_metadata");
+    writer.begin_writing_trace_paths(&paths_path).expect("begin_paths");
 
     // Opt the writer into column-aware mode BEFORE registering paths
     // — the spec requires the column flag to be trace-global and
@@ -144,15 +136,9 @@ fn nim_and_rust_decoders_agree_on_every_step_in_fixture() {
     let path0 = Path::new("/tmp/ctfs_cross_reader_decode/a.py");
     let path1 = Path::new("/tmp/ctfs_cross_reader_decode/b.py");
     let path2 = Path::new("/tmp/ctfs_cross_reader_decode/c.py");
-    writer
-        .register_path_with_line_lengths(path0, &line_lengths[0])
-        .expect("register path 0");
-    writer
-        .register_path_with_line_lengths(path1, &line_lengths[1])
-        .expect("register path 1");
-    writer
-        .register_path_with_line_lengths(path2, &line_lengths[2])
-        .expect("register path 2");
+    writer.register_path_with_line_lengths(path0, &line_lengths[0]).expect("register path 0");
+    writer.register_path_with_line_lengths(path1, &line_lengths[1]).expect("register path 1");
+    writer.register_path_with_line_lengths(path2, &line_lengths[2]).expect("register path 2");
 
     // Emit a sequence of pending line steps annotated with column
     // deltas.  Current split-stream FFI semantics fold a delta into the
@@ -174,7 +160,11 @@ fn nim_and_rust_decoders_agree_on_every_step_in_fixture() {
     // Step 2: jump to (file 1, line 2), then annotate column 10.
     writer.register_step(path1, Line(2));
     writer.write_delta_column(9);
-    expected.push(ExpectedStep { file: 1, line: 2, column: 10 });
+    expected.push(ExpectedStep {
+        file: 1,
+        line: 2,
+        column: 10,
+    });
 
     // Step 3: cross-file jump to (file 2, line 1), then annotate column 4.
     writer.register_step(path2, Line(1));
@@ -192,17 +182,10 @@ fn nim_and_rust_decoders_agree_on_every_step_in_fixture() {
     // outlive this scope.
     #[allow(deprecated)]
     let _dir_path = dir.into_path();
-    assert!(
-        ct_path.exists(),
-        ".ct trace file was not created at {}",
-        ct_path.display()
-    );
+    assert!(ct_path.exists(), ".ct trace file was not created at {}", ct_path.display());
 
     let reader = NimTraceReaderHandle::open(ct_path.to_str().unwrap()).expect("reader open");
-    assert!(
-        reader.has_column_aware_steps(),
-        "fixture must read back as column-aware"
-    );
+    assert!(reader.has_column_aware_steps(), "fixture must read back as column-aware");
 
     let nim_step_count = reader.step_count();
     assert_eq!(
@@ -241,18 +224,9 @@ fn nim_and_rust_decoders_agree_on_every_step_in_fixture() {
     let mut nim_lines = vec![0u64; nim_step_count as usize];
     let mut nim_columns = vec![0u64; nim_step_count as usize];
     let written = reader
-        .step_locations_with_columns(
-            0,
-            nim_step_count,
-            &mut nim_path_ids,
-            &mut nim_lines,
-            &mut nim_columns,
-        )
+        .step_locations_with_columns(0, nim_step_count, &mut nim_path_ids, &mut nim_lines, &mut nim_columns)
         .expect("step_locations_with_columns");
-    assert_eq!(
-        written, nim_step_count,
-        "step_locations_with_columns must drain every step in one call",
-    );
+    assert_eq!(written, nim_step_count, "step_locations_with_columns must drain every step in one call",);
 
     // ── Step 3: confirm the Nim canonical decoder returns exactly
     // the (file, line, column) triples the writer emitted.  This
@@ -260,18 +234,9 @@ fn nim_and_rust_decoders_agree_on_every_step_in_fixture() {
     // with the Rust decoder is unambiguously a Rust bug rather than
     // a writer/reader mismatch.
     for (i, exp) in expected.iter().enumerate() {
-        assert_eq!(
-            nim_path_ids[i] as u64, exp.file as u64,
-            "step {i}: writer→Nim path_id mismatch"
-        );
-        assert_eq!(
-            nim_lines[i] as u32, exp.line,
-            "step {i}: writer→Nim line mismatch"
-        );
-        assert_eq!(
-            nim_columns[i] as u32, exp.column,
-            "step {i}: writer→Nim column mismatch"
-        );
+        assert_eq!(nim_path_ids[i] as u64, exp.file as u64, "step {i}: writer→Nim path_id mismatch");
+        assert_eq!(nim_lines[i] as u32, exp.line, "step {i}: writer→Nim line mismatch");
+        assert_eq!(nim_columns[i] as u32, exp.column, "step {i}: writer→Nim column mismatch");
     }
 
     // ── Step 4: build the Rust decoder from the harvested
@@ -298,16 +263,8 @@ fn nim_and_rust_decoders_agree_on_every_step_in_fixture() {
         // And the Rust decoder MUST agree byte-for-byte with the Nim
         // decoder's answer (the actual cross-reader consistency
         // assertion the M4 plan demands).
-        assert_eq!(
-            u64::from(pos.file),
-            nim_path_ids[i],
-            "step {i}: Rust↔Nim file disagreement at GLI {gli}",
-        );
-        assert_eq!(
-            u64::from(pos.line),
-            nim_lines[i],
-            "step {i}: Rust↔Nim line disagreement at GLI {gli}",
-        );
+        assert_eq!(u64::from(pos.file), nim_path_ids[i], "step {i}: Rust↔Nim file disagreement at GLI {gli}",);
+        assert_eq!(u64::from(pos.line), nim_lines[i], "step {i}: Rust↔Nim line disagreement at GLI {gli}",);
         assert_eq!(
             u64::from(pos.column),
             nim_columns[i],
@@ -326,9 +283,7 @@ fn nim_and_rust_decoders_agree_on_every_step_in_fixture() {
         .map(|lls| lls.iter().map(|x| u64::from(*x)).sum::<u64>())
         .sum();
     for gli in 0..total_positions {
-        let rust = rust_decoder
-            .decode_global_position_index(gli)
-            .expect("every in-range GLI must decode");
+        let rust = rust_decoder.decode_global_position_index(gli).expect("every in-range GLI must decode");
         // Reference: spec-algorithm computed analytically right here
         // so the Rust decoder isn't grading its own homework.
         let mut expected_file = u64::MAX;

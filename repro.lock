@@ -1,0 +1,9 @@
+schema = "reprobuild.solved-graph-lock.v2"
+
+[lock]
+platform = "amd64-linux"
+optimal = false
+inputs_digest = "fnv1a64:df088e042419cbbf"
+variants = []
+packages = [{ name = "capnp", version = "1.0.0", source = "capnp" }, { name = "cargo", version = "1.85.0", source = "cargo" }, { name = "codetracer_trace_format", version = "0.1.0", source = "codetracer_trace_format" }, { name = "nim", version = "2.2.0", source = "nim" }, { name = "nimble", version = "1.0.0", source = "nimble" }, { name = "pkg-config", version = "1.0.0", source = "pkg-config" }, { name = "rustc", version = "1.85.0", source = "rustc" }, { name = "zstd", version = "1.0.0", source = "zstd" }]
+deps = [{ name = "codetracer-trace-format", path = ".", coord_kind = "vcs", url = "", ref = "mcr-stege0-and-fixes", revision = "1d8e5fede91f7c715e4d70307ad4510b58c24100", integrity = "git-sha1:1d8e5fede91f7c715e4d70307ad4510b58c24100", version = "", visibility = "public", participation = "", depends = "", groups = "" }]

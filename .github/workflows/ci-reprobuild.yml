@@ -1,0 +1,95 @@
+name: CI (reprobuild)
+
+# Additive side-by-side CI run that re-plays the project's
+# deterministic dev env through reprobuild instead of `nix develop` or
+# `env.ps1`. Runs alongside the existing `ci.yml` (`nix`) and any
+# `windows-build.yml` (`windows-diy`) entries so regressions in either
+# of the older paths still gate merges — see
+# `codetracer-specs/Repo-Requirements.md` §2.9 and
+# `metacraft-dev-guidelines/policies/ci-shared-dev-env.md` §4 for the
+# rollout shape.
+#
+# The `setup-dev-env` composite action accepts `env-flavor: reprobuild`
+# (target state per the policy). When the action's reprobuild branch
+# lands, this workflow exercises it end-to-end on every supported
+# host without any other repo-side change.
+
+on:
+  push:
+    branches: [main, dev, stable]
+  pull_request:
+    branches: [main, dev, stable]
+
+jobs:
+  reprobuild:
+    name: ${{ matrix.os }} — repro build/test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            runner: [self-hosted, nixos]
+          - os: macos
+            runner: [self-hosted, aarch64-darwin]
+          - os: windows
+            runner: [self-hosted, Windows, X64, nixos-equivalent]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+
+      # Mint a GitHub App installation token via the CI Token Provider
+      # app so the reprobuild flake/sibling steps can clone private
+      # metacraft-labs repos (codetracer-native-recorder, runquota,
+      # repo-workspaces, etc.).  GitHub free plan restricts org-level
+      # secrets with visibility ALL from being readable in private repos,
+      # so we mint per-run tokens from the app secrets stored at repo
+      # level (CI_TOKEN_PROVIDER_APP_ID + CI_TOKEN_PROVIDER_PRIVATE_KEY).
+      # Minted before the sibling clones so the workspace-lock manifest
+      # checkout (private metacraft-manifests) can authenticate.
+      - name: Mint installation token for cross-repo sibling clones
+        id: ci_token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.CI_TOKEN_PROVIDER_APP_ID }}
+          private-key: ${{ secrets.CI_TOKEN_PROVIDER_PRIVATE_KEY }}
+          owner: metacraft-labs
+
+      - name: Setup dev env (reprobuild flavor)
+        # setup-dev-env clones the siblings listed in .github/sibling-repos
+        # (codetracer-trace-format, codetracer-trace-format-nim) at the
+        # workspace-lock-pinned revisions before materialising the env.
+        uses: metacraft-labs/metacraft-github-actions/setup-dev-env@main
+        with:
+          env-flavor: reprobuild
+          gh-token: ${{ steps.ci_token.outputs.token }}
+
+      - name: repro build
+        # Builds the conventional `build` collection declared in
+        # `repro.nim`. Verifies the primary shipping artefact (the
+        # recorder binary or extension) materialises through the
+        # reprobuild engine identically to `just build`.
+        run: dev-exec repro build
+
+      - name: repro test
+        # Materialises the `test` collection.
+        run: dev-exec repro test
+
+      - name: just build (cross-check)
+        # Re-runs the legacy `just build` path inside the same env so
+        # we catch silent divergences between `repro build` outputs
+        # and what the dev shell + Justfile produce today.
+        run: dev-exec just build
+
+      - name: just test (cross-check)
+        run: dev-exec just test
+
+      - name: Upload logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: reprobuild-logs-${{ matrix.os }}
+          path: |
+            target/
+            .repro/
+          retention-days: 7
+          if-no-files-found: ignore

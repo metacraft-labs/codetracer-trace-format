@@ -9,7 +9,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [win-ephemeral, win-arm]
+        runner: [eph-win-x64, eph-win-arm64]
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v5

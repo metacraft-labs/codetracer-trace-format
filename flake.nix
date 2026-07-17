@@ -1,13 +1,6 @@
 {
   description = "CodeTracer Trace Format - Rust crates for trace types, reading, and writing";
 
-  nixConfig = {
-    extra-substituters = [ "https://cache.metacraft-labs.com/metacraft-codetracer" ];
-    extra-trusted-public-keys = [
-      "metacraft-codetracer:9OV9wCDX560bt5/MrD4dlqnPpCitAEjpoqhNfQpWY3U="
-    ];
-  };
-
   inputs = {
     codetracer-toolchains.url = "github:metacraft-labs/nix-codetracer-toolchains";
     nixpkgs.follows = "codetracer-toolchains/nixpkgs";

@@ -73,6 +73,33 @@ pub const FLAG_HAS_IO_EVENT_STREAM: u16 = 0x800;
 /// `meta_dat.nim` bit 12 and the db-backend
 /// `ctfs_trace_reader::meta_dat::FLAG_HAS_INTERNING_TABLES`.
 pub const FLAG_HAS_INTERNING_TABLES: u16 = 0x1000;
+/// Bit 13 — RS-M1: the request/interval span streams (`spans.dat` +
+/// `spans.idx`, plus the `spantype.ns` span-type index) are present. A span is
+/// a bounded, labeled interval of execution named by the coordinate
+/// `(process_ord, thread_id, step range)` — an HTTP request, a process, a test
+/// — replacing the `session_manifest.jsonl` / `codetracer_spans.jsonl`
+/// sidecars. Spec:
+/// `codetracer-specs/Trace-Files/CTFS-Request-Span-Streams.md`.
+///
+/// **Unlike the stream bits above, this one is NOT backward-compatible at the
+/// reader.** The doc comments on bits 8–12 describe them as "a reader that does
+/// not know the bit ignores the new files", which holds only for readers that
+/// do not enforce a known-bits mask. The canonical Nim reader does: its
+/// `KnownFlags` / `read_meta_dat` equivalent REJECTS any container carrying a
+/// bit outside the mask, and it is the implementation that governs `.ct` files
+/// in practice. A reader predating this constant therefore refuses a
+/// span-bearing container outright. Rollout consequence: reader support must
+/// ship everywhere before any writer sets this bit.
+///
+/// Bits 14 and 15 are the last two free bits and are deliberately left
+/// UNALLOCATED by RS-M1; whether the final bit becomes an "extended flag word
+/// follows" escape (or the `u16` is widened by a version bump) is a format
+/// decision that needs its own milestone.
+///
+/// Must match the canonical Nim writer's `meta_dat.nim` bit 13
+/// (`FlagHasSpanStream`) and the db-backend
+/// `ctfs_trace_reader::meta_dat::FLAG_HAS_SPAN_STREAM` (RS-M2).
+pub const FLAG_HAS_SPAN_STREAM: u16 = 0x2000;
 
 fn encode_varint(mut value: u64, out: &mut Vec<u8>) {
     loop {
@@ -206,6 +233,16 @@ pub fn meta_dat_has_io_event_stream(data: &[u8]) -> bool {
 pub fn meta_dat_has_interning_tables(data: &[u8]) -> bool {
     match read_meta_dat_flags(data) {
         Ok(flags) => flags & FLAG_HAS_INTERNING_TABLES != 0,
+        Err(_) => false,
+    }
+}
+
+/// Convenience: returns whether the `has_span_stream` capability flag (bit 13)
+/// is set in a `meta.dat` buffer. A missing/invalid `meta.dat` ⇒ `false` (no
+/// span streams), never an error.
+pub fn meta_dat_has_span_stream(data: &[u8]) -> bool {
+    match read_meta_dat_flags(data) {
+        Ok(flags) => flags & FLAG_HAS_SPAN_STREAM != 0,
         Err(_) => false,
     }
 }
@@ -353,5 +390,59 @@ mod tests {
         assert!(!meta_dat_has_value_stream(&buf_it));
         assert!(!meta_dat_has_step_stream(&buf_it));
         assert!(!meta_dat_has_call_stream(&buf_it));
+    }
+
+    #[test]
+    fn meta_dat_span_stream_flag_roundtrip() {
+        // RS-M1: bit 13. The value MUST match the canonical Nim writer's
+        // `FlagHasSpanStream`; a divergence here silently splits the registry.
+        assert_eq!(FLAG_HAS_SPAN_STREAM, 0x2000);
+
+        let buf = encode_meta_dat(
+            "01949fcc-7d92-7e9c-aaaa-bbbbbbbbbbbb",
+            "prog",
+            &[],
+            "/wd",
+            "rec",
+            &[],
+            FLAG_HAS_CALL_STREAM
+                | FLAG_HAS_STEP_STREAM
+                | FLAG_HAS_VALUE_STREAM
+                | FLAG_HAS_IO_EVENT_STREAM
+                | FLAG_HAS_INTERNING_TABLES
+                | FLAG_HAS_SPAN_STREAM,
+        );
+        assert!(meta_dat_has_span_stream(&buf));
+        assert!(meta_dat_has_interning_tables(&buf));
+        assert!(meta_dat_has_io_event_stream(&buf));
+
+        // Span stream alone.
+        let buf_sp = encode_meta_dat(
+            "01949fcc-7d92-7e9c-aaaa-bbbbbbbbbbbb",
+            "prog",
+            &[],
+            "",
+            "",
+            &[],
+            FLAG_HAS_SPAN_STREAM,
+        );
+        assert!(meta_dat_has_span_stream(&buf_sp));
+        assert!(!meta_dat_has_interning_tables(&buf_sp));
+        assert!(!meta_dat_has_io_event_stream(&buf_sp));
+        assert!(!meta_dat_has_value_stream(&buf_sp));
+        assert!(!meta_dat_has_step_stream(&buf_sp));
+        assert!(!meta_dat_has_call_stream(&buf_sp));
+
+        // A container without spans must leave the bit clear.
+        let buf_none = encode_meta_dat(
+            "01949fcc-7d92-7e9c-aaaa-bbbbbbbbbbbb",
+            "prog",
+            &[],
+            "",
+            "",
+            &[],
+            0,
+        );
+        assert!(!meta_dat_has_span_stream(&buf_none));
     }
 }

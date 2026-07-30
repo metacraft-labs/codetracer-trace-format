@@ -134,6 +134,49 @@ extern "C" {
     fn trace_writer_register_thread_exit(handle: *mut std::ffi::c_void, thread_id: u64);
     fn trace_writer_register_thread_switch(handle: *mut std::ffi::c_void, thread_id: u64);
 
+    // ----- Request / interval spans (RS-M1) -----
+    //
+    // A span is a bounded, labeled interval of execution — an HTTP request, a
+    // process, a test — appended to the container's `spans.dat` stream instead
+    // of a `codetracer_spans.jsonl` sidecar.  Spec:
+    // `codetracer-specs/Trace-Files/CTFS-Request-Span-Streams.md`.  Only the
+    // multi-stream backend supports spans; registering at least one sets
+    // meta.dat bit 13 (`FlagHasSpanStream`) on the finished container.
+    fn trace_writer_register_span(
+        handle: *mut std::ffi::c_void,
+        span_id: u64,
+        parent_span_id: u64,
+        flags: u8,
+        status: u8,
+        start_wall_ns: u64,
+        end_wall_ns: u64,
+        process_ord: u64,
+        thread_id: u64,
+        start_step: u64,
+        end_step: u64,
+        external_recording: *const std::os::raw::c_char,
+        external_path: *const std::os::raw::c_char,
+        span_type: *const std::os::raw::c_char,
+        label: *const std::os::raw::c_char,
+        structural: u8,
+        metadata_keys: *const *const std::os::raw::c_char,
+        metadata_values: *const *const std::os::raw::c_char,
+        metadata_count: usize,
+    ) -> i32;
+    fn trace_writer_flush_spans(handle: *mut std::ffi::c_void) -> i32;
+    // The exec-stream index the next registered event will occupy — the
+    // `start_step` a span opened right now must carry.  See
+    // `NimTraceWriter::next_step_index` for why a recorder must not count its
+    // own `register_step` calls instead.
+    fn trace_writer_next_step_index(handle: *mut std::ffi::c_void) -> u64;
+    // Read side: the span stream of a finished container as JSON.  Freed with
+    // ct_free_buffer.
+    fn ct_spans_json(
+        path: *const std::os::raw::c_char,
+        settled: i32,
+        out_len: *mut usize,
+    ) -> *mut u8;
+
     // ----- Column-aware step mode (P6.3 / P6.4) -----
     //
     // Mirrors the Nim multi-stream writer's column-aware API.  Recorders
@@ -806,6 +849,110 @@ impl TraceEventsFileFormat {
 }
 
 // ---------------------------------------------------------------------------
+// Request / interval spans (RS-M1)
+// ---------------------------------------------------------------------------
+
+/// Span status — the wire values of `status` in the span record
+/// (`CTFS-Request-Span-Streams.md` §"Record Model").
+pub const SPAN_STATUS_UNKNOWN: u8 = 0;
+/// See [`SPAN_STATUS_UNKNOWN`].
+pub const SPAN_STATUS_OK: u8 = 1;
+/// See [`SPAN_STATUS_UNKNOWN`].
+pub const SPAN_STATUS_ERROR: u8 = 2;
+
+/// One span — a bounded, labeled interval of execution (an HTTP request, a
+/// process, a test) recorded into the container's `spans.dat` stream.
+///
+/// Field names and semantics mirror the wire record in
+/// `codetracer-specs/Trace-Files/CTFS-Request-Span-Streams.md`.  Two records
+/// may share a `span_id`: an `is_open` record published when the interval
+/// starts, and the settled record published when it ends.  Readers apply
+/// **last record wins per `span_id`**, so publishing the open record is how a
+/// live consumer sees an in-flight row.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct SpanRecord {
+    /// 1-based, monotonic within the container.  The last-record-wins key.
+    pub span_id: u64,
+    /// 0 = none.  Reserved: v1 spans are flat.
+    pub parent_span_id: u64,
+    /// The interval has started but not finished; `end_wall_ns` / `end_step`
+    /// are 0 and `status` is normally [`SPAN_STATUS_UNKNOWN`].
+    pub is_open: bool,
+    /// The execution lives in a DIFFERENT container, named by
+    /// `external_recording` / `external_path`.  Inline spans (the primary
+    /// model) leave this false and name a coordinate in THIS container.
+    pub is_external: bool,
+    /// [`SPAN_STATUS_UNKNOWN`] / [`SPAN_STATUS_OK`] / [`SPAN_STATUS_ERROR`].
+    pub status: u8,
+    /// UNIX epoch nanoseconds at span start.
+    pub start_wall_ns: u64,
+    /// 0 when `is_open`.
+    pub end_wall_ns: u64,
+    /// Ordinal into the process table; 0 = primary.
+    pub process_ord: u64,
+    pub thread_id: u64,
+    /// First step id inside the span — see
+    /// [`NimTraceWriter::next_step_index`].
+    pub start_step: u64,
+    /// Last step id inside the span; 0 when `is_open`.
+    pub end_step: u64,
+    /// UUIDv7 recording id; only read when `is_external`.
+    pub external_recording: String,
+    /// Container-relative path; only read when `is_external`.
+    pub external_path: String,
+    /// `"web-request"` | `"process"` | `"test"` | ...
+    pub span_type: String,
+    /// e.g. `"GET /api/users"`, or an executable path.
+    pub label: String,
+    /// `structural` bit 0.
+    pub contiguous_on_one_thread: bool,
+    /// `structural` bit 1.
+    pub shares_timeline: bool,
+    /// `structural` bit 2.
+    pub concurrent_with_siblings: bool,
+    /// Flat key/value metadata.  ORDER IS PRESERVED end to end — consumers
+    /// render metadata in emission order — so this is a `Vec` of pairs and
+    /// never a map.
+    pub metadata: Vec<(String, String)>,
+}
+
+impl SpanRecord {
+    fn flags_byte(&self) -> u8 {
+        (if self.is_open { 0x01 } else { 0 }) | (if self.is_external { 0x02 } else { 0 })
+    }
+
+    fn structural_byte(&self) -> u8 {
+        (if self.contiguous_on_one_thread { 0x01 } else { 0 })
+            | (if self.shares_timeline { 0x02 } else { 0 })
+            | (if self.concurrent_with_siblings { 0x04 } else { 0 })
+    }
+}
+
+/// Decode the span stream of the `.ct` container at `path` into JSON.
+///
+/// Goes through the canonical Nim decoder (`initSpanStreamReader`), the same
+/// one `ct print -f http` uses, so a recorder can verify the spans it wrote
+/// without a second decoder implementation.
+///
+/// `settled` applies last-record-wins per `span_id` and sorts ascending by
+/// `span_id` (what a panel displays); `!settled` returns every record in append
+/// order, open records included.  Field names are the spec's wire names and
+/// `metadata` is an array of `[key, value]` pairs, since metadata order is part
+/// of the contract.
+pub fn read_span_stream_json(path: &Path, settled: bool) -> Result<String, Box<dyn Error>> {
+    ensure_nim_initialized();
+    let c_path = path_to_cstring(path);
+    let mut out_len: usize = 0;
+    let buf = unsafe { ct_spans_json(c_path.as_ptr(), i32::from(settled), &mut out_len) };
+    if buf.is_null() {
+        return Err(format!("ct_spans_json({}): {}", path.display(), last_error()).into());
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(buf, out_len) }.to_vec();
+    unsafe { ct_free_buffer(buf) };
+    Ok(String::from_utf8(bytes)?)
+}
+
+// ---------------------------------------------------------------------------
 // StreamingValueEncoder — Rust wrapper for the Nim C FFI
 // ---------------------------------------------------------------------------
 
@@ -1400,6 +1547,91 @@ impl NimTraceWriter {
     /// Register a `ThreadSwitch` event (the active thread changed).
     pub fn register_thread_switch(&mut self, thread_id: u64) {
         unsafe { trace_writer_register_thread_switch(self.handle, thread_id) }
+    }
+
+    /// Append one span to the container's `spans.dat` stream (RS-M1).
+    ///
+    /// This is what a recorder's HTTP middleware calls instead of writing a
+    /// `codetracer_spans.jsonl` sidecar.  Registering at least one span sets
+    /// `meta.dat` bit 13 (`FlagHasSpanStream`) at close; a recording that
+    /// registers none is byte-for-byte unchanged.  Only the multi-stream
+    /// (CTFS) backend supports spans — any other format returns an error.
+    ///
+    /// To publish an in-flight interval, call once with
+    /// [`SpanRecord::is_open`] set (and `end_wall_ns` / `end_step` zero), then
+    /// again on completion with the SAME `span_id`; the stream stays
+    /// append-only and readers resolve the pair by last-record-wins.
+    pub fn register_span(&mut self, span: &SpanRecord) -> Result<(), Box<dyn Error>> {
+        // The C strings must outlive the call, so every CString is bound to a
+        // local before the pointer arrays are built.
+        let c_external_recording = str_to_cstring(&span.external_recording);
+        let c_external_path = str_to_cstring(&span.external_path);
+        let c_span_type = str_to_cstring(&span.span_type);
+        let c_label = str_to_cstring(&span.label);
+        let keys: Vec<CString> = span.metadata.iter().map(|(k, _)| str_to_cstring(k)).collect();
+        let values: Vec<CString> = span.metadata.iter().map(|(_, v)| str_to_cstring(v)).collect();
+        let key_ptrs: Vec<*const std::os::raw::c_char> = keys.iter().map(|k| k.as_ptr()).collect();
+        let value_ptrs: Vec<*const std::os::raw::c_char> =
+            values.iter().map(|v| v.as_ptr()).collect();
+        let rc = unsafe {
+            trace_writer_register_span(
+                self.handle,
+                span.span_id,
+                span.parent_span_id,
+                span.flags_byte(),
+                span.status,
+                span.start_wall_ns,
+                span.end_wall_ns,
+                span.process_ord,
+                span.thread_id,
+                span.start_step,
+                span.end_step,
+                if span.is_external { c_external_recording.as_ptr() } else { std::ptr::null() },
+                if span.is_external { c_external_path.as_ptr() } else { std::ptr::null() },
+                c_span_type.as_ptr(),
+                c_label.as_ptr(),
+                span.structural_byte(),
+                if key_ptrs.is_empty() { std::ptr::null() } else { key_ptrs.as_ptr() },
+                if value_ptrs.is_empty() { std::ptr::null() } else { value_ptrs.as_ptr() },
+                span.metadata.len(),
+            )
+        };
+        if rc != 0 {
+            return Err(format!("trace_writer_register_span: {}", last_error()).into());
+        }
+        Ok(())
+    }
+
+    /// Seal the current partial span chunk without closing the writer.
+    ///
+    /// `close` flushes anyway, so batch recorders never need this.  Note the
+    /// FFI's own caveat: the multi-stream writer builds the container in memory
+    /// and the `.ct` file is written only at close, so this does not make the
+    /// spans visible to a concurrent reader today.
+    pub fn flush_spans(&mut self) -> Result<(), Box<dyn Error>> {
+        let rc = unsafe { trace_writer_flush_spans(self.handle) };
+        if rc != 0 {
+            return Err(format!("trace_writer_flush_spans: {}", last_error()).into());
+        }
+        Ok(())
+    }
+
+    /// The exec-stream index the NEXT registered event will occupy — the
+    /// `start_step` a span opened right now must carry.
+    ///
+    /// This is the writer's own counter, not a count of `register_step` calls:
+    /// it advances for every exec-stream event (absolute steps, `DeltaColumn`
+    /// column moves, raise / catch, thread start / exit / switch), and that
+    /// counter IS the step id readers walk (`ct_reader_step(n)`, a span's
+    /// `start_step` / `end_step`, the Request Panel's `startGeid`).  A recorder
+    /// counting its own `register_step` calls would drift from it the moment it
+    /// emitted a column delta or a thread event.
+    ///
+    /// A span that runs from here to there is `start_step = next_step_index()`
+    /// at entry and `end_step = next_step_index() - 1` at exit (clamped to
+    /// `start_step` when nothing was recorded in between).
+    pub fn next_step_index(&self) -> u64 {
+        unsafe { trace_writer_next_step_index(self.handle) }
     }
 
     /// Opt this writer into column-aware step encoding (P6.3 / P6.4).
@@ -2081,6 +2313,37 @@ pub trait TraceWriter: Send {
         Ok(())
     }
 
+    /// RS-M1: append one span — a bounded, labeled interval of execution — to
+    /// the container's `spans.dat` stream.  See
+    /// [`NimTraceWriter::register_span`] for the contract (open records,
+    /// last-record-wins, the `meta.dat` bit 13 side effect).
+    ///
+    /// The default implementation ERRORS rather than silently dropping the
+    /// span: a middleware that believes it recorded a request must not be told
+    /// it succeeded by a backend that cannot store one.  (Contrast
+    /// `register_thread_start`, whose default has a working fallback through
+    /// `add_event`; a span has none.)
+    fn register_span(&mut self, _span: &SpanRecord) -> Result<(), Box<dyn Error>> {
+        Err("this trace-writer backend does not support spans (only the \
+             multi-stream CTFS backend writes spans.dat)"
+            .into())
+    }
+
+    /// RS-M1: seal the current partial span chunk without closing the writer.
+    /// Default no-op — `close` flushes anyway.
+    fn flush_spans(&mut self) -> Result<(), Box<dyn Error>> {
+        Ok(())
+    }
+
+    /// RS-M1: the exec-stream index the next registered event will occupy, i.e.
+    /// the `start_step` a span opened right now must carry.  See
+    /// [`NimTraceWriter::next_step_index`].
+    ///
+    /// Default 0 — a backend that records no steps has no step to point at.
+    fn next_step_index(&self) -> u64 {
+        0
+    }
+
     /// Write the branded recorder-id field into `meta.dat` (CTFS spec §7).
     /// `recorder_id` should be the stable recorder identifier
     /// (e.g. `"codetracer-cairo-recorder"`).  Default no-op so
@@ -2191,6 +2454,15 @@ impl TraceWriter for NimTraceWriter {
     }
     fn register_thread_switch(&mut self, thread_id: u64) {
         NimTraceWriter::register_thread_switch(self, thread_id)
+    }
+    fn register_span(&mut self, span: &SpanRecord) -> Result<(), Box<dyn Error>> {
+        NimTraceWriter::register_span(self, span)
+    }
+    fn flush_spans(&mut self) -> Result<(), Box<dyn Error>> {
+        NimTraceWriter::flush_spans(self)
+    }
+    fn next_step_index(&self) -> u64 {
+        NimTraceWriter::next_step_index(self)
     }
     fn to_raw_type(&self, kind: TypeKind, lang_type: &str) -> TypeRecord {
         NimTraceWriter::to_raw_type(self, kind, lang_type)

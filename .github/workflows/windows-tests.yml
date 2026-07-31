@@ -6,7 +6,7 @@ on:
 
 jobs:
   windows-test:
-    runs-on: windows-latest
+    runs-on: eph-win-x64
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable

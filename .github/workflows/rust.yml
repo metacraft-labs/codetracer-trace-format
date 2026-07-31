@@ -10,7 +10,7 @@ env:
 
 jobs:
   lint:
-    runs-on: ubuntu-latest
+    runs-on: eph-linux-x64
 
     steps:
       - uses: actions/checkout@v4
@@ -22,7 +22,7 @@ jobs:
         run: just lint
 
   build-and-test:
-    runs-on: ubuntu-latest
+    runs-on: eph-linux-x64
 
     steps:
       - name: Generate CI token

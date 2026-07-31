@@ -431,6 +431,11 @@ extern "C" {
         out_data_len: *mut usize,
     ) -> i32;
 
+    /// Get an IO event's metadata slot. Data must be freed with
+    /// ct_free_buffer. Separate from `ct_reader_event_fields` so that
+    /// entry point's ABI stays stable.
+    fn ct_reader_event_metadata(h: *mut std::ffi::c_void, index: u64, out_data: *mut *mut u8, out_data_len: *mut usize) -> i32;
+
     fn ct_free_buffer(buf: *mut u8);
 }
 
@@ -3133,6 +3138,32 @@ impl NimTraceReaderHandle {
             v
         };
         Ok((kind, step_id, data))
+    }
+
+    /// Get an IO event's `metadata` slot.
+    ///
+    /// The slot is opaque to the trace format, but it is where
+    /// **correlation markers** are stored: a recorder that observes a
+    /// value crossing a process boundary records the marker payload
+    /// here. Reading it back is what lets the debugger pair the two
+    /// sides of a boundary — without it a cross-process origin chain
+    /// stops at the edge of the recording with nothing to explain why.
+    ///
+    /// An empty slot returns an empty vector rather than an error;
+    /// most events legitimately carry no metadata.
+    pub fn event_metadata(&self, index: u64) -> Result<Vec<u8>, Box<dyn Error>> {
+        let mut data_ptr: *mut u8 = std::ptr::null_mut();
+        let mut data_len: usize = 0;
+        let rc = unsafe { ct_reader_event_metadata(self.handle, index, &mut data_ptr, &mut data_len) };
+        if rc != 0 {
+            return Err(last_error().into());
+        }
+        if data_ptr.is_null() || data_len == 0 {
+            return Ok(Vec::new());
+        }
+        let v = unsafe { std::slice::from_raw_parts(data_ptr, data_len) }.to_vec();
+        unsafe { ct_free_buffer(data_ptr) };
+        Ok(v)
     }
 
     // --- Metadata ---

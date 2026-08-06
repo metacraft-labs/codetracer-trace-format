@@ -2,9 +2,10 @@ use std::fs::File;
 use std::path::Path;
 
 use crate::base40::base40_decode;
+use crate::block_bounds::BlockBound;
 use crate::file_entry::{FileEntry, FILE_ENTRY_SIZE};
 use crate::header::{EXTENDED_HEADER_SIZE, HEADER_SIZE};
-use crate::pread_compat::pread;
+use crate::pread_compat::pread_exact;
 use crate::CtfsError;
 
 /// Thread-safe reader for CTFS containers.
@@ -33,7 +34,7 @@ fn level_capacity(usable: u64, level: u32) -> u64 {
 fn read_ptr_at(file: &File, block_num: u64, index: usize, block_size: u32) -> Result<u64, CtfsError> {
     let offset = block_num * block_size as u64 + (index * 8) as u64;
     let mut buf = [0u8; 8];
-    pread(file, &mut buf, offset)?;
+    pread_exact(file, &mut buf, offset)?;
     Ok(u64::from_le_bytes(buf))
 }
 
@@ -46,7 +47,7 @@ impl ConcurrentCtfsReader {
 
         // Read header
         let mut header_buf = [0u8; HEADER_SIZE];
-        pread(&file, &mut header_buf, 0)?;
+        pread_exact(&file, &mut header_buf, 0)?;
         if header_buf[0..5] != crate::header::MAGIC {
             return Err(CtfsError::InvalidMagic);
         }
@@ -56,7 +57,7 @@ impl ConcurrentCtfsReader {
 
         // Read extended header
         let mut ext_buf = [0u8; EXTENDED_HEADER_SIZE];
-        pread(&file, &mut ext_buf, HEADER_SIZE as u64)?;
+        pread_exact(&file, &mut ext_buf, HEADER_SIZE as u64)?;
         let block_size = u32::from_le_bytes(ext_buf[0..4].try_into().unwrap());
         let max_root_entries = u32::from_le_bytes(ext_buf[4..8].try_into().unwrap());
 
@@ -69,7 +70,7 @@ impl ConcurrentCtfsReader {
         for i in 0..max_root_entries {
             let offset = entries_offset + (i as u64) * FILE_ENTRY_SIZE as u64;
             let mut buf = [0u8; FILE_ENTRY_SIZE];
-            pread(&file, &mut buf, offset)?;
+            pread_exact(&file, &mut buf, offset)?;
             let size = u64::from_le_bytes(buf[0..8].try_into().unwrap());
             let map_block = u64::from_le_bytes(buf[8..16].try_into().unwrap());
             let name = u64::from_le_bytes(buf[16..24].try_into().unwrap());
@@ -90,7 +91,7 @@ impl ConcurrentCtfsReader {
         for i in 0..self.max_root_entries {
             let offset = self.entries_offset + (i as u64) * FILE_ENTRY_SIZE as u64;
             let mut buf = [0u8; FILE_ENTRY_SIZE];
-            pread(&self.file, &mut buf, offset)?;
+            pread_exact(&self.file, &mut buf, offset)?;
             let size = u64::from_le_bytes(buf[0..8].try_into().unwrap());
             let map_block = u64::from_le_bytes(buf[8..16].try_into().unwrap());
             let name = u64::from_le_bytes(buf[16..24].try_into().unwrap());
@@ -110,6 +111,12 @@ impl ConcurrentCtfsReader {
     }
 
     /// Read an entire file's contents using positional read.
+    ///
+    /// Refuses — rather than serving out of the partial region, or out of a
+    /// zero-filled buffer — a stream whose mapping root, mapping blocks or data
+    /// blocks fall outside the container's whole blocks. See `block_bounds` and
+    /// `CTFS-Binary-Format.md` §5d. The bound is re-derived from the file on
+    /// every call, so it grows with a live producer.
     pub fn read_file(&self, name: &str) -> Result<Vec<u8>, CtfsError> {
         let entry = *self.find_entry(name).ok_or_else(|| CtfsError::FileNotFound(name.to_string()))?;
 
@@ -117,18 +124,19 @@ impl ConcurrentCtfsReader {
             return Ok(Vec::new());
         }
 
+        let bound = BlockBound::of(&self.file, self.block_size)?;
         let mut data = Vec::with_capacity(entry.size as usize);
         let bs = self.block_size as u64;
-        let num_blocks = (entry.size + bs - 1) / bs;
+        let num_blocks = entry.size.div_ceil(bs);
 
         for block_idx in 0..num_blocks {
-            let data_block = self.resolve_block(&entry, block_idx)?;
+            let data_block = self.resolve_block(&entry, block_idx, name, &bound)?;
             let block_offset = data_block * bs;
 
             let remaining = entry.size as usize - data.len();
             let to_read = remaining.min(bs as usize);
             let mut buf = vec![0u8; to_read];
-            pread(&self.file, &mut buf, block_offset)?;
+            pread_exact(&self.file, &mut buf, block_offset)?;
             data.extend_from_slice(&buf);
         }
 
@@ -143,6 +151,7 @@ impl ConcurrentCtfsReader {
             return Ok(0);
         }
 
+        let bound = BlockBound::of(&self.file, self.block_size)?;
         let bs = self.block_size as u64;
         let available = (entry.size - offset) as usize;
         let to_read = buf.len().min(available);
@@ -153,11 +162,11 @@ impl ConcurrentCtfsReader {
             let block_idx = current_offset / bs;
             let offset_in_block = (current_offset % bs) as usize;
 
-            let data_block = self.resolve_block(&entry, block_idx)?;
+            let data_block = self.resolve_block(&entry, block_idx, name, &bound)?;
             let block_offset = data_block * bs + offset_in_block as u64;
 
             let chunk = (bs as usize - offset_in_block).min(to_read - bytes_read);
-            pread(&self.file, &mut buf[bytes_read..bytes_read + chunk], block_offset)?;
+            pread_exact(&self.file, &mut buf[bytes_read..bytes_read + chunk], block_offset)?;
             bytes_read += chunk;
         }
 
@@ -165,13 +174,21 @@ impl ConcurrentCtfsReader {
     }
 
     /// Resolve a data block index to its physical block number.
-    fn resolve_block(&self, entry: &FileEntry, block_index: u64) -> Result<u64, CtfsError> {
+    ///
+    /// Every block number this walk produces is checked against `bound` before
+    /// its bytes are read — the mapping root here, the chained and descended
+    /// mapping blocks below, and the data block in `navigate_to_data_block`.
+    /// That is §5d's "all three paths".
+    fn resolve_block(&self, entry: &FileEntry, block_index: u64, name: &str, bound: &BlockBound) -> Result<u64, CtfsError> {
         let n = self.block_size as u64 / 8;
         let usable = n - 1;
 
         let mut idx = block_index;
         let mut current_level_block = entry.map_block;
         let mut level = 1u32;
+
+        // Path 1 of 3: the entry's mapping root.
+        bound.check_mapping_root(current_level_block, &format!("mapping root block of internal file {name}"))?;
 
         loop {
             let cap = level_capacity(usable, level);
@@ -193,13 +210,25 @@ impl ConcurrentCtfsReader {
                     format!("null chain pointer at block {} following to level {}", current_level_block, level),
                 )));
             }
+            // Path 2a of 3: a mapping block reached through the chain.
+            bound.check(chain_ptr, &format!("chain pointer at level {level} of internal file {name}"))?;
             current_level_block = chain_ptr;
         }
 
-        self.navigate_to_data_block(current_level_block, level, idx, usable)
+        self.navigate_to_data_block(current_level_block, level, idx, usable, block_index, name, bound)
     }
 
-    fn navigate_to_data_block(&self, mapping_block: u64, level: u32, idx_within_level: u64, usable: u64) -> Result<u64, CtfsError> {
+    #[allow(clippy::too_many_arguments)]
+    fn navigate_to_data_block(
+        &self,
+        mapping_block: u64,
+        level: u32,
+        idx_within_level: u64,
+        usable: u64,
+        block_index: u64,
+        name: &str,
+        bound: &BlockBound,
+    ) -> Result<u64, CtfsError> {
         if level == 1 {
             let ptr = read_ptr_at(&self.file, mapping_block, idx_within_level as usize, self.block_size)?;
             if ptr == 0 {
@@ -208,6 +237,13 @@ impl ConcurrentCtfsReader {
                     format!("null data block pointer at block {} index {}", mapping_block, idx_within_level),
                 )));
             }
+            // Path 3 of 3, and the one that was missing. `read_file`'s copy is
+            // clamped to what is left of the entry, so a stream whose last data
+            // block landed in the partial region was served successfully out of
+            // bytes the container does not own — and before `pread_exact`, out
+            // of a zero-filled buffer when those bytes were not there at all.
+            // Check the block NUMBER, before any of its bytes are touched.
+            bound.check(ptr, &format!("data block {block_index} of internal file {name}"))?;
             return Ok(ptr);
         }
 
@@ -222,8 +258,10 @@ impl ConcurrentCtfsReader {
                 format!("null mapping pointer at block {} index {}", mapping_block, entry_idx),
             )));
         }
+        // Path 2b of 3: a mapping block reached by descending the hierarchy.
+        bound.check(child_block, &format!("child block pointer at level {level} of internal file {name}"))?;
 
-        self.navigate_to_data_block(child_block, level - 1, sub_idx, usable)
+        self.navigate_to_data_block(child_block, level - 1, sub_idx, usable, block_index, name, bound)
     }
 
     fn find_entry(&self, name: &str) -> Option<&FileEntry> {

@@ -1,5 +1,6 @@
 pub mod base40;
 pub mod block_alloc;
+pub(crate) mod block_bounds;
 pub mod chunked;
 pub mod concurrent_reader;
 pub mod concurrent_writer;

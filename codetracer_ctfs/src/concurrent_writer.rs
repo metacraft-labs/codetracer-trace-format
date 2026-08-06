@@ -6,7 +6,7 @@ use crate::base40::base40_encode;
 use crate::block_alloc::AtomicBlockAllocator;
 use crate::file_entry::FILE_ENTRY_SIZE;
 use crate::header::{ExtendedHeader, Header, EXTENDED_HEADER_SIZE, HEADER_SIZE};
-use crate::pread_compat::{pread, pwrite};
+use crate::pread_compat::{pread_exact, pwrite_all};
 use crate::CtfsError;
 
 /// State for a file entry tracked in the root table.
@@ -68,14 +68,14 @@ fn level_capacity(usable: u64, level: u32) -> u64 {
 fn read_ptr_at(file: &File, block_num: u64, index: usize, block_size: u32) -> Result<u64, CtfsError> {
     let offset = block_num * block_size as u64 + (index * 8) as u64;
     let mut buf = [0u8; 8];
-    pread(file, &mut buf, offset)?;
+    pread_exact(file, &mut buf, offset)?;
     Ok(u64::from_le_bytes(buf))
 }
 
 /// Write a u64 pointer at a given index within a block using positional write.
 fn write_ptr_at(file: &File, block_num: u64, index: usize, value: u64, block_size: u32) -> Result<(), CtfsError> {
     let offset = block_num * block_size as u64 + (index * 8) as u64;
-    pwrite(file, &value.to_le_bytes(), offset)?;
+    pwrite_all(file, &value.to_le_bytes(), offset)?;
     Ok(())
 }
 
@@ -83,7 +83,7 @@ fn write_ptr_at(file: &File, block_num: u64, index: usize, value: u64, block_siz
 fn write_zero_block_at(file: &File, block_num: u64, block_size: u32) -> Result<(), CtfsError> {
     let offset = block_num * block_size as u64;
     let zeros = vec![0u8; block_size as usize];
-    pwrite(file, &zeros, offset)?;
+    pwrite_all(file, &zeros, offset)?;
     Ok(())
 }
 
@@ -92,7 +92,7 @@ fn write_block_data_at(file: &File, block_num: u64, data: &[u8], block_size: u32
     let offset = block_num * block_size as u64;
     let mut padded = data.to_vec();
     padded.resize(block_size as usize, 0);
-    pwrite(file, &padded, offset)?;
+    pwrite_all(file, &padded, offset)?;
     Ok(())
 }
 
@@ -122,7 +122,7 @@ impl ConcurrentCtfsWriter {
 
         // File entries are already zero (empty)
         // Write the entire root block at offset 0
-        pwrite(&file, &root_block, 0)?;
+        pwrite_all(&file, &root_block, 0)?;
 
         Ok(Arc::new(ConcurrentCtfsWriter {
             file,
@@ -179,7 +179,7 @@ impl ConcurrentCtfsWriter {
             buf[0..8].copy_from_slice(&entry_state.size.to_le_bytes());
             buf[8..16].copy_from_slice(&entry_state.map_block.to_le_bytes());
             buf[16..24].copy_from_slice(&entry_state.name_encoded.to_le_bytes());
-            pwrite(&self.file, &buf, entry_offset)?;
+            pwrite_all(&self.file, &buf, entry_offset)?;
         }
 
         self.file.sync_all()?;
@@ -223,7 +223,7 @@ impl FileWriter {
         buf[0..8].copy_from_slice(&self.size.to_le_bytes());
         buf[8..16].copy_from_slice(&self.root_block.to_le_bytes());
         buf[16..24].copy_from_slice(&self.name_encoded.to_le_bytes());
-        pwrite(&parent.file, &buf, entry_offset)?;
+        pwrite_all(&parent.file, &buf, entry_offset)?;
 
         Ok(())
     }

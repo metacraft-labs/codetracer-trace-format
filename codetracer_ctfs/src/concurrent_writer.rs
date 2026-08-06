@@ -56,6 +56,22 @@ pub struct FileWriter {
     size: u64,
     /// Buffered partial block data.
     buffer: Vec<u8>,
+    /// The data block a `flush` published the current partial `buffer` into,
+    /// if there has been one since the last complete block.
+    ///
+    /// A flush has to make the partial block visible to readers, but it must
+    /// **not** consume a logical block index: the bytes that arrive next belong
+    /// to the same logical block, because every reader resolves logical byte
+    /// `p` to logical block `p / block_size`. So the block is allocated once,
+    /// its pointer is inserted into the mapping chain at the *current*
+    /// `data_block_count`, and `data_block_count` stays put; the block is
+    /// rewritten in place on each further flush and finally handed to
+    /// `flush_data_block` when the buffer fills, which is the point at which
+    /// the index is consumed.
+    ///
+    /// This mirrors `CtfsWriter::sync_entry` / `pending_block` in `writer.rs`;
+    /// the two writers must lay out the same blocks for the same byte stream.
+    pending_block: Option<u64>,
     block_size: u32,
 }
 
@@ -164,6 +180,7 @@ impl ConcurrentCtfsWriter {
             data_block_count: 0,
             size: 0,
             buffer: Vec::new(),
+            pending_block: None,
             block_size: self.block_size,
         })
     }
@@ -204,11 +221,33 @@ impl FileWriter {
     }
 
     /// Flush any buffered data and update the file entry size in the parent.
+    ///
+    /// A partial block is published through a *pending* block that keeps its
+    /// logical index, so writing can continue afterwards. Draining the buffer
+    /// into a fresh block instead — which is what this did before — advanced
+    /// the logical block index by one while the entry's `size` kept counting
+    /// bytes contiguously, so every reader placed the post-flush bytes one
+    /// block too early and served the flushed block's zero padding as content.
     pub fn flush(&mut self, parent: &ConcurrentCtfsWriter) -> Result<(), CtfsError> {
-        // Flush any remaining partial block
+        // Publish the partial block without consuming its logical index.
         if !self.buffer.is_empty() {
-            let block_data = std::mem::take(&mut self.buffer);
-            self.flush_data_block(parent, &block_data)?;
+            let bs = self.block_size;
+            let data_block = match self.pending_block {
+                Some(block) => block,
+                None => {
+                    let n = bs as u64 / 8;
+                    let usable = n - 1;
+                    let block_index = self.data_block_count;
+                    let root_block = self.root_block;
+                    let data_block = parent.allocator.allocate();
+                    self.insert_data_block_chain(parent, root_block, block_index, data_block, usable, bs)?;
+                    self.pending_block = Some(data_block);
+                    data_block
+                }
+            };
+            // Rewritten whole each time, so stale padding from an earlier
+            // flush of the same block cannot survive under later bytes.
+            write_block_data_at(&parent.file, data_block, &self.buffer, bs)?;
         }
 
         // Update file entry size in the parent (in-memory)
@@ -234,14 +273,21 @@ impl FileWriter {
         let n = bs as u64 / 8;
         let usable = n - 1;
 
-        // Allocate a data block and write data via pwrite
-        let data_block = parent.allocator.allocate();
+        // If a `flush` already published this logical block as a pending
+        // block, reuse it: its pointer is in the mapping chain at this very
+        // index, and allocating a second block here is what shifted every
+        // subsequent byte one block forward.
+        let data_block = match self.pending_block.take() {
+            Some(pending) => pending,
+            None => {
+                let data_block = parent.allocator.allocate();
+                let block_index = self.data_block_count;
+                // Navigate the bottom-up chain to insert the data block pointer
+                self.insert_data_block_chain(parent, self.root_block, block_index, data_block, usable, bs)?;
+                data_block
+            }
+        };
         write_block_data_at(&parent.file, data_block, block_data, bs)?;
-
-        let block_index = self.data_block_count;
-
-        // Navigate the bottom-up chain to insert the data block pointer
-        self.insert_data_block_chain(parent, self.root_block, block_index, data_block, usable, bs)?;
 
         self.data_block_count += 1;
 

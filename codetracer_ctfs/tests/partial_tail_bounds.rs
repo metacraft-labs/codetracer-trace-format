@@ -583,3 +583,161 @@ fn a_chained_mapping_block_in_the_partial_region_is_refused_by_name() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// The mapping root's null branch: the one bound site nothing pinned.
+// ---------------------------------------------------------------------------
+
+/// `entry.map_block == 0` is the fourth way a block number reaches bytes, and
+/// it is the only one whose *null* branch has no guard of its own.
+///
+/// The chain, child and data-block pointers are each checked against `0`
+/// explicitly, by name, before `BlockBound::check` ever sees them. The mapping
+/// root is not: its sole protection is the `block == 0` arm inside
+/// `check_mapping_root`. Drop that arm and `0` sails through the numeric bound
+/// — `0 < whole_blocks` for any non-empty container — and the walk reads its
+/// *mapping* out of block 0, which is the header and the root directory. The
+/// entry's `Size` then clamps the copy, so the read **succeeds** and hands back
+/// the container's own metadata as the stream's content.
+///
+/// That is the campaign's signature — missing data converted into plausible
+/// data — and it survives a truncation fixture untouched, because the container
+/// here is a clean block multiple. Only a null mapping root provokes it.
+///
+/// The writer's `0` means "unallocated" (`CTFS-Binary-Format.md` §4, "Null
+/// pointers during allocation"), so this is the shape a container takes when
+/// an entry landed in block 0 but the mapping block it names never did.
+#[test]
+fn a_null_mapping_root_is_refused_by_name_rather_than_served_as_block_zero() {
+    let dir = TempDir::new().unwrap();
+    let (path, survivor, _lost) = sealed_two_stream_container(dir.path());
+
+    let mut damaged = fs::read(&path).unwrap();
+    let (z_size, z_map) = entry_of(&damaged, "z.dat");
+    assert!(z_map != 0 && z_size > 0, "the fixture's z.dat is already null-mapped");
+
+    // Zero the mapping root of z.dat, and nothing else.
+    let encoded = base40_encode("z.dat").unwrap();
+    let mut zeroed = false;
+    for i in 0..MAX_ROOT_ENTRIES as usize {
+        let off = 16 + i * 24;
+        if u64_le(&damaged, off + 16) == encoded {
+            damaged[off + 8..off + 16].copy_from_slice(&0u64.to_le_bytes());
+            zeroed = true;
+        }
+    }
+    assert!(zeroed, "no z.dat entry to damage");
+    fs::write(&path, &damaged).unwrap();
+
+    // The container is still a whole number of blocks: no bound that keys off
+    // the file length can catch this, which is why it needs its own guard.
+    assert_eq!(damaged.len() % BS, 0, "the fixture accidentally truncated the container");
+    let whole_blocks = (damaged.len() / BS) as u64;
+
+    // The block index that would fabricate, found in the bytes rather than
+    // hardcoded. Read as a mapping block, block 0's slot `i` is bytes
+    // `i * 8 ..`, i.e. the header and then the root directory's entry fields —
+    // sizes, mapping roots, encoded names. Most decode to absurd block numbers
+    // that the *data-block* bound rejects anyway, which is why asserting only
+    // on a refusal is not enough here: some slot holds another stream's
+    // `map_block`, a small in-bounds number, and that index reads back real
+    // blocks belonging to a different stream, successfully.
+    let fabricating_index = (0..z_size.div_ceil(BS as u64))
+        .find(|i| {
+            let slot = u64_le(&damaged, *i as usize * 8);
+            slot != 0 && slot < whole_blocks
+        })
+        .expect(
+            "no slot of block 0 decodes to an in-bounds block number, so this fixture cannot \
+             exercise the fabricating path; adjust the fixture rather than deleting the test",
+        );
+
+    let mut probes: Vec<(String, Result<Vec<u8>, codetracer_ctfs::CtfsError>)> = Vec::new();
+    probes.push(("CtfsReader::read_file".into(), CtfsReader::open(&path).unwrap().read_file("z.dat")));
+    probes.push((
+        "ConcurrentCtfsReader::read_file".into(),
+        ConcurrentCtfsReader::open(&path).unwrap().read_file("z.dat"),
+    ));
+    // The same null, reached at the offset that resolves rather than the one
+    // that happens to decode to garbage.
+    let at = fabricating_index * BS as u64;
+    let mut buf = vec![0u8; 64];
+    probes.push((
+        format!("CtfsReader::read_at(block index {fabricating_index})"),
+        CtfsReader::open(&path)
+            .unwrap()
+            .read_at("z.dat", at, &mut buf)
+            .map(|n| buf[..n].to_vec()),
+    ));
+    let mut buf2 = vec![0u8; 64];
+    probes.push((
+        format!("ConcurrentCtfsReader::read_at(block index {fabricating_index})"),
+        ConcurrentCtfsReader::open(&path)
+            .unwrap()
+            .read_at("z.dat", at, &mut buf2)
+            .map(|n| buf2[..n].to_vec()),
+    ));
+
+    // Pass 1, over *every* probe: did anything come back at all?
+    //
+    // Structural before message, and across the whole probe set rather than
+    // within each one. Removing the guard leaves the walk reading the root
+    // directory as a mapping, which still refuses at the indices whose slots
+    // decode to absurd block numbers — so a loop that checked probe 1's
+    // wording first would report a wording mismatch and never reach the probe
+    // that actually gets bytes back. The harm is the fabrication, so the
+    // fabrication is what a regression has to report.
+    let mut errs: Vec<(String, String)> = Vec::new();
+    for (which, got) in probes {
+        match got {
+            Err(e) => errs.push((which, e.to_string())),
+            Ok(content) => {
+                let source = (0..whole_blocks as usize)
+                    .find(|b| damaged[b * BS..b * BS + content.len()] == content[..]);
+                panic!(
+                    "{which} served {} bytes for a stream whose mapping root is null, and reported \
+                     success; those bytes are the container's own block {:?} — content belonging to \
+                     another stream, handed back as z.dat",
+                    content.len(),
+                    source
+                )
+            }
+        }
+    }
+
+    // Pass 2: every refusal has to say which stream was lost and why.
+    for (which, err) in errs {
+        assert!(
+            err.contains("z.dat"),
+            "{which}'s refusal does not name the stream that was lost: {err}"
+        );
+        assert!(
+            err.contains("mapping root"),
+            "{which}'s refusal does not say it was the mapping root: {err}"
+        );
+        assert!(
+            err.contains("null"),
+            "{which}'s refusal does not say the pointer is null: {err}"
+        );
+        // The container is intact apart from one null pointer. A refusal that
+        // blames truncation sends whoever reads it — or a repair tool — after
+        // damage that is not there.
+        assert!(
+            !err.contains("truncated"),
+            "{which} blames truncation for a null mapping root in a container that is \
+             a whole number of blocks: {err}"
+        );
+    }
+
+    // The damage cost exactly what was damaged.
+    assert_eq!(
+        CtfsReader::open(&path).unwrap().read_file("meta.dat").unwrap(),
+        survivor,
+        "CtfsReader lost meta.dat to a null mapping root on the other stream"
+    );
+    assert_eq!(
+        ConcurrentCtfsReader::open(&path).unwrap().read_file("meta.dat").unwrap(),
+        survivor,
+        "ConcurrentCtfsReader lost meta.dat to a null mapping root on the other stream"
+    );
+}

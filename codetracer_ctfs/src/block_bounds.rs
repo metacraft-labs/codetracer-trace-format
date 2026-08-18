@@ -66,11 +66,32 @@ impl BlockBound {
         Ok(())
     }
 
-    /// The same refusal for block 0, which no stream may name: it is the root
-    /// directory, and the writer uses `0` as the "unallocated" sentinel.
+    /// The bound plus the null check, for a mapping root.
+    ///
+    /// `entry.map_block` is the one block number in the walk whose *null*
+    /// branch has no guard of its own: the chain, child and data-block
+    /// pointers are each compared against `0` by name before they reach
+    /// `check`. Without the arm below, `0` passes the numeric bound trivially
+    /// — `0 < whole_blocks` for every non-empty container — and the walk reads
+    /// the stream's *mapping* out of block 0, which is the header and the root
+    /// directory. Entry fields then decode as block pointers, and the ones
+    /// that happen to be small and in-bounds resolve to real blocks belonging
+    /// to other streams, so the read **succeeds** with another stream's bytes.
+    ///
+    /// `0` means "unallocated" (`CTFS-Binary-Format.md` §4, "Null pointers
+    /// during allocation"), so it is refused as a null rather than as an
+    /// out-of-range number: the container is typically intact — a whole number
+    /// of blocks — and blaming truncation would point whoever reads the
+    /// message, or a repair tool, at damage that is not there.
     pub(crate) fn check_mapping_root(&self, block: u64, what: &str) -> Result<(), CtfsError> {
         if block == 0 {
-            return Err(self.out_of_bounds(block, what));
+            return Err(CtfsError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "{what} is null, so the stream's mapping was never allocated or has been \
+                     overwritten; block 0 is the container's root directory and no stream may name it"
+                ),
+            )));
         }
         self.check(block, what)
     }

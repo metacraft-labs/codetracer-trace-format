@@ -295,6 +295,23 @@ impl FileWriter {
     }
 
     /// Insert a data block pointer at the given block_index using the bottom-up chain model.
+    ///
+    /// # A null pointer here is not always "not allocated yet"
+    ///
+    /// The same rule `CtfsWriter::insert_data_block_chain` documents and
+    /// `CTFS-Binary-Format.md` §4 states normatively: a mapping is filled in
+    /// strictly increasing block-index order, so a null pointer is legitimate
+    /// only for the **first index that pointer covers**, and a null anywhere
+    /// else is damage that allocating over would orphan.
+    ///
+    /// **Not reachable today, and kept anyway.** `ConcurrentCtfsWriter` has no
+    /// `open_append`: every container it writes it also created, so the only
+    /// mapping it walks is one it built in the same session and no input can
+    /// drive either branch to a corrupted zero. The guard is here because this
+    /// is the same walk with the same rule, and the two writers must not answer
+    /// a format question differently — the way they already did over
+    /// `pending_block`, which is what made a timed flush corrupt a stream. Its
+    /// correctness is demonstrated against `CtfsWriter`, which *is* reachable.
     fn insert_data_block_chain(
         &mut self,
         parent: &ConcurrentCtfsWriter,
@@ -324,6 +341,17 @@ impl FileWriter {
             // Follow or create the chain pointer from current_level_block[N-1]
             let chain_ptr = read_ptr_at(&parent.file, current_level_block, usable as usize, bs)?;
             if chain_ptr == 0 {
+                if idx != 0 {
+                    return Err(CtfsError::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!(
+                            "null chain pointer at block {current_level_block} following to level {level}, \
+                             but data block index {block_index} is not the first index that pointer covers \
+                             (offset {idx} within level {level}); the mapping is damaged, and allocating a \
+                             replacement here would orphan the existing level-{level} subtree"
+                        ),
+                    )));
+                }
                 let new_block = parent.allocator.allocate();
                 write_zero_block_at(&parent.file, new_block, bs)?;
                 write_ptr_at(&parent.file, current_level_block, usable as usize, new_block, bs)?;
@@ -361,6 +389,18 @@ impl FileWriter {
 
         let child_block = read_ptr_at(&parent.file, mapping_block, entry_idx as usize, bs)?;
         let target_block = if child_block == 0 {
+            if sub_idx != 0 {
+                return Err(CtfsError::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "null mapping pointer at block {mapping_block} index {entry_idx} (level {level}), \
+                         but the index being placed is not the first that pointer covers (offset {sub_idx} \
+                         within it); the mapping is damaged, and allocating a replacement here would orphan \
+                         the existing level-{} subtree",
+                        level - 1
+                    ),
+                )));
+            }
             let new_block = parent.allocator.allocate();
             write_zero_block_at(&parent.file, new_block, bs)?;
             write_ptr_at(&parent.file, mapping_block, entry_idx as usize, new_block, bs)?;

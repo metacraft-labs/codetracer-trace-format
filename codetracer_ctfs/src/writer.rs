@@ -324,6 +324,24 @@ impl CtfsWriter {
     /// - entries[usable] (= entries[N-1]) points to level-2 block
     /// - Level 2: entries[0..usable-1] each point to a level-1 sub-block (each holds usable data ptrs)
     /// - entries[usable] points to level-3, etc.
+    ///
+    /// # A null pointer here is not always "not allocated yet"
+    ///
+    /// Both null branches below allocate a replacement mapping block, which is
+    /// correct only when the slot has genuinely never been used. It is *not*
+    /// correct on a container whose mapping was damaged — a crash between two
+    /// flushes, say — because the replacement overwrites the only pointer to
+    /// the existing subtree and every data block under it becomes unreachable
+    /// and unrecoverable, while the append reports success.
+    ///
+    /// The two cases are distinguishable from the index, because a mapping is
+    /// filled in strictly increasing block-index order: a pointer may be null
+    /// only when the index being placed is the **first index that pointer
+    /// covers** (`idx == 0` after rebasing at a level, `sub_idx == 0` within a
+    /// child). Any other index means an earlier insert already went through
+    /// this pointer, so a zero is damage. `CTFS-Binary-Format.md` §4, "Null
+    /// pointers during allocation", states the rule normatively; it is pinned
+    /// by `tests/writer_null_data_block.rs`.
     fn insert_data_block_chain(&mut self, root_block: u64, block_index: u64, data_block: u64, usable: u64, bs: u32) -> Result<(), CtfsError> {
         // Determine which level this block_index falls into and the remaining offset.
         // Level 1: indices 0..usable-1 (capacity = usable)
@@ -353,6 +371,18 @@ impl CtfsWriter {
             let block_data = read_block(&mut self.writer, current_level_block, bs)?;
             let chain_ptr = read_ptr(&block_data, usable as usize);
             if chain_ptr == 0 {
+                // Only legitimate for the first index this chain pointer covers.
+                if idx != 0 {
+                    return Err(CtfsError::Io(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!(
+                            "null chain pointer at block {current_level_block} following to level {level}, \
+                             but data block index {block_index} is not the first index that pointer covers \
+                             (offset {idx} within level {level}); the mapping is damaged, and allocating a \
+                             replacement here would orphan the existing level-{level} subtree"
+                        ),
+                    )));
+                }
                 // Allocate the higher-level block
                 let new_block = self.allocator.alloc();
                 write_zero_block(&mut self.writer, new_block, bs)?;
@@ -401,6 +431,20 @@ impl CtfsWriter {
         let child_block = read_ptr(&block_data, entry_idx as usize);
 
         let target_block = if child_block == 0 {
+            // Only legitimate for the first index this child covers; see
+            // `insert_data_block_chain`.
+            if sub_idx != 0 {
+                return Err(CtfsError::Io(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    format!(
+                        "null mapping pointer at block {mapping_block} index {entry_idx} (level {level}), \
+                         but the index being placed is not the first that pointer covers (offset {sub_idx} \
+                         within it); the mapping is damaged, and allocating a replacement here would orphan \
+                         the existing level-{} subtree",
+                        level - 1
+                    ),
+                )));
+            }
             let new_block = self.allocator.alloc();
             write_zero_block(&mut self.writer, new_block, bs)?;
             write_ptr(&mut self.writer, mapping_block, entry_idx as usize, new_block, bs)?;

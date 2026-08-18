@@ -67,20 +67,34 @@
 //! true`. So the three writer cases and this one are independent gates, and a
 //! regression in either layer reddens exactly one test.
 //!
-//! # Two gaps this file does NOT cover
+//! # The second null-pointer hole: an append that allocates over a damaged slot
 //!
-//! 1. `read_last_data_block_chain` only runs when `has_partial` is true, so for
-//!    a container whose `entry.size` is an exact block multiple `open_append`
-//!    validates nothing at all.
-//! 2. A later `append` reaches `insert_data_block_chain`, which reads a `0`
-//!    chain pointer as "not allocated yet" and allocates a replacement. It
-//!    cannot distinguish "unallocated" from "corrupted", so on a crash-damaged
-//!    container it silently orphans the existing level-2+ subtree — data loss
-//!    on the write path, reached through a null mapping pointer, untested.
+//! The first four cases reach the mapping through `open_append`'s
+//! `read_last_data_block_chain`, which only runs when the entry has a partial
+//! tail. For a container whose `entry.size` is an exact block multiple
+//! `open_append` therefore validates *nothing*, and the first thing to touch
+//! the mapping is the next `append` — which reaches `insert_data_block_chain`
+//! and `navigate_and_insert`, both of which read a `0` pointer as **"not
+//! allocated yet"** and allocate a replacement.
 //!
-//! Neither threatens the header or the root directory, which is why "the Rust
-//! writers do not have the M61b hole" stands; but "the Rust writers have no
-//! null-pointer hole at all" would be false.
+//! Those two sites cannot tell "unallocated" from "corrupted" by looking at the
+//! pointer alone, and until this file's last four cases existed they did not
+//! try: appending to a crash-damaged container overwrote the only pointer to
+//! the existing level-2+ subtree, orphaning every data block under it, and
+//! returned `Ok`. It is a different failure from the header destruction above —
+//! block 0 is never touched — but it is the same zero, on the same write path,
+//! and it loses data.
+//!
+//! They *can* tell the two apart from the index. Both writers fill a mapping in
+//! strictly increasing block-index order, so a pointer is legitimately null
+//! exactly when the index being placed is the **first index that pointer
+//! covers**: the chain pointer to level `k+1` may be null only when the rebased
+//! index at that level is `0`, and a level-`k` child pointer may be null only
+//! when the remainder within that child is `0`. Anything else means an earlier
+//! index already passed through the same pointer, so a null there is damage.
+//! That rule is now normative in `CTFS-Binary-Format.md` §4 under "Null
+//! pointers during allocation", because both implementations of the walk had
+//! the same hole and the spec did not say which reading was right.
 //!
 //! # NO MOCKS
 //!
@@ -93,11 +107,17 @@ use std::fs;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
-use codetracer_ctfs::{CtfsReader, CtfsWriter};
+use codetracer_ctfs::{CtfsError, CtfsReader, CtfsWriter};
 use tempfile::TempDir;
+
+mod nim_adjudicator;
+use nim_adjudicator::{nim_checker, run_nim_checker};
 
 const BS: usize = 4096;
 const MAX_ROOT_ENTRIES: u32 = 16;
+/// Data pointers per mapping block: the last of the `BS / 8` entries is the
+/// chain pointer. 511 for the default 4096-byte block.
+const USABLE: usize = BS / 8 - 1;
 
 fn deterministic_bytes(seed: u64, n: usize) -> Vec<u8> {
     let mut state = seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) | 1;
@@ -334,4 +354,288 @@ fn the_refused_stream_never_reads_back_containing_block_zero() {
             got.windows(4).any(|w| w == [0xC0, 0xDE, 0x72, 0xAC])
         ),
     }
+}
+
+// ---------------------------------------------------------------------------
+// The allocation half: a null pointer that `insert_data_block_chain` and
+// `navigate_and_insert` used to read as "not allocated yet".
+// ---------------------------------------------------------------------------
+
+/// The u64 at entry `index` of `block`.
+fn ptr_at(image: &[u8], block: u64, index: usize) -> u64 {
+    let off = block as usize * BS + index * 8;
+    u64::from_le_bytes(image[off..off + 8].try_into().unwrap())
+}
+
+/// Reopen `path`, append `tail` to `name`, and seal it — the whole sequence a
+/// consumer of a closed container performs, as one result. Nothing here pokes
+/// at internals: `open_append` / `find_file` / `append` / `close` are the
+/// crate's entire public reopen surface.
+fn reopen_and_append(path: &Path, name: &str, tail: &[u8]) -> Result<(), CtfsError> {
+    let mut w = CtfsWriter::open_append(path)?;
+    let h = w.find_file(name).expect("find_file could not locate the stream");
+    w.append(h, tail)?;
+    w.close()
+}
+
+/// The refusal text, for the assertions that check *which* rule refused.
+fn refusal_message(outcome: &Result<(), CtfsError>) -> String {
+    match outcome {
+        Ok(()) => "the append succeeded".to_string(),
+        Err(e) => e.to_string(),
+    }
+}
+
+/// What a stream reads back as, in one line, for a failure message.
+fn readback(path: &Path, name: &str) -> String {
+    match CtfsReader::open(path) {
+        Err(e) => format!("the container no longer opens: {e}"),
+        Ok(mut r) => match r.read_file(name) {
+            Err(e) => format!("refused by the reader: {e}"),
+            Ok(got) => format!("{} bytes", got.len()),
+        },
+    }
+}
+
+#[test]
+fn an_append_through_a_null_chain_pointer_is_refused_rather_than_orphaning_the_subtree() {
+    // A complete, sealed container whose stream is an exact block multiple —
+    // which is precisely the shape `open_append` does not validate, because
+    // `read_last_data_block_chain` only runs for a partial tail. The first code
+    // to look at the mapping is the append's own allocator.
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("t.ct");
+    let meta = deterministic_bytes(1, BS);
+    // 512 data blocks: indices 0..510 live in the level-1 root, and index 511
+    // is the first that needs the level-2 chain, so the chain pointer exists
+    // and covers 511 real data blocks.
+    let big = deterministic_bytes(3, BS * 512);
+    sealed_container(&path, &[("meta.dat", meta.clone()), ("big.dat", big.clone())]);
+
+    let image = read_image(&path);
+    let (size, root) = entry_of(&image, "big.dat");
+    assert_eq!(size % BS as u64, 0, "the fixture must be an exact block multiple");
+    let old_l2 = ptr_at(&image, root, USABLE);
+    assert_ne!(old_l2, 0, "the fixture does not actually use a level-2 chain");
+
+    let chain_off = root * BS as u64 + (USABLE * 8) as u64;
+    poke_u64(&path, chain_off, 0);
+    let before = read_image(&path);
+
+    let outcome = reopen_and_append(&path, "big.dat", &deterministic_bytes(9, BS));
+
+    let after = read_image(&path);
+    let new_l2 = ptr_at(&after, root, USABLE);
+
+    if outcome.is_ok() {
+        panic!(
+            "the append reported success on a container whose level-2 chain pointer was null. \
+             The writer wrote a fresh mapping block into root[{USABLE}] (was {old_l2} before the \
+             damage, 0 after it, now {new_l2}), so the {USABLE} data blocks the old level-2 \
+             subtree at block {old_l2} mapped are no longer referenced by anything in the \
+             container and cannot be recovered from it. big.dat now {}",
+            readback(&path, "big.dat")
+        );
+    }
+
+    // Checked before the wording, deliberately: refusing is only worth anything
+    // if it also leaves the evidence in place, and the pointer that a repair
+    // tool would use to find block `old_l2` again must not have been replaced by
+    // a fresh, empty mapping block. Dropping the chain-pointer rule but keeping
+    // the child one still produces *a* refusal — from one level further down,
+    // after the damage has been done — so an assertion on the message alone
+    // would call that a pass of the wrong kind.
+    assert_eq!(
+        new_l2, 0,
+        "the append was refused but still rewrote root[{USABLE}] to {new_l2}, destroying the only \
+         thing that says the level-2 subtree at block {old_l2} ever existed"
+    );
+    let msg = refusal_message(&outcome);
+    assert!(
+        msg.contains("null chain pointer"),
+        "the refusal does not name the null chain pointer: {msg}"
+    );
+    // And nothing else moved either. A refused append must leave the container
+    // byte-identical — the writer allocates its data block before it walks the
+    // mapping, so "refused" has to mean the allocation never reached the file,
+    // not merely that block 0 survived. The Nim writer is held to the same
+    // property (it rolls the provisional allocation back), which is what keeps
+    // the two implementations agreeing about what a refusal leaves behind.
+    assert_eq!(
+        after.len(),
+        before.len(),
+        "the refused append changed the container's length from {} to {}",
+        before.len(),
+        after.len()
+    );
+    assert_eq!(after, before, "{}", block0_damage(&before, &after));
+
+    // The undamaged member is untouched, so nothing above passed vacuously.
+    let mut r = CtfsReader::open(&path).unwrap();
+    assert_eq!(r.read_file("meta.dat").unwrap(), meta);
+}
+
+#[test]
+fn an_append_through_a_null_level_2_child_is_refused_rather_than_orphaning_the_subtree() {
+    // The same zero one step further down the walk: a level-2 block's child
+    // pointer, reached by `navigate_and_insert` rather than by the chain loop
+    // in `insert_data_block_chain`. Two separate sites, so two cases.
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("t.ct");
+    let meta = deterministic_bytes(1, BS);
+    // 1023 data blocks. Rebased at level 2, index i maps to r = i - 511, and
+    // the level-2 block's entry is r / 511. Index 1022 gives r = 511, i.e.
+    // entry 1 — so the level-2 block has two children, and the next append
+    // (index 1023, r = 512) descends through entry 1 at a non-zero remainder.
+    let big = deterministic_bytes(3, BS * 1023);
+    sealed_container(&path, &[("meta.dat", meta.clone()), ("big.dat", big)]);
+
+    let image = read_image(&path);
+    let (_, root) = entry_of(&image, "big.dat");
+    let l2 = ptr_at(&image, root, USABLE);
+    assert_ne!(l2, 0, "the fixture does not use a level-2 chain");
+    let old_child = ptr_at(&image, l2, 1);
+    assert_ne!(old_child, 0, "the fixture does not use a second level-2 child");
+
+    let child_off = l2 * BS as u64 + 8;
+    poke_u64(&path, child_off, 0);
+    let before = read_image(&path);
+
+    let outcome = reopen_and_append(&path, "big.dat", &deterministic_bytes(9, BS));
+
+    let after = read_image(&path);
+    let new_child = ptr_at(&after, l2, 1);
+
+    if outcome.is_ok() {
+        panic!(
+            "the append reported success on a container whose level-2 child pointer was null. \
+             The writer wrote a fresh mapping block into block {l2} entry 1 (was {old_child} \
+             before the damage, 0 after it, now {new_child}), orphaning the level-1 subtree at \
+             block {old_child}. big.dat now {}",
+            readback(&path, "big.dat")
+        );
+    }
+
+    // Structure before wording, for the reason given in the case above.
+    assert_eq!(
+        new_child, 0,
+        "the append was refused but still rewrote block {l2} entry 1 to {new_child}, orphaning \
+         the level-1 subtree at block {old_child}"
+    );
+    let msg = refusal_message(&outcome);
+    assert!(
+        msg.contains("null mapping pointer"),
+        "the refusal does not name the null mapping pointer: {msg}"
+    );
+    // And nothing else moved either. A refused append must leave the container
+    // byte-identical — the writer allocates its data block before it walks the
+    // mapping, so "refused" has to mean the allocation never reached the file,
+    // not merely that block 0 survived. The Nim writer is held to the same
+    // property (it rolls the provisional allocation back), which is what keeps
+    // the two implementations agreeing about what a refusal leaves behind.
+    assert_eq!(
+        after.len(),
+        before.len(),
+        "the refused append changed the container's length from {} to {}",
+        before.len(),
+        after.len()
+    );
+    assert_eq!(after, before, "{}", block0_damage(&before, &after));
+
+    let mut r = CtfsReader::open(&path).unwrap();
+    assert_eq!(r.read_file("meta.dat").unwrap(), meta);
+}
+
+/// The control for both cases above, and the one that says the new refusals do
+/// not simply stop the writer from ever extending a mapping.
+///
+/// It deliberately crosses the level-1/level-2 boundary **inside the reopened
+/// session**: the sealed container has 510 data blocks (all in the level-1
+/// root, no chain pointer at all), and the append takes it to 513, so index 511
+/// is the first to need level 2 and the chain pointer is legitimately null when
+/// the reopened writer reaches it. That is the exact state the new rule has to
+/// keep allowing, and it is where a rule stated one index too strictly would
+/// show up.
+#[test]
+fn a_reopened_append_may_still_create_the_level_2_chain_it_needs() {
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("t.ct");
+    let meta = deterministic_bytes(1, BS * 2);
+    let head = deterministic_bytes(4, BS * 510);
+    sealed_container(&path, &[("meta.dat", meta.clone()), ("big.dat", head.clone())]);
+
+    let image = read_image(&path);
+    let (_, root) = entry_of(&image, "big.dat");
+    assert_eq!(
+        ptr_at(&image, root, USABLE),
+        0,
+        "the fixture must start with no level-2 chain, or it does not test creating one"
+    );
+
+    let tail = deterministic_bytes(5, BS * 3);
+    reopen_and_append(&path, "big.dat", &tail).expect("a healthy reopened append was refused");
+
+    let mut expected = head;
+    expected.extend_from_slice(&tail);
+
+    let after = read_image(&path);
+    assert_ne!(
+        ptr_at(&after, root, USABLE),
+        0,
+        "the reopened append did not create the level-2 chain it needed"
+    );
+
+    let mut r = CtfsReader::open(&path).unwrap();
+    assert_eq!(r.read_file("big.dat").unwrap(), expected, "the extended stream is wrong");
+    assert_eq!(r.read_file("meta.dat").unwrap(), meta);
+}
+
+/// The cross-implementation half, and the reason it is on the *control* rather
+/// than on a refusal: a refusal is a fact about one writer, whereas the bytes a
+/// successful reopened append leaves behind are a claim about the **format**,
+/// and §5d makes agreement between implementations the acceptance criterion for
+/// that.
+///
+/// The fixture is deliberately not a pure function of its inputs. The container
+/// is written, sealed, closed, reopened from disk — recovering `NextFreeBlock`
+/// from the file length rather than from any in-memory state — and only then
+/// extended across the level-1/level-2 boundary of §4. Its bytes therefore
+/// depend on the on-disk state carried across the close, which is what makes an
+/// agreement here worth asserting; a fixture built in one pass would be
+/// satisfied by any writer that is merely self-consistent.
+#[test]
+fn the_nim_reader_agrees_with_what_a_reopened_append_wrote_across_a_level_boundary() {
+    if nim_checker().is_none() {
+        return;
+    }
+    let dir = TempDir::new().unwrap();
+    let path = dir.path().join("reopened.ct");
+
+    let meta = deterministic_bytes(21, BS * 2);
+    let head = deterministic_bytes(22, BS * 510);
+    sealed_container(&path, &[("meta.dat", meta.clone()), ("big.dat", head.clone())]);
+
+    // Two separate reopen-append cycles, so the second one inherits a mapping
+    // the first one extended rather than one a single session built.
+    let tail1 = deterministic_bytes(23, BS * 3);
+    reopen_and_append(&path, "big.dat", &tail1).expect("first reopened append refused");
+    let tail2 = deterministic_bytes(24, BS + 77);
+    reopen_and_append(&path, "big.dat", &tail2).expect("second reopened append refused");
+
+    let mut expected = head;
+    expected.extend_from_slice(&tail1);
+    expected.extend_from_slice(&tail2);
+
+    let (out, ok) = run_nim_checker(
+        dir.path(),
+        &path,
+        &[("meta.dat", &meta), ("big.dat", &expected)],
+        &["absent.dat"],
+    );
+    assert!(
+        ok,
+        "the independent Nim reader does not agree with the container two reopened appends left \
+         behind, so this crate's §4 walk across the level-1/level-2 boundary differs from the \
+         other implementation's rather than merely being self-consistent:\n{out}"
+    );
 }

@@ -124,6 +124,8 @@ fn the_nim_writer_trait_surface_is_callable_and_harmless() {
     writer.set_recording_id(RECORDING_ID);
     writer.begin_writing_trace_events(Path::new("ignored")).unwrap();
 
+    assert!(!writer.dropped_column_awareness(), "nothing has asked for columns yet");
+
     {
         let w: &mut dyn TraceWriter = &mut writer;
         w.enable_column_aware_steps();
@@ -144,6 +146,14 @@ fn the_nim_writer_trait_surface_is_callable_and_harmless() {
 
     let bytes = writer.take_container_bytes().expect("the container must still be produced");
     assert_eq!(&bytes[..5], &[0xC0, 0xDE, 0x72, 0xAC, 0xE2]);
+
+    // The loss of column data must be *detectable*: a container that silently
+    // drops columns still reads back and still matches on every step count, so
+    // a recorder that depends on column-aware replay has nothing else to check.
+    assert!(
+        writer.dropped_column_awareness(),
+        "asking for column-aware output that cannot be produced must be visible to the caller"
+    );
 }
 
 /// `take_container_bytes` moves the bytes out, so a second call is empty —

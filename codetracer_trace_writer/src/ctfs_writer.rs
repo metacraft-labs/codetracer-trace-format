@@ -140,6 +140,21 @@ impl Write for SharedBuffer {
     }
 }
 
+/// Where a [`CtfsTraceWriter`] lays its container out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CtfsOutput {
+    /// A `.ct` file on disk, at the path handed to
+    /// `begin_writing_trace_events` (with the extension replaced). The
+    /// default, and the only behaviour that existed before in-memory output.
+    File,
+    /// A `Vec<u8>` held by the writer, collected after
+    /// `finish_writing_trace_events` with
+    /// [`take_container_bytes`](CtfsTraceWriter::take_container_bytes).
+    /// The only mode available on `wasm32-unknown-unknown`, which has no
+    /// filesystem.
+    Memory,
+}
+
 /// A trace writer that outputs a single `.ct` CTFS container file.
 ///
 /// The container holds:
@@ -166,21 +181,6 @@ impl Write for SharedBuffer {
 /// In `Cbor` mode (legacy), events are CBOR-serialized and streamed through
 /// zeekstd, flushing to the CTFS file when `flush_threshold` bytes have
 /// accumulated.
-/// Where a [`CtfsTraceWriter`] lays its container out.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CtfsOutput {
-    /// A `.ct` file on disk, at the path handed to
-    /// `begin_writing_trace_events` (with the extension replaced). The
-    /// default, and the only behaviour that existed before in-memory output.
-    File,
-    /// A `Vec<u8>` held by the writer, collected after
-    /// `finish_writing_trace_events` with
-    /// [`take_container_bytes`](CtfsTraceWriter::take_container_bytes).
-    /// The only mode available on `wasm32-unknown-unknown`, which has no
-    /// filesystem.
-    Memory,
-}
-
 pub struct CtfsTraceWriter {
     base: AbstractTraceWriterData,
     ctfs_writer: Option<CtfsWriter>,
@@ -194,6 +194,10 @@ pub struct CtfsTraceWriter {
     /// `finish_writing_trace_events`. See
     /// [`set_recording_id`](CtfsTraceWriter::set_recording_id).
     recording_id: Option<String>,
+    /// Set when a caller asked for column-aware output this writer cannot
+    /// produce. See
+    /// [`dropped_column_awareness`](CtfsTraceWriter::dropped_column_awareness).
+    column_aware_requested: bool,
 
     /// The serialization format to use.
     serialization_format: EventSerializationFormat,
@@ -332,6 +336,7 @@ impl CtfsTraceWriter {
             output: CtfsOutput::File,
             container_bytes: None,
             recording_id: None,
+            column_aware_requested: false,
             serialization_format: format,
             encoder: None,
             compressed_sink: None,
@@ -612,6 +617,34 @@ impl CtfsTraceWriter {
         self.container_bytes.as_deref()
     }
 
+    /// Whether a caller asked for column-aware output that this writer
+    /// cannot produce.
+    ///
+    /// `true` once any of `enable_column_aware_steps`,
+    /// `enable_column_breakpoints_support` or `enable_column_motions_support`
+    /// has been called. Those calls are accepted and ignored — this writer has
+    /// no column-bearing step encoder, no producer for the `paths.dat`
+    /// Layout A line-length table and no delta-column opcode, and its split
+    /// streams are not in the spec's canonical wire format, so it cannot honour
+    /// them and does not set the corresponding `meta.dat` capability bits.
+    ///
+    /// Silently losing columns is the failure mode worth guarding against,
+    /// because the container still reads back and every step count still
+    /// matches — only the columns are gone. A recorder that depends on
+    /// column-aware replay should assert on this:
+    ///
+    /// ```no_run
+    /// # use codetracer_trace_writer::ctfs_writer::CtfsTraceWriter;
+    /// # let writer = CtfsTraceWriter::new_in_memory("p", &[]);
+    /// assert!(
+    ///     !writer.dropped_column_awareness(),
+    ///     "this trace needs column-aware steps; the pure-Rust CTFS writer cannot emit them yet"
+    /// );
+    /// ```
+    pub fn dropped_column_awareness(&self) -> bool {
+        self.column_aware_requested
+    }
+
     /// Pin the `recording_id` stamped into `meta.json` and `meta.dat`.
     ///
     /// By default the writer mints a fresh UUIDv7 at
@@ -787,6 +820,21 @@ impl AbstractTraceWriter for CtfsTraceWriter {
 }
 
 impl TraceWriter for CtfsTraceWriter {
+    // The column-aware family is accepted and ignored -- see
+    // `dropped_column_awareness` for why, and for how a caller that depends on
+    // columns detects it. The overrides exist only to record the request.
+    fn enable_column_aware_steps(&mut self) {
+        self.column_aware_requested = true;
+    }
+
+    fn enable_column_breakpoints_support(&mut self) {
+        self.column_aware_requested = true;
+    }
+
+    fn enable_column_motions_support(&mut self) {
+        self.column_aware_requested = true;
+    }
+
     fn begin_writing_trace_events(&mut self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
         // The legacy CBOR mode streams through zeekstd (libzstd, C), which
         // does not exist on wasm32. Refuse it up front rather than letting the

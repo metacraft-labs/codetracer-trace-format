@@ -213,13 +213,66 @@ impl TraceMetadata {
     /// which combines the current wall-clock ms with 74 random bits
     /// from a CSPRNG, per RFC 9562 §5.7.
     pub fn new(program: impl Into<String>, args: Vec<String>, workdir: PathBuf) -> Self {
+        Self::with_recording_id(mint_recording_id(), program, args, workdir)
+    }
+
+    /// Construct a `TraceMetadata` with a caller-supplied `recording_id`.
+    ///
+    /// Use this when the identity is decided outside the writer — the import
+    /// flow pinning a pre-existing id, a test that needs a reproducible
+    /// container, or a browser host that mints the UUIDv7 in JavaScript
+    /// (where a real clock and a real CSPRNG are available and the wasm
+    /// module has neither).
+    pub fn with_recording_id(recording_id: impl Into<String>, program: impl Into<String>, args: Vec<String>, workdir: PathBuf) -> Self {
         TraceMetadata {
-            recording_id: uuid::Uuid::now_v7().hyphenated().to_string(),
+            recording_id: recording_id.into(),
             workdir,
             program: program.into(),
             args,
         }
     }
+}
+
+/// Mint a fresh UUIDv7 `recording_id` (RFC 9562 §5.7).
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+fn mint_recording_id() -> String {
+    uuid::Uuid::now_v7().hyphenated().to_string()
+}
+
+/// Mint a `recording_id` on `wasm32-unknown-unknown`.
+///
+/// That target has no wall clock and no entropy source, so a genuine UUIDv7
+/// cannot be produced inside the module — see the `uuid` note in this crate's
+/// `Cargo.toml`. What comes out here is still a well-formed, correctly
+/// versioned and varianted UUIDv7 **string**, and is strictly increasing
+/// within a module instance, so ids sort in recording order exactly as real
+/// ones do. It is NOT globally unique across instances: two fresh module
+/// instances mint the same sequence.
+///
+/// Hosts that need real uniqueness should mint the id where a clock and a
+/// CSPRNG exist and pass it in via
+/// [`TraceMetadata::with_recording_id`](TraceMetadata::with_recording_id) (or
+/// the writer's `set_recording_id`). The determinism is deliberately useful in
+/// the other direction too: it is what lets a wasm-produced container be
+/// compared byte-for-byte against a host-produced one.
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+fn mint_recording_id() -> String {
+    use core::sync::atomic::{AtomicU64, Ordering};
+    static COUNTER: AtomicU64 = AtomicU64::new(1);
+
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    // Layout per RFC 9562 §5.7: 48-bit unix_ts_ms | ver=7 | 12 bits rand_a |
+    // var=0b10 | 62 bits rand_b.  The counter drives the timestamp field so
+    // the ordering property survives; the remaining bits are fixed.
+    let ts = n & 0x0000_ffff_ffff_ffff;
+    format!(
+        "{:08x}-{:04x}-7{:03x}-8{:03x}-{:012x}",
+        (ts >> 16) as u32,
+        (ts & 0xffff) as u16,
+        0u16,
+        0u16,
+        0u64
+    )
 }
 
 // call keys:

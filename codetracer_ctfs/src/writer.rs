@@ -20,7 +20,10 @@ use crate::CtfsError;
 /// behaviour and unchanged output bytes) and [`MemoryStore`], which keeps the
 /// container in a `Vec<u8>`. The in-memory store is what makes the writer
 /// usable on `wasm32-unknown-unknown`, where there is no filesystem at all.
-pub trait CtfsStore: Write + Seek + IoRead {
+/// `Send` is a supertrait so `CtfsWriter` — and every trace writer built on
+/// it — stays `Send`, which `create_trace_writer` returns as
+/// `Box<dyn TraceWriter + Send>`. Both shipped stores are `Send` already.
+pub trait CtfsStore: Write + Seek + IoRead + Send {
     /// Take the finished container bytes, if this store holds them in memory.
     ///
     /// File-backed stores return `None` — their bytes are on disk.

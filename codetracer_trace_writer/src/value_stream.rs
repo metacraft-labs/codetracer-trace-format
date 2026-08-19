@@ -582,7 +582,6 @@ pub fn decode_rvalue(blob: &[u8]) -> Result<RValue, String> {
 }
 
 /// The encoded `values.dat` stream plus its companion `values.idx`.
-#[cfg(not(target_arch = "wasm32"))]
 pub struct EncodedValueStream {
     /// Concatenated Zstd-compressed chunks, no inline headers.
     pub dat: Vec<u8>,
@@ -598,9 +597,7 @@ pub struct EncodedValueStream {
 /// Each record is length-prefixed within its chunk so the reader can walk to the
 /// `N % chunk_size`-th record without re-deriving sizes (records are variable
 /// length). Each chunk is independently Zstd-compressed.
-#[cfg(not(target_arch = "wasm32"))]
 pub fn encode_value_stream(records: &[ValueRecordEntry], chunk_size: usize, zstd_level: i32) -> Result<EncodedValueStream, String> {
-    use std::io::Cursor;
     let chunk_size = chunk_size.max(1);
     let mut dat: Vec<u8> = Vec::new();
     let mut idx: Vec<u8> = Vec::new();
@@ -620,7 +617,7 @@ pub fn encode_value_stream(records: &[ValueRecordEntry], chunk_size: usize, zstd
             encode_varint(rec_bytes.len() as u64, &mut raw);
             raw.extend_from_slice(&rec_bytes);
         }
-        let compressed = zstd::encode_all(Cursor::new(&raw[..]), zstd_level).map_err(|e| format!("values.dat: zstd encode failed: {e}"))?;
+        let compressed = codetracer_ctfs::zstd_compat::encode_all(&raw, zstd_level).map_err(|e| format!("values.dat: zstd encode failed: {e}"))?;
         dat.extend_from_slice(&compressed);
         i = end;
     }

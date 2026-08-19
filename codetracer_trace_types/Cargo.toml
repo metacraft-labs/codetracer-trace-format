@@ -18,5 +18,17 @@ serde_repr = "0.1"
 schemars = "0.8.2"
 serde_with = "3.15.1"
 # M-REC-1: UUIDv7 generation for recording_id (RFC 9562, §5.7).  The
-# `v7` feature pulls in `getrandom` for CSPRNG entropy.
+# `v7` feature pulls in `getrandom` for CSPRNG entropy.  It is enabled for
+# every target EXCEPT `wasm32-unknown-unknown` -- see the target block below.
+uuid = { version = "1.10", features = ["serde"] }
+
+# `wasm32-unknown-unknown` has neither a wall clock nor an entropy source, so
+# `uuid` raises a hard `compile_error!` for `v1`/`v6`/`v7` there unless its
+# `js` feature is on -- and `js` pulls in `wasm-bindgen`, which would force JS
+# glue onto a module that otherwise instantiates under a bare
+# `WebAssembly.instantiate` and runs unmodified under `wasmtime`.  So the `v7`
+# feature is enabled everywhere else and omitted there; `TraceMetadata::new`
+# mints its `recording_id` without the `uuid` crate on that one target.  See
+# `TraceMetadata::with_recording_id` for supplying a host-minted id instead.
+[target.'cfg(not(all(target_arch = "wasm32", target_os = "unknown")))'.dependencies]
 uuid = { version = "1.10", features = ["v7", "serde"] }

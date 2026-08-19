@@ -383,7 +383,6 @@ pub fn decode_record(data: &[u8], pos: &mut usize, prev_abs: Option<u64>) -> Res
 }
 
 /// The encoded `steps.dat` stream plus its companion `steps.idx`.
-#[cfg(not(target_arch = "wasm32"))]
 pub struct EncodedStepStream {
     /// Concatenated Zstd-compressed chunks, no inline headers.
     pub dat: Vec<u8>,
@@ -402,9 +401,7 @@ pub struct EncodedStepStream {
 /// chunk is always AbsoluteStep (encoding rule 5). `forced_absolute` (one flag
 /// per `Step` record, in `Step` order) additionally forces AbsoluteStep for the
 /// first step and steps following a Call/Return/ThreadSwitch (rules 1-3).
-#[cfg(not(target_arch = "wasm32"))]
 pub fn encode_step_stream(stream: &StepStream, chunk_size: usize, zstd_level: i32) -> Result<EncodedStepStream, String> {
-    use std::io::Cursor;
     let chunk_size = chunk_size.max(1);
     let records = &stream.records;
     let mut dat: Vec<u8> = Vec::new();
@@ -436,7 +433,7 @@ pub fn encode_step_stream(stream: &StepStream, chunk_size: usize, zstd_level: i3
             };
             prev_abs = encode_record(record, prev_abs, force_absolute, &mut raw);
         }
-        let compressed = zstd::encode_all(Cursor::new(&raw[..]), zstd_level).map_err(|e| format!("steps.dat: zstd encode failed: {e}"))?;
+        let compressed = codetracer_ctfs::zstd_compat::encode_all(&raw, zstd_level).map_err(|e| format!("steps.dat: zstd encode failed: {e}"))?;
         dat.extend_from_slice(&compressed);
         i = end;
     }
@@ -517,7 +514,7 @@ mod tests {
         // Encode all in a single chunk, decode forward, compare absolute lines.
         let encoded = encode_step_stream(&stream, 1024, 3).unwrap();
         // Decompress the single chunk.
-        let raw = zstd::decode_all(std::io::Cursor::new(&encoded.dat[..])).unwrap();
+        let raw = codetracer_ctfs::zstd_compat::decode_all(&encoded.dat).unwrap();
         let mut pos = 0usize;
         let mut prev_abs: Option<u64> = None;
         let mut decoded = Vec::new();

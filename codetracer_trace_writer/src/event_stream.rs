@@ -263,7 +263,6 @@ fn event_log_kind_ord(kind: EventLogKind) -> u8 {
 }
 
 /// The encoded `events.dat` stream plus its companion `events.idx`.
-#[cfg(not(target_arch = "wasm32"))]
 pub struct EncodedIoEventStream {
     /// Concatenated Zstd-compressed chunks, no inline headers.
     pub dat: Vec<u8>,
@@ -279,9 +278,7 @@ pub struct EncodedIoEventStream {
 /// Each record is length-prefixed within its chunk so the reader can walk to the
 /// `N % chunk_size`-th record without re-deriving sizes (records are variable
 /// length). Each chunk is independently Zstd-compressed.
-#[cfg(not(target_arch = "wasm32"))]
 pub fn encode_io_event_stream(records: &[IoEventRecord], chunk_size: usize, zstd_level: i32) -> Result<EncodedIoEventStream, String> {
-    use std::io::Cursor;
     let chunk_size = chunk_size.max(1);
     let mut dat: Vec<u8> = Vec::new();
     let mut idx: Vec<u8> = Vec::new();
@@ -301,7 +298,7 @@ pub fn encode_io_event_stream(records: &[IoEventRecord], chunk_size: usize, zstd
             encode_varint(rec_bytes.len() as u64, &mut raw);
             raw.extend_from_slice(&rec_bytes);
         }
-        let compressed = zstd::encode_all(Cursor::new(&raw[..]), zstd_level).map_err(|e| format!("events.dat: zstd encode failed: {e}"))?;
+        let compressed = codetracer_ctfs::zstd_compat::encode_all(&raw, zstd_level).map_err(|e| format!("events.dat: zstd encode failed: {e}"))?;
         dat.extend_from_slice(&compressed);
         i = end;
     }

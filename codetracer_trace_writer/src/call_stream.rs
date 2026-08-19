@@ -350,7 +350,6 @@ impl CallStreamBuilder {
 }
 
 /// The encoded `calls.dat` stream plus its companion `calls.idx`.
-#[cfg(not(target_arch = "wasm32"))]
 pub struct EncodedCallStream {
     /// Concatenated Zstd-compressed chunks, no inline headers.
     pub dat: Vec<u8>,
@@ -362,9 +361,7 @@ pub struct EncodedCallStream {
 
 /// Encode call records into `calls.dat` (chunked Zstd) + `calls.idx`
 /// (companion offset index), per seekable-zstd.md.
-#[cfg(not(target_arch = "wasm32"))]
 pub fn encode_call_stream(records: &[CallStreamRecord], chunk_size: usize, zstd_level: i32) -> Result<EncodedCallStream, String> {
-    use std::io::Cursor;
     let chunk_size = chunk_size.max(1);
     let mut dat: Vec<u8> = Vec::new();
     let mut idx: Vec<u8> = Vec::new();
@@ -386,7 +383,7 @@ pub fn encode_call_stream(records: &[CallStreamRecord], chunk_size: usize, zstd_
             encode_varint(rec_bytes.len() as u64, &mut raw);
             raw.extend_from_slice(&rec_bytes);
         }
-        let compressed = zstd::encode_all(Cursor::new(&raw[..]), zstd_level).map_err(|e| format!("calls.dat: zstd encode failed: {e}"))?;
+        let compressed = codetracer_ctfs::zstd_compat::encode_all(&raw, zstd_level).map_err(|e| format!("calls.dat: zstd encode failed: {e}"))?;
         dat.extend_from_slice(&compressed);
         i = end;
     }

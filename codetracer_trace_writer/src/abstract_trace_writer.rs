@@ -34,7 +34,12 @@ pub struct AbstractTraceWriterData {
 impl AbstractTraceWriterData {
     pub fn new(program: &str, args: &[String]) -> Self {
         AbstractTraceWriterData {
-            workdir: env::current_dir().expect("can access the current dir"),
+            // There is no current directory in a wasm sandbox (nor in a
+            // chrooted/deleted-cwd process), and `current_dir()` reports that
+            // as an error rather than a panic.  A missing workdir is metadata
+            // the trace can live without, so fall back to an empty path; call
+            // `set_workdir` to record a meaningful one.
+            workdir: env::current_dir().unwrap_or_default(),
             program: program.to_string(),
             args: args.to_vec(),
 

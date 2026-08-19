@@ -171,4 +171,68 @@ pub trait TraceWriter: AbstractTraceWriter {
     fn events(&self) -> &[TraceLowLevelEvent] {
         &[]
     }
+
+    // -----------------------------------------------------------------
+    // Parity with `codetracer_trace_writer_nim::TraceWriter`
+    //
+    // The Nim-backed writer's trait grew a close step and a column-aware
+    // family that this one never had, so a recorder written against that
+    // trait would not even type-check here.  The signatures below match it
+    // exactly, so `&mut dyn TraceWriter` is interchangeable between the two
+    // crates for these calls.
+    //
+    // Note what the defaults do and do not claim.  This crate's CTFS writer
+    // does not yet emit column-aware steps — `register_step_with_column`
+    // drops the column, there is no producer for the `paths.dat` Layout A
+    // `line_lengths` table, and there is no `sekDeltaColumn` encoder — so it
+    // deliberately does NOT set the corresponding `meta.dat` capability bits
+    // (4 / 6 / 7).  Advertising a capability the container does not carry
+    // would make a reader ask for columns and get nothing.  The calls are
+    // accepted and ignored, which is the same contract the Nim crate's own
+    // `NonStreamingTraceWriter` test double offers.
+    // -----------------------------------------------------------------
+
+    /// Close the writer and flush everything still buffered.
+    ///
+    /// For the Nim multi-stream backend this is the step that actually writes
+    /// the `.ct` container. This crate's writers finalize in
+    /// [`finish_writing_trace_events`](Self::finish_writing_trace_events), so
+    /// the default is a no-op and calling it is harmless.
+    fn close(&mut self) -> Result<(), Box<dyn Error>> {
+        Ok(())
+    }
+
+    /// Opt the writer into column-aware step encoding (`meta.dat` bit 4).
+    ///
+    /// Accepted and ignored here — see the note above.
+    fn enable_column_aware_steps(&mut self) {}
+
+    /// Advertise support for per-column breakpoints (`meta.dat` bit 6).
+    ///
+    /// Accepted and ignored here — see the note above. The Nim writer treats
+    /// this as requiring column-aware steps, so it would be invalid to set
+    /// the bit without them.
+    fn enable_column_breakpoints_support(&mut self) {}
+
+    /// Advertise support for per-column step motions (`meta.dat` bit 7).
+    ///
+    /// Accepted and ignored here — see the note above.
+    fn enable_column_motions_support(&mut self) {}
+
+    /// Emit a column-only step event (`sekDeltaColumn`, tag 0x07).
+    ///
+    /// Accepted and ignored here — see the note above.
+    fn write_delta_column(&mut self, _column_delta: i64) {}
+
+    /// Register a source path together with its per-line column counts
+    /// (`paths.dat` Layout A).
+    ///
+    /// The per-line data is dropped here — see the note above — but the path
+    /// is registered and its [`PathId`] returned, so the call is a faithful
+    /// superset of [`register_path`](Self::register_path) and callers can use
+    /// it unconditionally.
+    fn register_path_with_line_lengths(&mut self, path: &Path, _line_lengths: &[u32]) -> Result<PathId, Box<dyn Error>> {
+        AbstractTraceWriter::register_path(self, path);
+        Ok(AbstractTraceWriter::ensure_path_id(self, path))
+    }
 }

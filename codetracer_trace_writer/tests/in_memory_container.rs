@@ -110,6 +110,42 @@ fn the_in_memory_container_reads_back_through_the_ctfs_reader() {
     );
 }
 
+/// A recorder written against `codetracer_trace_writer_nim`'s `TraceWriter`
+/// must type-check against this one, and the extra methods must be callable
+/// without disturbing the container.
+///
+/// The column-aware family is accepted and ignored here (this writer has no
+/// column-bearing step encoder), so the assertion is that calling it is
+/// harmless — not that columns survive. `register_path_with_line_lengths` is
+/// the exception: it must still register the path and hand back its id.
+#[test]
+fn the_nim_writer_trait_surface_is_callable_and_harmless() {
+    let mut writer = CtfsTraceWriter::new_in_memory("example", &[]);
+    writer.set_recording_id(RECORDING_ID);
+    writer.begin_writing_trace_events(Path::new("ignored")).unwrap();
+
+    {
+        let w: &mut dyn TraceWriter = &mut writer;
+        w.enable_column_aware_steps();
+        w.enable_column_breakpoints_support();
+        w.enable_column_motions_support();
+        w.write_delta_column(4);
+
+        let path = PathBuf::from("/src/columns.rs");
+        let id = w.register_path_with_line_lengths(&path, &[10, 20, 30]).unwrap();
+        assert_eq!(id, TraceWriter::ensure_path_id(w, &path), "the returned id must be the path's own id");
+
+        TraceWriter::register_step_with_column(w, &path, Line(1), Some(Line(7)));
+    }
+
+    write_sample_trace(&mut writer);
+    writer.finish_writing_trace_events().unwrap();
+    TraceWriter::close(&mut writer).unwrap();
+
+    let bytes = writer.take_container_bytes().expect("the container must still be produced");
+    assert_eq!(&bytes[..5], &[0xC0, 0xDE, 0x72, 0xAC, 0xE2]);
+}
+
 /// `take_container_bytes` moves the bytes out, so a second call is empty —
 /// callers that need to keep them should use `container_bytes()`.
 #[test]

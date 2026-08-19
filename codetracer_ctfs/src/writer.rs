@@ -1,5 +1,5 @@
 use std::fs::{File, OpenOptions};
-use std::io::{BufWriter, Read as IoRead, Seek, SeekFrom, Write};
+use std::io::{BufWriter, Cursor, Read as IoRead, Seek, SeekFrom, Write};
 use std::path::Path;
 
 use crate::base40::base40_encode;
@@ -7,6 +7,120 @@ use crate::block_alloc::BlockAllocator;
 use crate::file_entry::{FileEntry, FILE_ENTRY_SIZE};
 use crate::header::{CompressionMethod, ExtendedHeader, Header, EXTENDED_HEADER_SIZE, HEADER_SIZE};
 use crate::CtfsError;
+
+/// The random-access byte store a [`CtfsWriter`] lays its container out in.
+///
+/// CTFS is not a stream format: the writer revisits blocks it has already
+/// emitted — it back-patches mapping-chain pointers and rewrites the root
+/// block's file-entry table on every `sync_entry`/`close`. So a plain
+/// `impl Write` sink is not enough; the store must also seek and read back
+/// what it wrote. That is exactly `Write + Seek + Read`.
+///
+/// Two implementations ship: [`FileStore`] (the host default, unchanged
+/// behaviour and unchanged output bytes) and [`MemoryStore`], which keeps the
+/// container in a `Vec<u8>`. The in-memory store is what makes the writer
+/// usable on `wasm32-unknown-unknown`, where there is no filesystem at all.
+pub trait CtfsStore: Write + Seek + IoRead {
+    /// Take the finished container bytes, if this store holds them in memory.
+    ///
+    /// File-backed stores return `None` — their bytes are on disk.
+    fn take_bytes(&mut self) -> Option<Vec<u8>> {
+        None
+    }
+}
+
+/// A file-backed [`CtfsStore`] — the host default.
+///
+/// Wraps `BufWriter<File>` exactly as the writer always did, so the emitted
+/// bytes and the I/O pattern are unchanged. `Read` flushes the buffer first,
+/// matching the `flush(); seek(); get_mut().read_exact()` sequence the writer
+/// used before this abstraction existed.
+pub struct FileStore {
+    inner: BufWriter<File>,
+}
+
+impl FileStore {
+    pub fn new(file: File) -> Self {
+        FileStore { inner: BufWriter::new(file) }
+    }
+}
+
+impl Write for FileStore {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.inner.write(buf)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+impl Seek for FileStore {
+    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+        self.inner.seek(pos)
+    }
+}
+
+impl IoRead for FileStore {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.inner.flush()?;
+        self.inner.get_mut().read(buf)
+    }
+}
+
+impl CtfsStore for FileStore {}
+
+/// A `Vec<u8>`-backed [`CtfsStore`].
+///
+/// Produces the same container bytes a [`FileStore`] would, without touching
+/// a filesystem — the writer's seek-and-back-patch pattern maps directly onto
+/// `Cursor<Vec<u8>>`, which zero-fills any gap left by seeking past the end.
+pub struct MemoryStore {
+    inner: Cursor<Vec<u8>>,
+}
+
+impl MemoryStore {
+    pub fn new() -> Self {
+        MemoryStore { inner: Cursor::new(Vec::new()) }
+    }
+
+    /// Borrow the bytes written so far.
+    pub fn as_slice(&self) -> &[u8] {
+        self.inner.get_ref()
+    }
+}
+
+impl Default for MemoryStore {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Write for MemoryStore {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.inner.write(buf)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+impl Seek for MemoryStore {
+    fn seek(&mut self, pos: SeekFrom) -> std::io::Result<u64> {
+        self.inner.seek(pos)
+    }
+}
+
+impl IoRead for MemoryStore {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        self.inner.read(buf)
+    }
+}
+
+impl CtfsStore for MemoryStore {
+    fn take_bytes(&mut self) -> Option<Vec<u8>> {
+        Some(std::mem::take(self.inner.get_mut()))
+    }
+}
 
 /// Opaque handle to an open file within a CTFS container.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -51,7 +165,7 @@ struct OpenFile {
 
 /// Writer for creating CTFS containers.
 pub struct CtfsWriter {
-    writer: BufWriter<File>,
+    writer: Box<dyn CtfsStore>,
     block_size: u32,
     max_root_entries: u32,
     allocator: BlockAllocator,
@@ -69,12 +183,12 @@ fn level_capacity(usable: u64, level: u32) -> u64 {
 }
 
 /// Read a full block from the writer's underlying file.
-fn read_block(writer: &mut BufWriter<File>, block_num: u64, block_size: u32) -> Result<Vec<u8>, CtfsError> {
+fn read_block(writer: &mut dyn CtfsStore, block_num: u64, block_size: u32) -> Result<Vec<u8>, CtfsError> {
     writer.flush()?;
     let offset = block_num * block_size as u64;
     writer.seek(SeekFrom::Start(offset))?;
     let mut buf = vec![0u8; block_size as usize];
-    writer.get_mut().read_exact(&mut buf)?;
+    writer.read_exact(&mut buf)?;
     Ok(buf)
 }
 
@@ -85,7 +199,7 @@ fn read_ptr(block_data: &[u8], index: usize) -> u64 {
 }
 
 /// Write a u64 pointer at a given index within a block on disk.
-fn write_ptr(writer: &mut BufWriter<File>, block_num: u64, index: usize, value: u64, block_size: u32) -> Result<(), CtfsError> {
+fn write_ptr(writer: &mut dyn CtfsStore, block_num: u64, index: usize, value: u64, block_size: u32) -> Result<(), CtfsError> {
     let offset = block_num * block_size as u64 + (index * 8) as u64;
     writer.seek(SeekFrom::Start(offset))?;
     writer.write_all(&value.to_le_bytes())?;
@@ -93,7 +207,7 @@ fn write_ptr(writer: &mut BufWriter<File>, block_num: u64, index: usize, value: 
 }
 
 /// Write a zero-filled block.
-fn write_zero_block(writer: &mut BufWriter<File>, block_num: u64, block_size: u32) -> Result<(), CtfsError> {
+fn write_zero_block(writer: &mut dyn CtfsStore, block_num: u64, block_size: u32) -> Result<(), CtfsError> {
     let offset = block_num * block_size as u64;
     writer.seek(SeekFrom::Start(offset))?;
     let zeros = vec![0u8; block_size as usize];
@@ -109,9 +223,26 @@ impl CtfsWriter {
 
     /// Create a new CTFS container at the given path with the specified compression method.
     pub fn create_with_compression(path: &Path, block_size: u32, max_root_entries: u32, compression: CompressionMethod) -> Result<Self, CtfsError> {
-        let ext_header = ExtendedHeader::new(block_size, max_root_entries)?;
         let file = OpenOptions::new().read(true).write(true).create(true).truncate(true).open(path)?;
-        let mut writer = BufWriter::new(file);
+        Self::create_in_store(Box::new(FileStore::new(file)), block_size, max_root_entries, compression)
+    }
+
+    /// Create a new CTFS container held entirely in memory.
+    ///
+    /// Identical to [`create`](Self::create) apart from where the bytes land:
+    /// the container is laid out in a `Vec<u8>`, retrieved at the end with
+    /// [`finish_to_bytes`](Self::finish_to_bytes). This is the constructor to
+    /// use on `wasm32-unknown-unknown`, which has no filesystem — but it is a
+    /// perfectly ordinary host constructor too, and produces the same bytes
+    /// the file-backed writer would.
+    pub fn create_in_memory(block_size: u32, max_root_entries: u32, compression: CompressionMethod) -> Result<Self, CtfsError> {
+        Self::create_in_store(Box::new(MemoryStore::new()), block_size, max_root_entries, compression)
+    }
+
+    /// Create a new CTFS container in an arbitrary [`CtfsStore`].
+    pub fn create_in_store(store: Box<dyn CtfsStore>, block_size: u32, max_root_entries: u32, compression: CompressionMethod) -> Result<Self, CtfsError> {
+        let ext_header = ExtendedHeader::new(block_size, max_root_entries)?;
+        let mut writer = store;
 
         // Write header (v3 with compression/encryption tags)
         let header = Header::with_compression(compression);
@@ -218,7 +349,7 @@ impl CtfsWriter {
             }
         }
 
-        let writer = BufWriter::new(file);
+        let writer: Box<dyn CtfsStore> = Box::new(FileStore::new(file));
 
         Ok(CtfsWriter {
             writer,
@@ -241,7 +372,7 @@ impl CtfsWriter {
 
         // Allocate a level-1 mapping block for this file
         let map_block = self.allocator.alloc();
-        write_zero_block(&mut self.writer, map_block, self.block_size)?;
+        write_zero_block(&mut *self.writer, map_block, self.block_size)?;
 
         self.files.push(OpenFile {
             entry_index,
@@ -350,13 +481,13 @@ impl CtfsWriter {
 
             // Follow or create the chain pointer from current_level_block[N-1]
             // to the next higher level block
-            let block_data = read_block(&mut self.writer, current_level_block, bs)?;
+            let block_data = read_block(&mut *self.writer, current_level_block, bs)?;
             let chain_ptr = read_ptr(&block_data, usable as usize);
             if chain_ptr == 0 {
                 // Allocate the higher-level block
                 let new_block = self.allocator.alloc();
-                write_zero_block(&mut self.writer, new_block, bs)?;
-                write_ptr(&mut self.writer, current_level_block, usable as usize, new_block, bs)?;
+                write_zero_block(&mut *self.writer, new_block, bs)?;
+                write_ptr(&mut *self.writer, current_level_block, usable as usize, new_block, bs)?;
                 current_level_block = new_block;
             } else {
                 current_level_block = chain_ptr;
@@ -385,7 +516,7 @@ impl CtfsWriter {
         if level == 1 {
             // Direct data block pointer
             debug_assert!(idx_within_level < usable, "idx {} >= usable {} at level 1", idx_within_level, usable);
-            write_ptr(&mut self.writer, mapping_block, idx_within_level as usize, data_block, bs)?;
+            write_ptr(&mut *self.writer, mapping_block, idx_within_level as usize, data_block, bs)?;
             return Ok(());
         }
 
@@ -397,13 +528,13 @@ impl CtfsWriter {
         debug_assert!(entry_idx < usable, "entry_idx {} >= usable {} at level {}", entry_idx, usable, level);
 
         // Read or allocate the sub-block
-        let block_data = read_block(&mut self.writer, mapping_block, bs)?;
+        let block_data = read_block(&mut *self.writer, mapping_block, bs)?;
         let child_block = read_ptr(&block_data, entry_idx as usize);
 
         let target_block = if child_block == 0 {
             let new_block = self.allocator.alloc();
-            write_zero_block(&mut self.writer, new_block, bs)?;
-            write_ptr(&mut self.writer, mapping_block, entry_idx as usize, new_block, bs)?;
+            write_zero_block(&mut *self.writer, new_block, bs)?;
+            write_ptr(&mut *self.writer, mapping_block, entry_idx as usize, new_block, bs)?;
             new_block
         } else {
             child_block
@@ -494,8 +625,24 @@ impl CtfsWriter {
         Ok(handle)
     }
 
+    /// Close the container and hand back its bytes.
+    ///
+    /// Equivalent to [`close`](Self::close) for a container created with
+    /// [`create_in_memory`](Self::create_in_memory). Errors for a file-backed
+    /// container, whose bytes live on disk rather than in the writer.
+    pub fn finish_to_bytes(mut self) -> Result<Vec<u8>, CtfsError> {
+        self.close_inner()?;
+        self.writer
+            .take_bytes()
+            .ok_or_else(|| CtfsError::Io(std::io::Error::other("finish_to_bytes: this CTFS container is file-backed; use close() instead")))
+    }
+
     /// Close the container, flushing all buffered data and writing metadata.
     pub fn close(mut self) -> Result<(), CtfsError> {
+        self.close_inner()
+    }
+
+    fn close_inner(&mut self) -> Result<(), CtfsError> {
         // Flush remaining buffered data for each file
         let file_count = self.files.len();
         for i in 0..file_count {

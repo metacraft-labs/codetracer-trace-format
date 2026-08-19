@@ -1,3 +1,12 @@
+// `trace_storage` — the module this CLI drives — is
+// `cfg(not(target_arch = "wasm32"))` because it carries the ureq/rustls/ring
+// TLS stack.  Cargo has no target-conditional `[[bin]]`, so without the guard
+// below `cargo check -p codetracer_ctfs --target wasm32-unknown-unknown`
+// fails on this binary even though the library — the only part a wasm
+// consumer links — compiles cleanly.
+
+#[cfg(not(target_arch = "wasm32"))]
+mod cli {
 use std::env;
 use std::fs;
 use std::path::Path;
@@ -11,7 +20,7 @@ use codetracer_ctfs::trace_storage::{
     TraceStorageManifest, UploadState, TRACE_STORAGE_SCHEMA,
 };
 
-fn main() {
+pub fn main() {
     if let Err(error) = run() {
         eprintln!("{error}");
         process::exit(1);
@@ -527,3 +536,13 @@ fn run_direct_materialized_finalize(argv: Vec<String>) -> Result<(), String> {
 fn usage() -> String {
     "usage: codetracer-managed-upload <subcommand> [args]\n  upload-materialized --path <file> --object-key <key> --sha256 <hex> [--artifact-kind <kind>]\n  direct-mcr-finalize --storage-config <path> --recording-id <id> --object-key-prefix <prefix> --idempotency-key <key> --slice <path> [--slice <path>]...\n  direct-materialized-finalize --storage-config <path> --recording-id <id> --object-key-prefix <prefix> --idempotency-key <key> --artifact-dir <dir> [--language python|ruby|javascript]".to_string()
 }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn main() {
+    cli::main()
+}
+
+/// The upload CLI is host-only; on wasm the binary is an empty shell.
+#[cfg(target_arch = "wasm32")]
+fn main() {}

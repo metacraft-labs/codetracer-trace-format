@@ -9,7 +9,6 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
 urlencoding = "2.1"
-zstd = "0.13"
 
 # `ureq` is only needed by `trace_storage` for HTTP uploads, which is
 # disabled on `wasm32-unknown-unknown` (see `src/lib.rs`).  Restricting
@@ -17,6 +16,18 @@ zstd = "0.13"
 # out of the WASM build graph.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ureq = { version = "2.12", features = ["json"] }
+# libzstd (C, via `zstd-sys`) is the compressor on every host target: it is
+# faster and its output is the byte-for-byte reference the golden fixtures
+# pin.  It cannot be built for `wasm32-unknown-unknown` (no libc), so the
+# wasm build below swaps in the pure-Rust `ruzstd`.  See `zstd_compat`.
+zstd = "0.13"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+# Pure-Rust Zstandard codec used in place of the C `zstd` on wasm.  0.8 has
+# both a decoder and an encoder, and its frames are standard-conformant, so
+# containers written from wasm are read back by the ordinary libzstd-backed
+# host readers (`ct-print`, the Nim reader).  See `zstd_compat`.
+ruzstd = "0.8.1"
 
 [[bin]]
 name = "codetracer-managed-upload"

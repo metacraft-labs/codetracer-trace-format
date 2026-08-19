@@ -16,6 +16,7 @@ members = [
     "sourcemap-translate",
     "ct-mapping-tools",
     "mapping-catalog",
+    "wasm-ctfs-demo",
 ]
 
 [workspace.dependencies]

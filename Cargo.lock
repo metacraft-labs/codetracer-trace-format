@@ -2551,6 +2551,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "wasm-ctfs-demo"
+version = "0.1.0"
+dependencies = [
+ "codetracer_trace_types",
+ "codetracer_trace_writer",
+]
+
+[[package]]
 name = "wasm-encoder"
 version = "0.244.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

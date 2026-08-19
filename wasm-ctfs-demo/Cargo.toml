@@ -1,0 +1,13 @@
+[package]
+name = "wasm-ctfs-demo"
+version = "0.1.0"
+edition = "2021"
+publish = false
+description = "Minimal wasm32 module that builds a CodeTracer `.ct` CTFS container in memory"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+codetracer_trace_writer = { path = "../codetracer_trace_writer" }
+codetracer_trace_types = { path = "../codetracer_trace_types" }

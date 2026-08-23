@@ -1224,6 +1224,42 @@ pub struct NimTraceWriter {
     /// haven't opted in, so the wrapper must gate the call locally rather
     /// than relying on the Nim side to silently no-op.
     column_aware: bool,
+    /// Per-operation tally of records this backend could not persist.
+    ///
+    /// Several `TraceWriter` operations have no counterpart in the Nim C API
+    /// (`drop_variables`, `register_compound_value`, `assign_cell`, …).  They
+    /// used to be bare no-ops with a `// Not exposed in the Nim C API`
+    /// comment, so a recorder that emitted, say, `DropVariables` produced a
+    /// trace missing every one of those records and nothing anywhere said so
+    /// — the recording simply came out quietly incomplete.  Every such call
+    /// is now counted here, announced once on stderr, and summarised at
+    /// [`close`](NimTraceWriter::close).  See [`STRICT_ENV`] for the mode
+    /// that turns a discard into a panic.
+    discarded_records: std::collections::BTreeMap<&'static str, u64>,
+    /// Latched from [`STRICT_ENV`] at construction: when true, discarding a
+    /// record panics instead of warning.
+    strict: bool,
+    /// Whether the close-time summary has already been printed, so `Drop`
+    /// does not repeat it after an explicit `close()`.  Kept separate from
+    /// `discarded_records` so that reporting never destroys the tally.
+    discards_reported: bool,
+}
+
+/// Set this to `1` (or `true`) to make an unsupported record a hard error
+/// rather than a counted, announced discard.
+///
+/// The default is deliberately NOT strict.  This is production recording
+/// code, not a test harness: aborting a live recording because one record
+/// kind is unsupported turns a partial trace into no trace at all, which is
+/// worse for the user than a complete-as-possible trace plus an accurate
+/// statement of what is missing.  Strict mode exists so test lanes and CI
+/// can refuse to accept the incompleteness.
+pub const STRICT_ENV: &str = "CODETRACER_NIM_TRACE_WRITER_STRICT";
+
+/// Whether [`STRICT_ENV`] asks for hard failure.  Pure so it is directly
+/// unit-testable without mutating process-global environment state.
+pub fn strict_from_env_value(value: Option<&str>) -> bool {
+    value.map(|v| v == "1" || v.eq_ignore_ascii_case("true")).unwrap_or(false)
 }
 
 // The Nim library is single-threaded but callers hold exclusive &mut self,
@@ -1255,18 +1291,110 @@ impl NimTraceWriter {
             path_table: Vec::new(),
             variable_table: Vec::new(),
             column_aware: false,
+            discarded_records: std::collections::BTreeMap::new(),
+            strict: strict_from_env_value(std::env::var(STRICT_ENV).ok().as_deref()),
+            discards_reported: false,
         }
+    }
+
+    /// Record that one `op` record could not be persisted by this backend.
+    ///
+    /// The first discard of each kind is announced on stderr; every discard
+    /// is counted so [`close`](NimTraceWriter::close) can state exactly what
+    /// the trace is missing.  Under [`STRICT_ENV`] the first discard panics.
+    ///
+    /// The alternative — returning a bare no-op, which is what this code did
+    /// before — makes an incomplete recording indistinguishable from a
+    /// complete one, both to the user and to any test asserting on the
+    /// trace's contents.
+    fn discard_unsupported(&mut self, op: &'static str) {
+        if self.strict {
+            panic!(
+                "the Nim trace-writer backend cannot persist a `{op}` record, and \
+                 {STRICT_ENV} is set.  This record would otherwise be dropped and \
+                 the resulting trace would be silently incomplete.  Either use the \
+                 pure-Rust writer (`codetracer_trace_writer`), stop emitting this \
+                 record kind, or extend the Nim C API to carry it."
+            );
+        }
+        let count = self.discarded_records.entry(op).or_insert(0);
+        *count += 1;
+        if *count == 1 {
+            eprintln!(
+                "WARNING: the Nim trace-writer backend has no `{op}` entry point; \
+                 records of this kind are being DISCARDED and will be absent from \
+                 the trace.  Set {STRICT_ENV}=1 to make this a hard error.  A \
+                 count is reported when the writer is closed."
+            );
+        }
+    }
+
+    /// Per-operation tally of records this backend could not persist.
+    ///
+    /// Empty means the trace is complete with respect to the record kinds
+    /// the caller emitted.  Exposed so callers and tests can assert on
+    /// completeness rather than having to trust it.
+    pub fn discarded_record_counts(&self) -> &std::collections::BTreeMap<&'static str, u64> {
+        &self.discarded_records
+    }
+
+    /// Turn strict mode on or off for this writer, overriding [`STRICT_ENV`].
+    ///
+    /// Exists so a caller — or a test — can demand a complete trace without
+    /// touching the process environment.  Mutating `STRICT_ENV` from a test
+    /// thread would race every other test in the binary, and the Nim runtime
+    /// already forces these tests to share one process.
+    pub fn set_strict(&mut self, strict: bool) {
+        self.strict = strict;
+    }
+
+    /// Total number of records discarded because this backend has no entry
+    /// point for them.
+    pub fn discarded_record_total(&self) -> u64 {
+        self.discarded_records.values().sum()
     }
 
     /// Close the writer and flush all data. Called automatically on drop,
     /// but can be called explicitly to check for errors.
+    ///
+    /// If any records were discarded (see
+    /// [`discarded_record_counts`](NimTraceWriter::discarded_record_counts))
+    /// a summary is written to stderr, so the incompleteness is stated at
+    /// the point the trace is finished rather than left for a reader to
+    /// discover as missing data.
     pub fn close(&mut self) -> Result<(), Box<dyn Error>> {
+        self.report_discarded_records();
         if !self.handle.is_null() {
             let rc = unsafe { trace_writer_close(self.handle) };
             check_result(rc)
         } else {
             Ok(())
         }
+    }
+
+    /// Emit the close-time discard summary, once.
+    /// Emit the close-time discard summary, once.
+    ///
+    /// Suppressing the repeat from `Drop` is done with a flag and NOT by
+    /// clearing `discarded_records`.  Clearing it — which is what this did at
+    /// first — destroys the tally at exactly the moment a caller is most
+    /// likely to consult it: `writer.close()?;` followed by
+    /// `assert!(writer.discarded_record_counts().is_empty())` would have
+    /// passed no matter how much was thrown away.  A completeness report that
+    /// resets itself on the way out is the same lie in a smaller box.
+    fn report_discarded_records(&mut self) {
+        if self.discards_reported || self.discarded_records.is_empty() {
+            return;
+        }
+        self.discards_reported = true;
+        let total: u64 = self.discarded_records.values().sum();
+        let detail: Vec<String> = self.discarded_records.iter().map(|(op, n)| format!("{op}={n}")).collect();
+        eprintln!(
+            "WARNING: this trace is INCOMPLETE.  {total} record(s) were discarded \
+             because the Nim trace-writer backend has no entry point for them: {}.  \
+             Set {STRICT_ENV}=1 to make such a discard a hard error instead.",
+            detail.join(", ")
+        );
     }
 
     /// Write binary meta.dat to the trace container.
@@ -1314,6 +1442,10 @@ impl NimTraceWriter {
 
 impl Drop for NimTraceWriter {
     fn drop(&mut self) {
+        // A writer dropped without an explicit `close()` must still say what
+        // it threw away; otherwise the "no output means nothing was lost"
+        // reading of a silent run stays available.
+        self.report_discarded_records();
         if !self.handle.is_null() {
             unsafe {
                 trace_writer_free(self.handle);
@@ -1874,52 +2006,93 @@ impl NimTraceWriter {
         self.ensure_type_id(typ.kind, &typ.lang_type);
     }
 
+    // -----------------------------------------------------------------
+    // Operations the Nim C API does not carry.
+    //
+    // Each of these used to be a bare no-op.  A recorder calling them got
+    // no error, no warning and no record in the trace — the recording came
+    // out quietly incomplete and looked exactly like a complete one.  They
+    // now route through `discard_unsupported`, which counts the loss,
+    // announces it once, summarises it at close, and panics outright under
+    // `CODETRACER_NIM_TRACE_WRITER_STRICT=1`.
+    //
+    // Making them WORK is a different and much larger job: it means new
+    // entry points in `codetracer-trace-format-nim`'s C API and matching
+    // encoder support on the Nim side.  Until that exists, the honest
+    // behaviour is to say what is being lost rather than to lose it
+    // silently.
+    // -----------------------------------------------------------------
+
     pub fn register_asm(&mut self, _instructions: &[String]) {
-        // Not supported by the Nim C API — no-op
+        self.discard_unsupported("register_asm");
     }
 
     pub fn register_variable_name(&mut self, _variable_name: &str) {
-        // Handled internally by Nim
+        // Genuinely handled inside Nim (every `register_*` call that takes a
+        // name interns it there), so nothing is lost — not a discard.
     }
 
-    pub fn register_full_value(&mut self, _variable_id: VariableId, _value: ValueRecord) {
-        // Handled via register_variable_with_full_value
+    /// Persist a value by variable id.
+    ///
+    /// This is NOT a discard, and it is no longer a no-op either.  It used to
+    /// be one, on the reasoning that `add_event`'s `Value` arm goes to
+    /// [`register_variable_with_full_value`](NimTraceWriter::register_variable_with_full_value)
+    /// instead and therefore nothing inside this crate ever calls it.  That
+    /// reasoning is correct about this crate and worthless as a guarantee:
+    /// `register_full_value` is a **public method on the `TraceWriter`
+    /// trait**, so any caller holding a `NimTraceWriter` — including a
+    /// recorder in another repo reaching it through `&mut dyn TraceWriter` —
+    /// could call it and lose the value with no warning and no entry in
+    /// [`discarded_record_counts`](NimTraceWriter::discarded_record_counts).
+    /// "Zero discards" would then have stopped meaning "complete trace",
+    /// which is the whole property this module is being cured of.
+    ///
+    /// It now does exactly what the `Value` arm of `add_event` does: resolve
+    /// the id against the mirrored variable table and hand the value to the
+    /// real FFI write path.
+    pub fn register_full_value(&mut self, variable_id: VariableId, value: ValueRecord) {
+        let name = self
+            .variable_table
+            .get(variable_id.0)
+            .cloned()
+            .unwrap_or_else(|| format!("var_{}", variable_id.0));
+        self.register_variable_with_full_value(&name, value);
     }
 
     pub fn register_compound_value(&mut self, _place: Place, _value: ValueRecord) {
-        // Not exposed in the Nim C API — no-op
+        self.discard_unsupported("register_compound_value");
     }
 
     pub fn register_cell_value(&mut self, _place: Place, _value: ValueRecord) {
-        // Not exposed in the Nim C API — no-op
+        self.discard_unsupported("register_cell_value");
     }
 
     pub fn assign_compound_item(&mut self, _place: Place, _index: usize, _item_place: Place) {
-        // Not exposed in the Nim C API — no-op
+        self.discard_unsupported("assign_compound_item");
     }
 
     pub fn assign_cell(&mut self, _place: Place, _new_value: ValueRecord) {
-        // Not exposed in the Nim C API — no-op
+        self.discard_unsupported("assign_cell");
     }
 
     pub fn register_variable(&mut self, _variable_name: &str, _place: Place) {
-        // Not exposed in the Nim C API — no-op
+        self.discard_unsupported("register_variable");
     }
 
     pub fn drop_variable(&mut self, _variable_name: &str) {
-        // Not exposed in the Nim C API — no-op
+        self.discard_unsupported("drop_variable");
     }
 
     pub fn assign(&mut self, _variable_name: &str, _rvalue: RValue, _pass_by: PassBy) {
-        // Not exposed in the Nim C API — no-op
+        self.discard_unsupported("assign");
     }
 
     pub fn bind_variable(&mut self, _variable_name: &str, _place: Place) {
-        // Not exposed in the Nim C API — no-op
+        self.discard_unsupported("bind_variable");
     }
 
     pub fn drop_variables(&mut self, _variable_names: &[String]) {
-        // Not exposed in the Nim C API — no-op
+        self.discard_unsupported("drop_variables");
     }
 
     pub fn simple_rvalue(&mut self, _variable_name: &str) -> RValue {
@@ -1931,7 +2104,7 @@ impl NimTraceWriter {
     }
 
     pub fn drop_last_step(&mut self) {
-        // Not exposed in the Nim C API — no-op
+        self.discard_unsupported("drop_last_step");
     }
 
     /// Dispatch a [`TraceLowLevelEvent`] to the correct `register_*` entry point.

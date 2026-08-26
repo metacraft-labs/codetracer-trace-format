@@ -9,10 +9,12 @@ use zeekstd::{EncodeOptions, Encoder, FrameSizePolicy};
 use crate::{
     abstract_trace_writer::{AbstractTraceWriter, AbstractTraceWriterData},
     call_stream::{CallStreamBuilder, DEFAULT_CALLS_CHUNK_SIZE, encode_call_stream},
+    column_aware::{EXEC_COMPRESSION_LEVEL, ExecStreamEncoder, PositionSpace, StepEncoder},
     event_stream::{DEFAULT_EVENTS_CHUNK_SIZE, IoEventStreamBuilder, encode_io_event_stream},
     interning_tables::InterningTablesBuilder,
     meta_dat::{
-        FLAG_HAS_CALL_STREAM, FLAG_HAS_INTERNING_TABLES, FLAG_HAS_IO_EVENT_STREAM, FLAG_HAS_STEP_STREAM, FLAG_HAS_VALUE_STREAM, encode_meta_dat,
+        FLAG_HAS_CALL_STREAM, FLAG_HAS_COLUMN_AWARE_STEPS, FLAG_HAS_INTERNING_TABLES, FLAG_HAS_IO_EVENT_STREAM, FLAG_HAS_STEP_STREAM,
+        FLAG_HAS_VALUE_STREAM, FLAG_SUPPORTS_COLUMN_BREAKPOINTS, FLAG_SUPPORTS_COLUMN_MOTIONS, encode_meta_dat,
     },
     step_stream::{DEFAULT_STEPS_CHUNK_SIZE, StepStreamBuilder, encode_step_stream},
     trace_writer::TraceWriter,
@@ -204,6 +206,50 @@ pub struct CtfsTraceWriter {
     /// (present only while `emit_interning_tables` is on and a trace is being
     /// written).
     interning_tables_builder: Option<InterningTablesBuilder>,
+
+    // --- Column-aware step mode (parity with the Nim writer) ---
+    //
+    // When on, the writer produces a `steps.dat` whose `global_position_index`
+    // addresses `(line, column)` pairs, a `paths.dat` in spec Layout A, and
+    // sets `meta.dat` bit 4. All three change together — see
+    // `crate::meta_dat::FLAG_HAS_COLUMN_AWARE_STEPS` — because the flag is what
+    // tells a reader which parse to use.
+    //
+    // The mode is TRACE-GLOBAL and must be selected before
+    // `begin_writing_trace_events`. A request that arrives after the trace has
+    // started is refused rather than half-applied, and
+    // `dropped_column_awareness()` reports it.
+    /// True once a caller asked for column-aware output.
+    column_aware_requested: bool,
+    /// True once column-aware output is actually in effect for the trace being
+    /// written. Diverges from `column_aware_requested` exactly when the request
+    /// arrived too late.
+    column_aware_active: bool,
+    /// Set when a column-aware request could not be honoured. Read through
+    /// [`CtfsTraceWriter::dropped_column_awareness`].
+    column_awareness_dropped: bool,
+    /// Capability bit 6 — the recorder's columns are breakpoint-sharp.
+    column_breakpoints_requested: bool,
+    /// Capability bit 7 — the recorder supports per-column motions.
+    column_motions_requested: bool,
+    /// The `(line, column)` address space, built from the per-path
+    /// `line_lengths` tables. Only consulted in column-aware mode.
+    position_space: PositionSpace,
+    /// Nim's delta-vs-absolute policy and running cursor.
+    step_encoder: StepEncoder,
+    /// The column-aware `steps.dat` encoder. `Some` only while a column-aware
+    /// trace is being written; the line-only path keeps using
+    /// `step_stream_builder` so its bytes do not move.
+    exec_encoder: Option<ExecStreamEncoder>,
+    /// Per-line table waiting to be attached to the next `Path` event. Set by
+    /// [`CtfsTraceWriter::register_path_with_line_lengths`] immediately before
+    /// the path is registered, and consumed when that `Path` event arrives, so
+    /// the table lands on the right interning id without a second lookup.
+    pending_line_lengths: Option<Vec<u32>>,
+    /// Column offset to fold into the next `Step` event, in the same
+    /// consume-once way as `pending_line_lengths`. Set by
+    /// [`AbstractTraceWriter::register_step_with_column`].
+    pending_column_delta: i64,
 }
 
 impl CtfsTraceWriter {
@@ -290,7 +336,142 @@ impl CtfsTraceWriter {
             // `with_interning_tables(false)` for the legacy-path bundle.
             emit_interning_tables: true,
             interning_tables_builder: None,
+            // Column-aware mode is OFF by default. Turning it on changes
+            // `steps.dat` addressing, `paths.dat` record shape and a meta.dat
+            // bit that column-unaware readers are required to reject, so it is
+            // a deliberate opt-in per trace and never a default.
+            column_aware_requested: false,
+            column_aware_active: false,
+            column_awareness_dropped: false,
+            column_breakpoints_requested: false,
+            column_motions_requested: false,
+            position_space: PositionSpace::new(false),
+            step_encoder: StepEncoder::new(),
+            exec_encoder: None,
+            pending_line_lengths: None,
+            pending_column_delta: 0,
         }
+    }
+
+    // --- Column-aware step mode ---------------------------------------------
+
+    /// Opt this trace into column-aware step encoding.
+    ///
+    /// Must be called **before** `begin_writing_trace_events`: the mode decides
+    /// `paths.dat`'s record shape and `steps.dat`'s addressing, and the spec
+    /// forbids mixing column-aware and line-only records inside one trace. A
+    /// call after the trace has begun is refused and recorded — see
+    /// [`Self::dropped_column_awareness`] — rather than applied to the tail of
+    /// the stream, which would produce a container no reader can decode.
+    ///
+    /// Mirrors the Nim writer's `enableColumnAwareSteps`.
+    pub fn enable_column_aware_steps(&mut self) {
+        self.column_aware_requested = true;
+        if self.ctfs_writer.is_some() {
+            // Too late: the trace is already open.
+            self.column_awareness_dropped = true;
+            return;
+        }
+        self.column_aware_active = true;
+    }
+
+    /// Declare that this recorder's columns are sharp enough for the GUI to
+    /// place per-column breakpoints (`meta.dat` bit 6).
+    ///
+    /// Implies [`Self::enable_column_aware_steps`], because a capability bit
+    /// without column data on the wire is undefined per spec — the Nim writer's
+    /// `enableColumnBreakpointsSupport` auto-enables it for the same reason.
+    pub fn enable_column_breakpoints_support(&mut self) {
+        self.column_breakpoints_requested = true;
+        self.enable_column_aware_steps();
+    }
+
+    /// Declare that this recorder supports per-column step over / in / out
+    /// (`meta.dat` bit 7). Implies [`Self::enable_column_aware_steps`].
+    pub fn enable_column_motions_support(&mut self) {
+        self.column_motions_requested = true;
+        self.enable_column_aware_steps();
+    }
+
+    /// Whether this writer is producing a column-aware trace.
+    pub fn column_aware_steps_enabled(&self) -> bool {
+        self.column_aware_active
+    }
+
+    /// Whether a caller asked for column-aware output that this writer could
+    /// not produce.
+    ///
+    /// A caller whose correctness depends on columns should assert this is
+    /// `false` at close. It answers `true` in exactly one reachable situation:
+    /// [`Self::enable_column_aware_steps`] was called after
+    /// `begin_writing_trace_events`, when the mode can no longer be made
+    /// trace-global. It answers `false` both when nobody asked and when the
+    /// request was honoured, so the signal is only meaningful where columns
+    /// were requested — asserting it unconditionally would pass on every
+    /// ordinary recording for the wrong reason.
+    pub fn dropped_column_awareness(&self) -> bool {
+        self.column_awareness_dropped
+    }
+
+    /// Register a source path together with its per-line addressable column
+    /// counts (spec `paths.dat` Layout A), returning its interning id.
+    ///
+    /// `line_lengths[i]` is the number of addressable columns on line `i + 1`.
+    /// Implementations are free to use `actual_columns + 1` so the trailing
+    /// "one past end of line" position gets its own address.
+    ///
+    /// Outside column-aware mode the table is accepted and ignored, exactly as
+    /// the Nim writer ignores it, so a recorder can call this unconditionally
+    /// without changing a line-only trace's bytes.
+    ///
+    /// Mirrors the Nim writer's `registerPath(path, lineLengths)`.
+    pub fn register_path_with_line_lengths(&mut self, path: &Path, line_lengths: &[u32]) -> codetracer_trace_types::PathId {
+        if self.base.paths.contains_key(path) {
+            // Already interned; the table was attached when it was first seen.
+            return *self.base.paths.get(path).unwrap();
+        }
+        self.pending_line_lengths = Some(line_lengths.to_vec());
+        let id = AbstractTraceWriter::ensure_path_id(self, path);
+        // `ensure_path_id` emits the `Path` event, which consumes the pending
+        // table. Clear it defensively so a path that somehow did not emit one
+        // cannot leak its table onto the next path registered.
+        self.pending_line_lengths = None;
+        id
+    }
+
+    /// Emit a column-only step: a `DeltaColumn` (tag 0x07) record that advances
+    /// the cursor's column inside the current line.
+    ///
+    /// `column_delta` is signed and zigzag-encoded; magnitudes up to ±63 cost
+    /// two bytes. A value record is opened alongside it so `values.dat` stays
+    /// parallel-indexed to `steps.dat` — without that the two streams drift by
+    /// one record per column move.
+    ///
+    /// Refused when the trace is not column-aware, when no trace is open, or
+    /// when it would be the first step (the running cursor must be defined
+    /// first). Mirrors the Nim writer's `registerColumnStep`.
+    pub fn register_column_step(&mut self, column_delta: i64) -> Result<(), String> {
+        if !self.column_aware_active {
+            return Err("register_column_step called on a writer that has not opted into column-aware mode \
+                        (call enable_column_aware_steps before begin_writing_trace_events)"
+                .to_string());
+        }
+        let Some(encoder) = self.exec_encoder.as_mut() else {
+            return Err("register_column_step called before begin_writing_trace_events".to_string());
+        };
+        let event = self.step_encoder.column_step(column_delta)?;
+        encoder.write_event(event)?;
+        if let Some(builder) = self.value_stream_builder.as_mut() {
+            builder.open_step_record();
+        }
+        Ok(())
+    }
+
+    /// The per-file `line_lengths` tables registered so far, in interning-id
+    /// order — what a reader's `GlobalPositionDecoder::from_line_lengths`
+    /// consumes to resolve this trace's positions.
+    pub fn line_lengths(&self) -> &[Vec<u32>] {
+        self.position_space.line_lengths()
     }
 
     /// Enable or disable the dedicated `calls.dat` call stream (M17a / M20).
@@ -546,7 +727,91 @@ impl AbstractTraceWriter for CtfsTraceWriter {
         &mut self.base
     }
 
+    /// Record a step at `(path, line, column)`.
+    ///
+    /// This overrides the trait's column-dropping shim. In column-aware mode
+    /// the column is folded into the step's `global_position_index`, so the
+    /// wire carries ONE record at `(line, column)` — matching the canonical Nim
+    /// FFI, whose `trace_writer_register_delta_column` folds into the pending
+    /// step for the same reason.
+    ///
+    /// Outside column-aware mode the column is still dropped, because there is
+    /// nowhere in a line-only address space to put it; the difference from the
+    /// old behaviour is that a caller can now detect that case up front through
+    /// [`CtfsTraceWriter::column_aware_steps_enabled`] instead of discovering it
+    /// in the decoded trace.
+    fn register_step_with_column(
+        &mut self,
+        path: &std::path::Path,
+        line: codetracer_trace_types::Line,
+        column: Option<codetracer_trace_types::Line>,
+    ) {
+        if self.column_aware_active {
+            // CTFS columns are 1-based, so column 1 is a zero delta.
+            self.pending_column_delta = column.map(|c| c.0 - 1).unwrap_or(0);
+        }
+        AbstractTraceWriter::register_step(self, path, line);
+        // Defensive: `register_step` always emits a `Step` event, which
+        // consumes the delta. Clearing it anyway means a future refactor that
+        // suppresses the event cannot leak a column onto an unrelated step.
+        self.pending_column_delta = 0;
+    }
+
     fn add_event(&mut self, event: TraceLowLevelEvent) {
+        // Column-aware mode intercepts the two events that carry source
+        // positions BEFORE the line-only builders see them. `Path` grows the
+        // position space; `Step` is encoded through Nim's delta policy into the
+        // exec encoder instead of through `StepStreamBuilder`. Everything else
+        // flows on unchanged, so `events.log`, `calls.dat`, `values.dat` and
+        // `events.dat` are produced identically in both modes.
+        if self.column_aware_active {
+            match &event {
+                TraceLowLevelEvent::Path(_) => {
+                    let lls = self.pending_line_lengths.take().unwrap_or_default();
+                    let path_id = self.position_space.push_path(&lls) as usize;
+                    if let Some(ref mut builder) = self.interning_tables_builder {
+                        builder.set_path_line_lengths(path_id, &lls);
+                    }
+                }
+                TraceLowLevelEvent::Step(step) => {
+                    let position = self.position_space.position_of(step.path_id.0 as u64, step.line.0.max(0) as u64);
+                    // A bare `StepRecord` carries no column, so the delta is 0
+                    // and the step addresses column 1 of the line.
+                    // `register_step_with_column` stages a non-zero delta here
+                    // so the `(line, column)` pair becomes ONE record rather
+                    // than a line step followed by a column step — that folding
+                    // is what the canonical Nim FFI does, and the reason is
+                    // behavioural rather than aesthetic: an intermediate
+                    // column-1 step carries no variables, so a line-granular
+                    // step-over lands on it and `variables_at` answers empty.
+                    let column_delta = std::mem::replace(&mut self.pending_column_delta, 0);
+                    let step_event = self.step_encoder.step_at(position, column_delta);
+                    if let Some(encoder) = self.exec_encoder.as_mut() {
+                        // A failure here is a zstd failure, which the
+                        // line-only path also swallows (`let _ =
+                        // self.flush_chunk()`). Keep the shapes the same
+                        // rather than introducing a panic on one path only.
+                        let _ = encoder.write_event(step_event);
+                    }
+                }
+                TraceLowLevelEvent::ThreadSwitch(codetracer_trace_types::ThreadId(tid)) => {
+                    // A thread switch is a record in the execution stream and
+                    // occupies a step slot: the Nim writer writes an empty
+                    // value record beside it and increments `stepCount`. Both
+                    // matter — the value record keeps `values.dat` parallel,
+                    // and the counter is what decides whether the NEXT step is
+                    // forced absolute.
+                    if let Some(encoder) = self.exec_encoder.as_mut() {
+                        let _ = encoder.write_event(crate::column_aware::StepEvent::ThreadSwitch { thread_id: *tid });
+                    }
+                    self.step_encoder.note_non_step_event();
+                    if let Some(builder) = self.value_stream_builder.as_mut() {
+                        builder.open_step_record();
+                    }
+                }
+                _ => {}
+            }
+        }
         // M17a: feed the dedicated call-stream builder from the SAME event
         // sequence that produces events.log, so calls.dat stays consistent.
         if let Some(ref mut builder) = self.call_stream_builder {
@@ -554,6 +819,8 @@ impl AbstractTraceWriter for CtfsTraceWriter {
         }
         // M23a: feed the dedicated step-stream builder from the SAME event
         // sequence that produces events.log, so steps.dat stays consistent.
+        // Armed only in line-only mode; the column-aware path above owns
+        // `steps.dat` instead.
         if let Some(ref mut builder) = self.step_stream_builder {
             builder.observe(&event);
         }
@@ -647,10 +914,26 @@ impl TraceWriter for CtfsTraceWriter {
         self.flush_count = 0;
         self.header_written = false;
 
+        // Column-aware mode: arm the Nim-parity position space, step policy and
+        // exec-stream encoder, and leave `StepStreamBuilder` disarmed so only
+        // one of the two owns `steps.dat`.
+        self.position_space = PositionSpace::new(self.column_aware_active);
+        self.step_encoder = StepEncoder::new();
+        self.exec_encoder = if self.column_aware_active && self.emit_step_stream {
+            Some(ExecStreamEncoder::new(self.steps_chunk_size, EXEC_COMPRESSION_LEVEL))
+        } else {
+            None
+        };
+        self.pending_line_lengths = None;
+
         // M17a: arm the call-stream builder when the dedicated stream is enabled.
         self.call_stream_builder = if self.emit_call_stream { Some(CallStreamBuilder::new()) } else { None };
         // M23a: arm the step-stream builder when the dedicated stream is enabled.
-        self.step_stream_builder = if self.emit_step_stream { Some(StepStreamBuilder::new()) } else { None };
+        self.step_stream_builder = if self.emit_step_stream && !self.column_aware_active {
+            Some(StepStreamBuilder::new())
+        } else {
+            None
+        };
         // M23b: arm the value-stream builder when the dedicated stream is enabled.
         self.value_stream_builder = if self.emit_value_stream { Some(ValueStreamBuilder::new()) } else { None };
         // M23c: arm the I/O event-stream builder when the dedicated stream is enabled.
@@ -660,8 +943,11 @@ impl TraceWriter for CtfsTraceWriter {
             None
         };
         // M23d: arm the interning-tables builder when the tables are enabled.
+        // In column-aware mode its `paths.dat` records switch to spec Layout A.
         self.interning_tables_builder = if self.emit_interning_tables {
-            Some(InterningTablesBuilder::new())
+            let mut builder = InterningTablesBuilder::new();
+            builder.set_column_aware(self.column_aware_active);
+            Some(builder)
         } else {
             None
         };
@@ -747,19 +1033,31 @@ impl TraceWriter for CtfsTraceWriter {
             }
 
             // M23a: the dedicated execution (step) stream + companion index.
+            //
+            // Two producers, one file. In column-aware mode the Nim-parity
+            // `ExecStreamEncoder` has been streaming records since `begin`, so
+            // its buffers are simply flushed here; in line-only mode the
+            // records are encoded now from `StepStreamBuilder`. The `.idx`
+            // framing is identical either way.
             if self.emit_step_stream {
-                let stream = self
-                    .step_stream_builder
-                    .take()
-                    .map(|b| b.finish())
-                    .unwrap_or_else(|| StepStreamBuilder::new().finish());
-                let encoded = encode_step_stream(&stream, self.steps_chunk_size, DEFAULT_CALLS_ZSTD_LEVEL)
-                    .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+                let (dat, idx) = if let Some(encoder) = self.exec_encoder.take() {
+                    let encoded = encoder.finish().map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+                    (encoded.dat, encoded.idx)
+                } else {
+                    let stream = self
+                        .step_stream_builder
+                        .take()
+                        .map(|b| b.finish())
+                        .unwrap_or_else(|| StepStreamBuilder::new().finish());
+                    let encoded = encode_step_stream(&stream, self.steps_chunk_size, DEFAULT_CALLS_ZSTD_LEVEL)
+                        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+                    (encoded.dat, encoded.idx)
+                };
 
                 let steps_handle = writer.add_file("steps.dat")?;
-                writer.write(steps_handle, &encoded.dat)?;
+                writer.write(steps_handle, &dat)?;
                 let steps_idx_handle = writer.add_file("steps.idx")?;
-                writer.write(steps_idx_handle, &encoded.idx)?;
+                writer.write(steps_idx_handle, &idx)?;
                 stream_flags |= FLAG_HAS_STEP_STREAM;
             }
 
@@ -828,6 +1126,22 @@ impl TraceWriter for CtfsTraceWriter {
                 writer.write(varnames_off_handle, &tables.varnames_off)?;
 
                 stream_flags |= FLAG_HAS_INTERNING_TABLES;
+            }
+
+            // The column bits. Bit 4 says the wire format changed — `paths.dat`
+            // is Layout A and `steps.dat` positions address (line, column) —
+            // and a reader that does not know it is required by spec to refuse
+            // the container rather than misdecode it. Bits 6 and 7 are
+            // capability claims about the recorder, and are meaningless without
+            // bit 4, so they are only ever set alongside it.
+            if self.column_aware_active {
+                stream_flags |= FLAG_HAS_COLUMN_AWARE_STEPS;
+                if self.column_breakpoints_requested {
+                    stream_flags |= FLAG_SUPPORTS_COLUMN_BREAKPOINTS;
+                }
+                if self.column_motions_requested {
+                    stream_flags |= FLAG_SUPPORTS_COLUMN_MOTIONS;
+                }
             }
 
             // Stamp meta.dat with the combined stream-capability flags. The

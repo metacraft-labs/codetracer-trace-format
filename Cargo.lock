@@ -453,10 +453,13 @@ name = "codetracer_trace_writer_nim"
 version = "0.1.0"
 dependencies = [
  "ciborium",
+ "codetracer_ctfs",
  "codetracer_trace_reader",
  "codetracer_trace_types",
+ "codetracer_trace_writer",
  "serde_json",
  "tempfile",
+ "zstd",
  "zstd-sys",
 ]
 

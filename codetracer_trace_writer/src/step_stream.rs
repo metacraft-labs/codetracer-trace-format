@@ -93,6 +93,18 @@ pub const TAG_RAISE: u8 = 2;
 pub const TAG_CATCH: u8 = 3;
 /// Tag 4 — ThreadSwitch: execution switched to a different thread.
 pub const TAG_THREAD_SWITCH: u8 = 4;
+/// Tag 5 — ThreadStart. Emitted by the canonical Nim writer; decoded here so a
+/// Nim-written `steps.dat` does not fail this reader on an "unknown tag".
+pub const TAG_THREAD_START: u8 = 5;
+/// Tag 6 — ThreadExit. See [`TAG_THREAD_START`].
+pub const TAG_THREAD_EXIT: u8 = 6;
+/// Tag 7 — DeltaColumn: column-only motion inside the current line.
+///
+/// Legal only in a trace whose `meta.dat` carries
+/// [`crate::meta_dat::FLAG_HAS_COLUMN_AWARE_STEPS`]. Written by
+/// [`crate::column_aware`]; decoded here so this reader can consume a
+/// column-aware stream from either writer.
+pub const TAG_DELTA_COLUMN: u8 = 7;
 
 /// One decoded execution-stream record. This is the on-disk projection of the
 /// compact step encoding; a [`StepStreamRecord::Step`] carries the recovered
@@ -108,6 +120,18 @@ pub enum StepStreamRecord {
     Catch { exception_type_id: u64 },
     /// Execution switched to a different thread.
     ThreadSwitch { thread_id: u64 },
+    /// A thread started (tag 5). Produced by the canonical Nim writer.
+    ThreadStart { thread_id: u64 },
+    /// A thread exited (tag 6). Produced by the canonical Nim writer.
+    ThreadExit { thread_id: u64 },
+    /// Column-only motion inside the current line (tag 7).
+    ///
+    /// The record carries the *resolved* absolute position, like
+    /// [`StepStreamRecord::Step`], because `global_position_index` is
+    /// one-dimensional: a column move is a position move. `column_delta` is
+    /// retained so a consumer can tell a column-only step from a line step
+    /// without re-deriving it from the line table.
+    DeltaColumn { global_position_index: u64, column_delta: i64 },
 }
 
 // --- varint helpers (unsigned LEB128 + zigzag signed) ---
@@ -337,6 +361,23 @@ fn encode_record(record: &StepStreamRecord, prev_abs: Option<u64>, force_absolut
             encode_varint(*thread_id, out);
             prev_abs
         }
+        StepStreamRecord::ThreadStart { thread_id } => {
+            out.push(TAG_THREAD_START);
+            encode_varint(*thread_id, out);
+            prev_abs
+        }
+        StepStreamRecord::ThreadExit { thread_id } => {
+            out.push(TAG_THREAD_EXIT);
+            encode_varint(*thread_id, out);
+            prev_abs
+        }
+        StepStreamRecord::DeltaColumn { column_delta, .. } => {
+            out.push(TAG_DELTA_COLUMN);
+            encode_signed_varint(*column_delta, out);
+            // A column move advances the running position, so the next delta is
+            // relative to the new column, not to the line's first column.
+            prev_abs.map(|p| (p as i64 + *column_delta) as u64)
+        }
     }
 }
 
@@ -355,7 +396,20 @@ pub fn decode_record(data: &[u8], pos: &mut usize, prev_abs: Option<u64>) -> Res
             Ok((StepStreamRecord::Step { global_line_index: gli }, Some(gli)))
         }
         TAG_DELTA_STEP => {
-            let prev = prev_abs.ok_or_else(|| "steps.dat: DeltaStep with no preceding AbsoluteStep in chunk".to_string())?;
+            // A delta with no preceding absolute IN THIS CHUNK resolves against
+            // 0, not against an error.
+            //
+            // This used to be rejected, and rejecting it made this reader
+            // stricter than the reference: the canonical Nim reader
+            // (`new_trace_reader.nim`, `stepAbsoluteGlobalLineIndex`) starts its
+            // running cursor at 0 for every chunk and applies deltas from there.
+            // The shape is reachable from the reference WRITER, too — its
+            // chunk-boundary promotion only fires for the chunk's *first*
+            // record, so a chunk that opens with a `ThreadSwitch` and continues
+            // with a `DeltaStep` carries exactly this. Such a container is
+            // legal, decodes to 0-plus-delta everywhere else, and this reader
+            // refused to open it at all.
+            let prev = prev_abs.unwrap_or(0);
             let delta = decode_signed_varint(data, pos)?;
             let gli = (prev as i64 + delta) as u64;
             Ok((StepStreamRecord::Step { global_line_index: gli }, Some(gli)))
@@ -377,6 +431,32 @@ pub fn decode_record(data: &[u8], pos: &mut usize, prev_abs: Option<u64>) -> Res
         TAG_THREAD_SWITCH => {
             let thread_id = decode_varint(data, pos)?;
             Ok((StepStreamRecord::ThreadSwitch { thread_id }, prev_abs))
+        }
+        TAG_THREAD_START => {
+            let thread_id = decode_varint(data, pos)?;
+            Ok((StepStreamRecord::ThreadStart { thread_id }, prev_abs))
+        }
+        TAG_THREAD_EXIT => {
+            let thread_id = decode_varint(data, pos)?;
+            Ok((StepStreamRecord::ThreadExit { thread_id }, prev_abs))
+        }
+        TAG_DELTA_COLUMN => {
+            // Unlike Raise/Catch/ThreadSwitch, this one MOVES the cursor: the
+            // position space is one-dimensional, so a column delta is a
+            // position delta. Treating it as position-neutral would desync
+            // every subsequent DeltaStep in the chunk.
+            // Same rule as `TAG_DELTA_STEP` above: resolve against 0 rather
+            // than refusing, matching the reference reader's per-chunk cursor.
+            let prev = prev_abs.unwrap_or(0);
+            let column_delta = decode_signed_varint(data, pos)?;
+            let gpi = (prev as i64 + column_delta) as u64;
+            Ok((
+                StepStreamRecord::DeltaColumn {
+                    global_position_index: gpi,
+                    column_delta,
+                },
+                Some(gpi),
+            ))
         }
         other => Err(format!("steps.dat: unknown record tag {other}")),
     }
@@ -404,7 +484,6 @@ pub struct EncodedStepStream {
 /// first step and steps following a Call/Return/ThreadSwitch (rules 1-3).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn encode_step_stream(stream: &StepStream, chunk_size: usize, zstd_level: i32) -> Result<EncodedStepStream, String> {
-    use std::io::Cursor;
     let chunk_size = chunk_size.max(1);
     let records = &stream.records;
     let mut dat: Vec<u8> = Vec::new();
@@ -436,7 +515,19 @@ pub fn encode_step_stream(stream: &StepStream, chunk_size: usize, zstd_level: i3
             };
             prev_abs = encode_record(record, prev_abs, force_absolute, &mut raw);
         }
-        let compressed = zstd::encode_all(Cursor::new(&raw[..]), zstd_level).map_err(|e| format!("steps.dat: zstd encode failed: {e}"))?;
+        // ONE-SHOT, not streaming — and this is a correctness requirement, not
+        // a style choice. `zstd::bulk::compress` is `ZSTD_compress`, which
+        // records the payload's size in the frame header;
+        // `zstd::encode_all` is the streaming API, which cannot know the size
+        // in advance and leaves the field unset. The canonical Nim reader
+        // (`exec_stream.nim`, `decodeSpecChunkRecordCount` and `chunkSlot`)
+        // calls `ZSTD_getFrameContentSize` and FAILS on
+        // `ZSTD_CONTENTSIZE_UNKNOWN`, so a stream compressed the streaming way
+        // is not merely different — it is unreadable by the reference reader.
+        // Measured on a 200-record chunk: 104 bytes / `None` from the streaming
+        // API against 105 bytes / `Some(400)` from this one. See
+        // `crate::column_aware::compress_chunk`.
+        let compressed = crate::column_aware::compress_chunk(&raw, zstd_level)?;
         dat.extend_from_slice(&compressed);
         i = end;
     }

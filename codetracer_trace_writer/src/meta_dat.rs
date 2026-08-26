@@ -29,6 +29,35 @@
 pub const META_DAT_MAGIC: [u8; 4] = [0x43, 0x54, 0x4D, 0x44];
 /// Current `meta.dat` version.
 pub const META_DAT_VERSION: u16 = 3;
+/// Bit 4 — the trace is column-aware. Must match the canonical Nim writer's
+/// `meta_dat.nim` `FlagHasColumnAwareSteps`.
+///
+/// **This bit is not backward-compatible, by design.** Spec §"Reader Behaviour
+/// and Back-Compat" requires a reader that does not understand it to refuse the
+/// trace via the reserved-bits rule rather than misdecode the step stream —
+/// because when it is set, three things change at once:
+///
+/// * `paths.dat` records carry the Layout A per-line table instead of bare path
+///   bytes (see [`crate::column_aware::encode_path_record_layout_a`]);
+/// * step records' `global_position_index` addresses `(line, column)` pairs,
+///   not lines;
+/// * the execution stream may contain `DeltaColumn` (tag 0x07) records.
+///
+/// The flag is trace-global: a writer must not mix column-aware and line-only
+/// step records in one trace.
+pub const FLAG_HAS_COLUMN_AWARE_STEPS: u16 = 0x10;
+/// Bit 6 — the recorder's columns are sharp enough to place a breakpoint at a
+/// specific `(line, column)`. A *capability* bit, not a wire-format one: it
+/// says nothing about what is on the wire, only what the GUI may offer. Setting
+/// it presupposes [`FLAG_HAS_COLUMN_AWARE_STEPS`]. Matches the Nim writer's
+/// `FlagSupportsColumnBreakpoints`.
+pub const FLAG_SUPPORTS_COLUMN_BREAKPOINTS: u16 = 0x40;
+/// Bit 7 — the recorder supports per-column step over / in / out (its step
+/// predicate fires per statement start, not per line). Like
+/// [`FLAG_SUPPORTS_COLUMN_BREAKPOINTS`], a capability bit that presupposes
+/// [`FLAG_HAS_COLUMN_AWARE_STEPS`]. Matches the Nim writer's
+/// `FlagSupportsColumnMotions`.
+pub const FLAG_SUPPORTS_COLUMN_MOTIONS: u16 = 0x80;
 /// Bit 8 — M17a: a dedicated `calls.dat` call stream is present.
 pub const FLAG_HAS_CALL_STREAM: u16 = 0x100;
 /// Bit 9 — M23a: a dedicated `steps.dat` compact execution stream (+ its
@@ -247,6 +276,38 @@ pub fn meta_dat_has_span_stream(data: &[u8]) -> bool {
     }
 }
 
+/// Convenience: returns whether the `has_column_aware_steps` flag (bit 4) is
+/// set in a `meta.dat` buffer.
+///
+/// Unlike its siblings this one is **not** merely informative: when it is set,
+/// `paths.dat` is Layout A and the step stream's positions address
+/// `(line, column)` pairs, so a reader that ignores it decodes the wrong thing
+/// rather than less. A missing/invalid `meta.dat` ⇒ `false`.
+pub fn meta_dat_has_column_aware_steps(data: &[u8]) -> bool {
+    match read_meta_dat_flags(data) {
+        Ok(flags) => flags & FLAG_HAS_COLUMN_AWARE_STEPS != 0,
+        Err(_) => false,
+    }
+}
+
+/// Convenience: returns whether the `supports_column_breakpoints` capability
+/// flag (bit 6) is set. A missing/invalid `meta.dat` ⇒ `false`.
+pub fn meta_dat_supports_column_breakpoints(data: &[u8]) -> bool {
+    match read_meta_dat_flags(data) {
+        Ok(flags) => flags & FLAG_SUPPORTS_COLUMN_BREAKPOINTS != 0,
+        Err(_) => false,
+    }
+}
+
+/// Convenience: returns whether the `supports_column_motions` capability flag
+/// (bit 7) is set. A missing/invalid `meta.dat` ⇒ `false`.
+pub fn meta_dat_supports_column_motions(data: &[u8]) -> bool {
+    match read_meta_dat_flags(data) {
+        Ok(flags) => flags & FLAG_SUPPORTS_COLUMN_MOTIONS != 0,
+        Err(_) => false,
+    }
+}
+
 /// Decode just the `program` string from a `meta.dat` buffer (used by tests
 /// asserting on the header round-trip).
 pub fn read_meta_dat_program(data: &[u8]) -> Result<String, String> {
@@ -393,6 +454,64 @@ mod tests {
     }
 
     #[test]
+    fn meta_dat_column_flags_roundtrip_and_are_independent() {
+        // The three column bits must equal the canonical Nim writer's
+        // `FlagHasColumnAwareSteps` / `FlagSupportsColumnBreakpoints` /
+        // `FlagSupportsColumnMotions`. A divergence here does not fail loudly —
+        // it produces containers the reference reader rejects — so the values
+        // are pinned rather than inferred.
+        assert_eq!(FLAG_HAS_COLUMN_AWARE_STEPS, 0x10);
+        assert_eq!(FLAG_SUPPORTS_COLUMN_BREAKPOINTS, 0x40);
+        assert_eq!(FLAG_SUPPORTS_COLUMN_MOTIONS, 0x80);
+
+        let all = encode_meta_dat(
+            "01949fcc-7d92-7e9c-aaaa-bbbbbbbbbbbb",
+            "prog",
+            &[],
+            "/wd",
+            "rec",
+            &[],
+            FLAG_HAS_COLUMN_AWARE_STEPS | FLAG_SUPPORTS_COLUMN_BREAKPOINTS | FLAG_SUPPORTS_COLUMN_MOTIONS | FLAG_HAS_STEP_STREAM,
+        );
+        assert!(meta_dat_has_column_aware_steps(&all));
+        assert!(meta_dat_supports_column_breakpoints(&all));
+        assert!(meta_dat_supports_column_motions(&all));
+        assert!(meta_dat_has_step_stream(&all));
+
+        // The wire-format bit without either capability bit is the ordinary
+        // case: columns are on the wire, the GUI offers no per-column
+        // affordances. Each accessor must be able to answer `false` while its
+        // neighbours answer `true`, or none of the three is really a reading.
+        let wire_only = encode_meta_dat(
+            "01949fcc-7d92-7e9c-aaaa-bbbbbbbbbbbb",
+            "prog",
+            &[],
+            "",
+            "",
+            &[],
+            FLAG_HAS_COLUMN_AWARE_STEPS,
+        );
+        assert!(meta_dat_has_column_aware_steps(&wire_only));
+        assert!(!meta_dat_supports_column_breakpoints(&wire_only));
+        assert!(!meta_dat_supports_column_motions(&wire_only));
+
+        // And a line-only bundle must report all three clear even though its
+        // stream bits are set — the case every existing recorder produces.
+        let line_only = encode_meta_dat(
+            "01949fcc-7d92-7e9c-aaaa-bbbbbbbbbbbb",
+            "prog",
+            &[],
+            "",
+            "",
+            &[],
+            FLAG_HAS_STEP_STREAM | FLAG_HAS_VALUE_STREAM | FLAG_HAS_INTERNING_TABLES,
+        );
+        assert!(!meta_dat_has_column_aware_steps(&line_only));
+        assert!(!meta_dat_supports_column_breakpoints(&line_only));
+        assert!(!meta_dat_supports_column_motions(&line_only));
+    }
+
+    #[test]
     fn meta_dat_span_stream_flag_roundtrip() {
         // RS-M1: bit 13. The value MUST match the canonical Nim writer's
         // `FlagHasSpanStream`; a divergence here silently splits the registry.
@@ -417,15 +536,7 @@ mod tests {
         assert!(meta_dat_has_io_event_stream(&buf));
 
         // Span stream alone.
-        let buf_sp = encode_meta_dat(
-            "01949fcc-7d92-7e9c-aaaa-bbbbbbbbbbbb",
-            "prog",
-            &[],
-            "",
-            "",
-            &[],
-            FLAG_HAS_SPAN_STREAM,
-        );
+        let buf_sp = encode_meta_dat("01949fcc-7d92-7e9c-aaaa-bbbbbbbbbbbb", "prog", &[], "", "", &[], FLAG_HAS_SPAN_STREAM);
         assert!(meta_dat_has_span_stream(&buf_sp));
         assert!(!meta_dat_has_interning_tables(&buf_sp));
         assert!(!meta_dat_has_io_event_stream(&buf_sp));
@@ -434,15 +545,7 @@ mod tests {
         assert!(!meta_dat_has_call_stream(&buf_sp));
 
         // A container without spans must leave the bit clear.
-        let buf_none = encode_meta_dat(
-            "01949fcc-7d92-7e9c-aaaa-bbbbbbbbbbbb",
-            "prog",
-            &[],
-            "",
-            "",
-            &[],
-            0,
-        );
+        let buf_none = encode_meta_dat("01949fcc-7d92-7e9c-aaaa-bbbbbbbbbbbb", "prog", &[], "", "", &[], 0);
         assert!(!meta_dat_has_span_stream(&buf_none));
     }
 }

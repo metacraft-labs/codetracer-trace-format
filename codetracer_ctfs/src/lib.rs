@@ -31,7 +31,7 @@ pub use concurrent_writer::{ConcurrentCtfsWriter, FileWriter};
 pub use header::{ChunkIndexEntry, CompressionMethod, EncryptionMethod, CHUNK_INDEX_ENTRY_SIZE, DEFAULT_CHUNK_SIZE};
 pub use reader::CtfsReader;
 pub use writer::{CtfsWriter, FileHandle};
-pub use zstd_frame::compress_pledged;
+pub use zstd_frame::{compress_pledged, pledge_frame_content_size};
 
 use std::fmt;
 

@@ -496,13 +496,14 @@ pub struct ExecStreamEncoder {
 
 /// Compress one chunk payload the way the Nim writer does.
 ///
-/// `zstd::bulk::compress` is `ZSTD_compress`, the same one-shot entry point
-/// `exec_stream.nim` calls, so the frame header pledges the content size and
-/// the bytes match. See [`ExecStreamEncoder`] for why the streaming API is
-/// wrong here.
+/// Delegates to [`codetracer_ctfs::compress_pledged`], which is the single
+/// place this workspace calls `ZSTD_compress` — `steps.dat` is one of *five*
+/// stream families the reference reader refuses without a pledged content
+/// size, and fixing them one at a time is how the other four stayed broken
+/// after this one was fixed. See [`ExecStreamEncoder`] for the consequence.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn compress_chunk(raw: &[u8], zstd_level: i32) -> Result<Vec<u8>, String> {
-    zstd::bulk::compress(raw, zstd_level).map_err(|e| format!("steps.dat: zstd compress failed: {e}"))
+    codetracer_ctfs::compress_pledged(raw, zstd_level, "steps.dat")
 }
 
 impl ExecStreamEncoder {

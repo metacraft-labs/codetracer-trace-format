@@ -30,7 +30,30 @@
 //!   Zstd frames themselves.
 //! * `steps.idx` — the companion offset index.
 //! * `paths.dat` / `paths.off` — the interning table, in spec Layout A.
+//! * `values.dat` / `values.idx` — the parallel-indexed value stream.
 //! * the `meta.dat` flags word, masked to the column bits.
+//!
+//! # The exclusion list is a measurement, not an omission
+//!
+//! An exclusion list is where a differential goes to die, so
+//! [`every_file_in_the_container_is_either_compared_or_a_named_divergence`]
+//! drives a fixture that populates *every* stream, enumerates the union of both
+//! containers' file sets, and requires each entry to be one of:
+//!
+//! * byte-identical, or
+//! * present in one writer only for a reason stated in `RUST_ONLY` / `NIM_ONLY`,
+//!   or
+//! * a divergence declared BY NAME in `KNOWN_DIVERGENCES`, with its measured
+//!   cause.
+//!
+//! A file that is none of those fails the test. So a stream added to one writer
+//! and not the other, or a divergence that appears later, cannot hide in the
+//! gap between "compared" and "not mentioned" — which is where `values.dat`
+//! spent this work's first draft. That draft excluded it on the stated grounds
+//! that "the two writers' value-record encodings differ independently of
+//! columns"; the encodings are byte-identical and the whole divergence was the
+//! Zstd frame header, i.e. the unfixed half of the finding the test three
+//! functions below exists to pin.
 //!
 //! # The negative controls
 //!
@@ -347,18 +370,17 @@ fn meta_flags(ct: &Path) -> u16 {
     codetracer_trace_writer::meta_dat::read_meta_dat_flags(&meta).expect("meta.dat header parses")
 }
 
-/// The files whose bytes must match exactly. Named here so a test that adds a
-/// stream to one writer and not the other fails on the list rather than
-/// silently comparing a shrinking set.
+/// The files whose bytes must match exactly on the column-aware fixture. Named
+/// here so a test that adds a stream to one writer and not the other fails on
+/// the list rather than silently comparing a shrinking set.
 ///
-/// `values.dat` / `values.idx` are deliberately NOT in this list, and the
-/// reason is a measured divergence rather than an omission: the two writers'
-/// value-record encodings differ independently of columns, so including them
-/// would make the parity assertion fail for a reason that has nothing to do
-/// with this work. `values_dat_divergence_is_measured_not_assumed` below pins
-/// that they differ, so the exclusion cannot quietly become unnecessary and
-/// stay in place.
-const COMPARED_FILES: [&str; 4] = ["steps.dat", "steps.idx", "paths.dat", "paths.off"];
+/// Every entry is non-empty in BOTH containers on both fixtures below — the
+/// streams that are empty unless a fixture populates them (`calls.dat`,
+/// `events.dat`, `funcs.dat`, `types.dat`) are compared by
+/// [`every_file_in_the_container_is_either_compared_or_a_named_divergence`]
+/// instead, on a fixture that populates them, because comparing two empty files
+/// is the degenerate pass this campaign has been burned by.
+const COMPARED_FILES: [&str; 6] = ["steps.dat", "steps.idx", "paths.dat", "paths.off", "values.dat", "values.idx"];
 
 /// Compare the two containers' streams. Returns the list of files that
 /// differed, so callers can assert both "empty" (parity) and "contains X"
@@ -496,28 +518,212 @@ fn the_two_writers_agree_across_a_chunk_boundary() {
     assert_eq!(chunk1[0], 0x00, "chunk 1 must open with an AbsoluteStep so it decodes standalone");
 }
 
+// ---------------------------------------------------------------------------
+// The exclusion list, as a measurement
+// ---------------------------------------------------------------------------
+
+/// Files only the Rust writer emits, with the reason. These are the legacy
+/// unified-stream surface it keeps for old readers plus its JSON sidecars; the
+/// Nim writer routes the same information through the split streams only.
+const RUST_ONLY: [&str; 4] = ["events.log", "events.fmt", "meta.json", "paths.json"];
+
+/// Files only the Nim writer emits. Empty today; the constant exists so a Nim
+/// stream that appears later is a failure with a name rather than a silent
+/// widening of the "not compared" set.
+const NIM_ONLY: [&str; 0] = [];
+
+/// Streams that still differ, each with its MEASURED cause. This is the honest
+/// statement of what did not reach parity, and it is enforced in both
+/// directions: a file here that stops differing fails the test (so a fix cannot
+/// leave a stale exclusion behind), and a file that differs without being here
+/// fails it too.
+const KNOWN_DIVERGENCES: [(&str, &str); 6] = [
+    (
+        "meta.dat",
+        "recording_id is a freshly minted UUIDv7 on both sides, and the Rust header carries \
+         program/args fields the Nim one does not. Compared on its masked flags word instead.",
+    ),
+    (
+        "calls.dat",
+        "call/step attribution differs by one: for a call registered after step index 2 the Nim \
+         writer records first_step_id = 3 and the Rust writer 2. A real divergence, outside the \
+         column work, and NOT a framing difference — the frames are pledged on both sides now.",
+    ),
+    (
+        "funcs.dat",
+        "the function interning table's record shape: Nim writes the bare name bytes, Rust writes \
+         a length/id-prefixed record. The same class M24 flagged for paths.dat, unfixed for funcs.",
+    ),
+    ("funcs.off", "follows funcs.dat's record lengths."),
+    (
+        "types.dat",
+        "the Rust writer does not auto-register a type name for an Int value; the Nim writer \
+         registers `type_0`.",
+    ),
+    ("types.off", "follows types.dat."),
+];
+
+/// Drive a fixture that populates EVERY stream through both writers.
+fn write_populated(dir: &Path, program: &str, nim: bool) -> PathBuf {
+    let lls = fixture_line_lengths();
+    let ps = fixture_paths();
+    let value = |i: u32| codetracer_trace_types::ValueRecord::Int {
+        i: i64::from(i),
+        type_id: codetracer_trace_types::TypeId(0),
+    };
+
+    if nim {
+        let mut w = NimTraceWriter::new(program, &[], TraceEventsFileFormat::Ctfs);
+        w.begin_writing_trace_events(&dir.join("p_events.json")).expect("nim begin_events");
+        w.begin_writing_trace_metadata(&dir.join("p_meta.json")).expect("nim begin_metadata");
+        w.begin_writing_trace_paths(&dir.join("p_paths.json")).expect("nim begin_paths");
+        w.enable_column_aware_steps();
+        for (i, p) in ps.iter().enumerate() {
+            w.register_path_with_line_lengths(p, &lls[i]).expect("nim register path");
+        }
+        w.register_function("f", &ps[1], Line(1));
+        for i in 0..12u32 {
+            w.register_step_with_column(&ps[1], Line(1), Some(Line(i64::from(i % 60 + 1))));
+            w.register_variable_with_full_value("v", value(i));
+            if i == 2 {
+                w.register_call(codetracer_trace_types::FunctionId(0), vec![]);
+            }
+            if i == 4 {
+                w.register_special_event(codetracer_trace_types::EventLogKind::Write, "", "hello");
+            }
+        }
+        w.finish_writing_trace_events().expect("nim finish_events");
+        w.finish_writing_trace_metadata().expect("nim finish_metadata");
+        w.finish_writing_trace_paths().expect("nim finish_paths");
+        w.close().expect("nim close");
+        drop(w);
+        dir.join(format!("{program}.ct"))
+    } else {
+        let mut w = CtfsTraceWriter::new(program, &[]);
+        w.enable_column_aware_steps();
+        let out = dir.join(program);
+        TraceWriter::begin_writing_trace_events(&mut w, &out).expect("rust begin_events");
+        for (i, p) in ps.iter().enumerate() {
+            w.register_path_with_line_lengths(p, &lls[i]);
+        }
+        AbstractTraceWriter::register_function(&mut w, "f", &ps[1], Line(1));
+        for i in 0..12u32 {
+            AbstractTraceWriter::register_step_with_column(&mut w, &ps[1], Line(1), Some(Line(i64::from(i % 60 + 1))));
+            AbstractTraceWriter::register_variable_with_full_value(&mut w, "v", value(i));
+            if i == 2 {
+                AbstractTraceWriter::register_call(&mut w, codetracer_trace_types::FunctionId(0), vec![]);
+            }
+            if i == 4 {
+                AbstractTraceWriter::register_special_event(&mut w, codetracer_trace_types::EventLogKind::Write, "", "hello");
+            }
+        }
+        TraceWriter::finish_writing_trace_events(&mut w).expect("rust finish_events");
+        out.with_extension("ct")
+    }
+}
+
 #[test]
-fn values_dat_divergence_is_measured_not_assumed() {
-    // `values.dat` is excluded from COMPARED_FILES. That exclusion is only
-    // honest if the divergence is real and stated, so measure it: the two
-    // writers' value streams differ on a fixture that carries no values at all,
-    // which shows the difference is in the record ENCODING and not in the
-    // column work. If this test ever fails, the exclusion has become
-    // unnecessary and `values.dat` should join the compared set.
+fn every_file_in_the_container_is_either_compared_or_a_named_divergence() {
+    // The exclusion list is where a differential goes to die. This test refuses
+    // to let a file sit in the gap between "compared" and "not mentioned":
+    // every entry of the union of the two file sets must be identical,
+    // one-sided for a declared reason, or a declared divergence.
     let _guard = nim_lock();
     let dir = tempfile::tempdir().expect("tempdir");
-    let lls = fixture_line_lengths();
-    let ops = fixture_ops();
+    let nim_ct = write_populated(dir.path(), "census_nim", true);
+    let rust_ct = write_populated(dir.path(), "census_rust", false);
 
-    let nim_ct = write_with_nim(dir.path(), "values_nim", &lls, &ops);
-    let rust_ct = write_with_rust(dir.path(), "values_rust", &lls, &ops);
+    let mut nim_reader = CtfsReader::open(&nim_ct).expect("open nim");
+    let mut rust_reader = CtfsReader::open(&rust_ct).expect("open rust");
+    let mut names: Vec<String> = nim_reader.list_files();
+    for n in rust_reader.list_files() {
+        if !names.contains(&n) {
+            names.push(n);
+        }
+    }
+    names.sort();
+    assert!(names.len() >= 15, "control: the census must see a whole container, got {names:?}");
 
-    let nim_values = read_internal(&nim_ct, "values.dat");
-    let rust_values = read_internal(&rust_ct, "values.dat");
-    assert_ne!(
-        nim_values, rust_values,
-        "values.dat now matches — remove it from the exclusion and add it to COMPARED_FILES"
+    let mut identical: Vec<String> = Vec::new();
+    let mut differing: Vec<String> = Vec::new();
+    let mut unexplained: Vec<String> = Vec::new();
+
+    for name in &names {
+        let a = nim_reader.read_file(name).ok();
+        let b = rust_reader.read_file(name).ok();
+        match (a, b) {
+            (Some(a), Some(b)) if a == b => identical.push(name.clone()),
+            (Some(a), Some(b)) => {
+                differing.push(name.clone());
+                if !KNOWN_DIVERGENCES.iter().any(|(n, _)| n == name) {
+                    unexplained.push(format!(
+                        "{name} differs (nim {} B, rust {} B) and is not in KNOWN_DIVERGENCES",
+                        a.len(),
+                        b.len()
+                    ));
+                }
+            }
+            (None, Some(_)) => {
+                if !RUST_ONLY.contains(&name.as_str()) {
+                    unexplained.push(format!("{name} is Rust-only and is not in RUST_ONLY"));
+                }
+            }
+            (Some(_), None) => {
+                if !NIM_ONLY.contains(&name.as_str()) {
+                    unexplained.push(format!("{name} is Nim-only and is not in NIM_ONLY"));
+                }
+            }
+            (None, None) => unreachable!("a name came from one of the two listings"),
+        }
+    }
+
+    assert!(
+        unexplained.is_empty(),
+        "every file must be identical, one-sided for a declared reason, or a declared divergence:\n  {}",
+        unexplained.join("\n  ")
     );
+
+    // The other direction: a declared divergence that has stopped diverging is
+    // a stale exclusion, and stale exclusions are how a fixed defect keeps
+    // being described as unfixable.
+    for (name, why) in KNOWN_DIVERGENCES {
+        assert!(
+            differing.iter().any(|d| d == name),
+            "{name} no longer differs — remove it from KNOWN_DIVERGENCES and let the census compare it. \
+             Its declared reason was: {why}"
+        );
+    }
+
+    // Non-degeneracy: the census is only worth something if it is actually
+    // comparing populated streams. Every stream a recorder writes must be
+    // non-empty in BOTH containers here, or a fixture change has quietly turned
+    // one of these comparisons into 0 == 0.
+    for stream in ["steps.dat", "values.dat", "calls.dat", "events.dat", "paths.dat"] {
+        for (label, r) in [("nim", &mut nim_reader), ("rust", &mut rust_reader)] {
+            let bytes = r.read_file(stream).unwrap_or_default();
+            assert!(
+                !bytes.is_empty(),
+                "{label}: {stream} is empty — the census fixture no longer populates it"
+            );
+        }
+    }
+
+    // And the streams the column work is about really are in the identical set,
+    // stated positively rather than inferred from the absence of a failure.
+    for stream in [
+        "steps.dat",
+        "steps.idx",
+        "paths.dat",
+        "paths.off",
+        "values.dat",
+        "values.idx",
+        "events.dat",
+    ] {
+        assert!(
+            identical.contains(&stream.to_string()),
+            "{stream} must be byte-identical; identical set = {identical:?}"
+        );
+    }
 }
 
 #[test]
@@ -685,6 +891,87 @@ fn both_containers_round_trip_through_the_nim_reader() {
             "{label}: only {checked} records carried a position — too few to be a round-trip"
         );
     }
+}
+
+#[test]
+fn the_nim_reader_reads_every_stream_of_a_rust_container_not_only_its_steps() {
+    // THE ASSERTION THAT WAS MISSING, and the defect it would have caught.
+    //
+    // The pledged-content-size fix was applied to `steps.dat` and to nothing
+    // else, and every check in this file stayed green — because the round-trip
+    // above asks the Nim reader for steps and positions and never for a value,
+    // a call or an I/O event. Measured on the half-fixed writer, over a Rust
+    // container the reference reader had opened successfully:
+    //
+    //     step_count  12    call_count 0    event_count 0
+    //     values_json(0) = Err("cannot determine decompressed size for value chunk")
+    //
+    // `call_count = 0` for a container holding one call is the same
+    // silently-empty answer the `steps.dat` finding was about. Four stream
+    // families need the pledge, not one, so this test asks the reference reader
+    // for one record out of each.
+    let _guard = nim_lock();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let nim_ct = write_populated(dir.path(), "reads_nim", true);
+    let rust_ct = write_populated(dir.path(), "reads_rust", false);
+    #[allow(deprecated)]
+    let _kept = dir.into_path();
+
+    for (label, ct) in [("nim", &nim_ct), ("rust", &rust_ct)] {
+        let r = NimTraceReaderHandle::open(ct.to_str().expect("utf-8 path")).unwrap_or_else(|e| panic!("{label}: open: {e}"));
+
+        // Counts first: a stream whose frames the reader cannot size reports
+        // ZERO records rather than refusing, so these are the assertions that
+        // catch the silent case.
+        assert_eq!(r.step_count(), 12, "{label}: step_count");
+        assert_eq!(
+            r.call_count(),
+            1,
+            "{label}: call_count — 0 here means the reader could not size calls.dat"
+        );
+        assert_eq!(
+            r.event_count(),
+            1,
+            "{label}: event_count — 0 here means the reader could not size events.dat"
+        );
+
+        // Then the records themselves, which catch the loud case.
+        let values = r.values_json(0).unwrap_or_else(|e| panic!("{label}: values_json(0): {e}"));
+        assert!(values.contains("varname_id"), "{label}: values_json(0) = {values}");
+        let call = r.call_json(0).unwrap_or_else(|e| panic!("{label}: call_json(0): {e}"));
+        assert!(call.contains("function_id"), "{label}: call_json(0) = {call}");
+        let event = r.event_json(0).unwrap_or_else(|e| panic!("{label}: event_json(0): {e}"));
+        assert!(event.contains("step_id"), "{label}: event_json(0) = {event}");
+        let step = r.step_json(0).unwrap_or_else(|e| panic!("{label}: step_json(0): {e}"));
+        assert!(step.contains("global_line_index"), "{label}: step_json(0) = {step}");
+    }
+}
+
+#[test]
+fn every_compressed_stream_a_rust_container_carries_pledges_its_content_size() {
+    // The mechanism behind the test above, pinned directly so a regression is
+    // reported as "this stream stopped pledging" rather than as a decode error
+    // three layers away. `ZSTD_getFrameContentSize` returning UNKNOWN is what
+    // the five Nim readers refuse on.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let rust_ct = write_populated(dir.path(), "pledge_rust", false);
+
+    let mut unpledged = Vec::new();
+    let mut pledged = Vec::new();
+    for stream in ["steps.dat", "values.dat", "calls.dat", "events.dat"] {
+        let bytes = read_internal(&rust_ct, stream);
+        assert!(!bytes.is_empty(), "{stream} is empty — the fixture no longer populates it");
+        match zstd::zstd_safe::get_frame_content_size(&bytes) {
+            Ok(Some(n)) => pledged.push(format!("{stream}={n}")),
+            Ok(None) => unpledged.push(stream),
+            Err(_) => panic!("{stream} does not begin with a Zstd frame"),
+        }
+    }
+    assert!(
+        unpledged.is_empty(),
+        "these streams do not pledge their content size and the reference reader reads them as EMPTY: {unpledged:?}"
+    );
+    assert_eq!(pledged.len(), 4, "control: all four streams were actually inspected, got {pledged:?}");
 }
 
 #[test]

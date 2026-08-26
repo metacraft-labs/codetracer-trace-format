@@ -15,6 +15,11 @@ pub mod call_stream;
 
 pub mod step_stream;
 
+/// Column-aware step encoding, ported byte-for-byte from the canonical Nim
+/// writer. See the module docs for the port table and for why the line-only
+/// addressing is deliberately left divergent.
+pub mod column_aware;
+
 pub mod value_stream;
 
 pub mod event_stream;

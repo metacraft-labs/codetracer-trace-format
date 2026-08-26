@@ -298,7 +298,10 @@ pub fn encode_io_event_stream(records: &[IoEventRecord], chunk_size: usize, zstd
             encode_varint(rec_bytes.len() as u64, &mut raw);
             raw.extend_from_slice(&rec_bytes);
         }
-        let compressed = codetracer_ctfs::zstd_compat::encode_all(&raw, zstd_level).map_err(|e| format!("events.dat: zstd encode failed: {e}"))?;
+        // One-shot: `io_event_stream.nim` returns "cannot determine decompressed
+        // size for io event chunk" on a streaming frame, and `event_count` reads
+        // back as 0 rather than refusing. See `codetracer_ctfs::zstd_frame`.
+        let compressed = codetracer_ctfs::compress_pledged(&raw, zstd_level, "events.dat")?;
         dat.extend_from_slice(&compressed);
         i = end;
     }

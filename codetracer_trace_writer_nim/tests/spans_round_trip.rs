@@ -28,9 +28,7 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use codetracer_trace_types::Line;
-use codetracer_trace_writer_nim::{
-    read_span_stream_json, NimTraceWriter, SpanRecord, TraceEventsFileFormat, SPAN_STATUS_OK,
-};
+use codetracer_trace_writer_nim::{read_span_stream_json, NimTraceWriter, SpanRecord, TraceEventsFileFormat, SPAN_STATUS_OK};
 
 /// The Nim runtime is not thread-safe — its global state lives behind a single
 /// lock — so every test in this binary is serialised, as in `thread_events.rs`.
@@ -50,11 +48,7 @@ fn make_writer(program_basename: &str) -> (tempfile::TempDir, NimTraceWriter) {
     (dir, writer)
 }
 
-fn close_writer(
-    dir: tempfile::TempDir,
-    mut writer: NimTraceWriter,
-    program_basename: &str,
-) -> std::path::PathBuf {
+fn close_writer(dir: tempfile::TempDir, mut writer: NimTraceWriter, program_basename: &str) -> std::path::PathBuf {
     writer.finish_writing_trace_events().expect("finish_events");
     writer.close().expect("close");
     drop(writer);
@@ -129,10 +123,7 @@ fn next_step_index_follows_the_writers_exec_counter() {
 
     // The recorded stream is exactly as long as the last reported index, which
     // is what makes `[start_step, end_step]` a coordinate inside the container.
-    let reader = codetracer_trace_writer_nim::NimTraceReaderHandle::open(
-        ct_path.to_str().expect("utf-8 path"),
-    )
-    .expect("reader open");
+    let reader = codetracer_trace_writer_nim::NimTraceReaderHandle::open(ct_path.to_str().expect("utf-8 path")).expect("reader open");
     assert_eq!(reader.step_count(), 4);
 }
 
@@ -218,8 +209,5 @@ fn spans_are_rejected_by_a_backend_that_cannot_store_them() {
     let err = writer
         .register_span(&web_request_span(1, 0, 1, false))
         .expect_err("the JSON backend must reject spans");
-    assert!(
-        err.to_string().contains("spans"),
-        "the error should name the missing capability: {err}"
-    );
+    assert!(err.to_string().contains("spans"), "the error should name the missing capability: {err}");
 }

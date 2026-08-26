@@ -70,7 +70,15 @@ impl ChunkedWriter {
 
             // Compress
             let compressed = match self.compression {
-                CompressionMethod::Zstd => crate::zstd_compat::encode_all(chunk_raw, self.level).map_err(CtfsError::Io)?,
+                // One-shot, so the frame pledges its content size. The inline
+                // 16-byte header above carries the COMPRESSED size; nothing in it
+                // carries the decompressed one, so every reader of this stream —
+                // including `codetracer_trace_reader.nim`, which reads `events.log`
+                // — has to get it from the frame header. See
+                // `crate::zstd_frame`.
+                CompressionMethod::Zstd => {
+                    crate::zstd_frame::compress_pledged(chunk_raw, self.level, "events.log").map_err(|e| CtfsError::Io(std::io::Error::other(e)))?
+                }
                 _ => chunk_raw.to_vec(),
             };
 

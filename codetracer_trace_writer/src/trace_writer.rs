@@ -181,15 +181,18 @@ pub trait TraceWriter: AbstractTraceWriter {
     // exactly, so `&mut dyn TraceWriter` is interchangeable between the two
     // crates for these calls.
     //
-    // Note what the defaults do and do not claim.  This crate's CTFS writer
-    // does not yet emit column-aware steps — `register_step_with_column`
-    // drops the column, there is no producer for the `paths.dat` Layout A
-    // `line_lengths` table, and there is no `sekDeltaColumn` encoder — so it
-    // deliberately does NOT set the corresponding `meta.dat` capability bits
-    // (4 / 6 / 7).  Advertising a capability the container does not carry
-    // would make a reader ask for columns and get nothing.  The calls are
-    // accepted and ignored, which is the same contract the Nim crate's own
-    // `NonStreamingTraceWriter` test double offers.
+    // Note what the DEFAULTS do and do not claim, and note that `CtfsTraceWriter`
+    // no longer takes them.  The defaults below accept the column-aware family
+    // and ignore it, which is the contract the Nim crate's own
+    // `NonStreamingTraceWriter` test double offers, and which is right for a
+    // writer with no column-bearing step encoder.
+    //
+    // `CtfsTraceWriter` OVERRIDES every one of them now — it has a
+    // `sekDeltaColumn` encoder, a `paths.dat` Layout A producer and the
+    // `meta.dat` capability bits (4 / 6 / 7) — so a caller reaching it through
+    // this trait gets the real implementation.  A writer that keeps the
+    // defaults must not set those bits: advertising a capability the container
+    // does not carry would make a reader ask for columns and get nothing.
     // -----------------------------------------------------------------
 
     /// Close the writer and flush everything still buffered.
@@ -204,7 +207,8 @@ pub trait TraceWriter: AbstractTraceWriter {
 
     /// Opt the writer into column-aware step encoding (`meta.dat` bit 4).
     ///
-    /// Accepted and ignored here — see the note above.
+    /// Accepted and ignored by this DEFAULT — see the note above.
+    /// [`CtfsTraceWriter`](crate::ctfs_writer::CtfsTraceWriter) overrides it.
     fn enable_column_aware_steps(&mut self) {}
 
     /// Advertise support for per-column breakpoints (`meta.dat` bit 6).

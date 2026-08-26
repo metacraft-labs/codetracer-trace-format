@@ -383,7 +383,11 @@ pub fn encode_call_stream(records: &[CallStreamRecord], chunk_size: usize, zstd_
             encode_varint(rec_bytes.len() as u64, &mut raw);
             raw.extend_from_slice(&rec_bytes);
         }
-        let compressed = codetracer_ctfs::zstd_compat::encode_all(&raw, zstd_level).map_err(|e| format!("calls.dat: zstd encode failed: {e}"))?;
+        // One-shot: `call_stream.nim`'s `zstdDecompress` returns
+        // "zstd: unknown frame content size" on a streaming frame, and
+        // `call_count` reads back as 0 rather than refusing.
+        // See `codetracer_ctfs::zstd_frame`.
+        let compressed = codetracer_ctfs::compress_pledged(&raw, zstd_level, "calls.dat")?;
         dat.extend_from_slice(&compressed);
         i = end;
     }

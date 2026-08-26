@@ -171,11 +171,7 @@ extern "C" {
     fn trace_writer_next_step_index(handle: *mut std::ffi::c_void) -> u64;
     // Read side: the span stream of a finished container as JSON.  Freed with
     // ct_free_buffer.
-    fn ct_spans_json(
-        path: *const std::os::raw::c_char,
-        settled: i32,
-        out_len: *mut usize,
-    ) -> *mut u8;
+    fn ct_spans_json(path: *const std::os::raw::c_char, settled: i32, out_len: *mut usize) -> *mut u8;
 
     // ----- Column-aware step mode (P6.3 / P6.4) -----
     //
@@ -1576,8 +1572,7 @@ impl NimTraceWriter {
         let keys: Vec<CString> = span.metadata.iter().map(|(k, _)| str_to_cstring(k)).collect();
         let values: Vec<CString> = span.metadata.iter().map(|(_, v)| str_to_cstring(v)).collect();
         let key_ptrs: Vec<*const std::os::raw::c_char> = keys.iter().map(|k| k.as_ptr()).collect();
-        let value_ptrs: Vec<*const std::os::raw::c_char> =
-            values.iter().map(|v| v.as_ptr()).collect();
+        let value_ptrs: Vec<*const std::os::raw::c_char> = values.iter().map(|v| v.as_ptr()).collect();
         let rc = unsafe {
             trace_writer_register_span(
                 self.handle,
@@ -1591,7 +1586,11 @@ impl NimTraceWriter {
                 span.thread_id,
                 span.start_step,
                 span.end_step,
-                if span.is_external { c_external_recording.as_ptr() } else { std::ptr::null() },
+                if span.is_external {
+                    c_external_recording.as_ptr()
+                } else {
+                    std::ptr::null()
+                },
                 if span.is_external { c_external_path.as_ptr() } else { std::ptr::null() },
                 c_span_type.as_ptr(),
                 c_label.as_ptr(),

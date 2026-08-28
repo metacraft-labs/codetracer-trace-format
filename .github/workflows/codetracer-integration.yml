@@ -59,7 +59,7 @@ jobs:
       # reference them through ${SIBLINGS} accordingly. This repo's own
       # checkout stays in the `codetracer-trace-format/` subdir.
       - name: Setup dev env
-        uses: metacraft-labs/metacraft-github-actions/setup-dev-env@main
+        uses: metacraft-labs/metacraft-github-actions/setup-dev-env@dev
         with:
           env-flavor: nix
           gh-token: ${{ steps.app-token.outputs.token }}

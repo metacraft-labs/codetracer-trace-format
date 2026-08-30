@@ -1,0 +1,57 @@
+# Gate: no CI reference may name a branch that does not exist, or a legacy
+# `main`/`master` the target repository has moved off.
+#
+# The `main` -> `dev` migration has produced this defect five times across
+# this repo family, in three shapes, and nothing caught any of them. See
+# `ci/check-ci-refs.sh` for what each shape costs and why they are not all
+# treated as fatal.
+#
+# This file's own trigger list names `dev` and `stable` and NOT `main`,
+# because `main` was deleted from this remote and a workflow filtered on a
+# branch that no longer exists never runs -- which is exactly the failure
+# this gate exists to catch. The gate checks itself along with everything
+# else, so reintroducing `main` here fails the very job that would be doing
+# it.
+name: CI refs
+
+on:
+  push:
+    branches: [dev, stable]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  check-refs:
+    name: workflow refs resolve
+    runs-on: eph-linux-x64
+    steps:
+      - uses: actions/checkout@v4
+
+      # Some siblings this repo clones are private, and an unauthenticated
+      # `git ls-remote` against them cannot be distinguished from an outage.
+      # The gate treats an unreachable remote as a FAILURE under $CI, so it
+      # must be able to read every repo it is asked about -- otherwise it
+      # would report a private repo as broken.
+      - name: Mint a CI token
+        id: ci_token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.CI_TOKEN_PROVIDER_APP_ID }}
+          private-key: ${{ secrets.CI_TOKEN_PROVIDER_PRIVATE_KEY }}
+          owner: metacraft-labs
+
+      - name: Authenticate git for private siblings
+        run: |
+          git config --global \
+            url."https://x-access-token:${{ steps.ci_token.outputs.token }}@github.com/".insteadOf \
+            "https://github.com/"
+
+      # The self-tests run FIRST and are hermetic: they stub the resolver, so
+      # they prove the checker's logic independently of the network and of
+      # what happens to be true of these repos today. If the checker were
+      # silently matching nothing, the non-vacuity case here is what fails.
+      - name: Self-test the checker
+        run: ci/check-ci-refs.sh --self-test
+
+      - name: Check this repo's workflow references
+        run: ci/check-ci-refs.sh

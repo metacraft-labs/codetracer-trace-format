@@ -3,7 +3,7 @@ name: CodeTracer Integration Tests
 on:
   pull_request:
   push:
-    branches: [main, master]
+    branches: [main, master, dev, stable]
   workflow_dispatch:
     inputs:
       codetracer_ref:

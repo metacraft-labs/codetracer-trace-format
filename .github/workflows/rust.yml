@@ -39,7 +39,7 @@ jobs:
         uses: metacraft-labs/metacraft-github-actions/clone-repo@dev
         with:
           repo: metacraft-labs/codetracer-trace-format-nim
-          ref: main
+          ref: dev
           path: codetracer-trace-format-nim
           gh-token: ${{ steps.app-token.outputs.token }}
       # Even `cargo clippy` runs build.rs, and codetracer_trace_writer_nim's
@@ -88,7 +88,7 @@ jobs:
         uses: metacraft-labs/metacraft-github-actions/clone-repo@dev
         with:
           repo: metacraft-labs/codetracer-trace-format-nim
-          ref: main
+          ref: dev
           path: codetracer-trace-format-nim
           gh-token: ${{ steps.app-token.outputs.token }}
       - name: Install Nim
@@ -119,28 +119,28 @@ jobs:
         uses: metacraft-labs/metacraft-github-actions/clone-repo@dev
         with:
           repo: metacraft-labs/codetracer-python-recorder
-          ref: main
+          ref: stable
           path: codetracer-python-recorder
           gh-token: ${{ steps.app-token.outputs.token }}
       - name: Clone codetracer-ruby-recorder
         uses: metacraft-labs/metacraft-github-actions/clone-repo@dev
         with:
           repo: metacraft-labs/codetracer-ruby-recorder
-          ref: main
+          ref: dev
           path: codetracer-ruby-recorder
           gh-token: ${{ steps.app-token.outputs.token }}
       - name: Clone codetracer-js-recorder
         uses: metacraft-labs/metacraft-github-actions/clone-repo@dev
         with:
           repo: metacraft-labs/codetracer-js-recorder
-          ref: main
+          ref: dev
           path: codetracer-js-recorder
           gh-token: ${{ steps.app-token.outputs.token }}
       - name: Clone codetracer-native-recorder
         uses: metacraft-labs/metacraft-github-actions/clone-repo@dev
         with:
           repo: metacraft-labs/codetracer-native-recorder
-          ref: main
+          ref: dev
           path: codetracer-native-recorder
           gh-token: ${{ steps.app-token.outputs.token }}
 

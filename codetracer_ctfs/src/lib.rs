@@ -21,6 +21,7 @@ pub mod reader;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod trace_storage;
 pub mod writer;
+pub mod zstd_frame;
 
 pub use base40::{base40_decode, base40_encode};
 pub use block_alloc::AtomicBlockAllocator;
@@ -30,6 +31,7 @@ pub use concurrent_writer::{ConcurrentCtfsWriter, FileWriter};
 pub use header::{ChunkIndexEntry, CompressionMethod, EncryptionMethod, CHUNK_INDEX_ENTRY_SIZE, DEFAULT_CHUNK_SIZE};
 pub use reader::CtfsReader;
 pub use writer::{CtfsWriter, FileHandle};
+pub use zstd_frame::{compress_pledged, pledge_frame_content_size};
 
 use std::fmt;
 

@@ -539,6 +539,27 @@ impl ValueStreamBuilder {
         }
     }
 
+    /// Open a new value record without a `Step` event.
+    ///
+    /// The value stream is parallel-indexed to the execution stream — value
+    /// record N belongs to step N — and normally a `Step` event is what closes
+    /// one record and opens the next. A column-only step (`DeltaColumn`, tag
+    /// 0x07) is a step in the execution stream with no `Step` event behind it,
+    /// so without this the two streams would drift by one record per column
+    /// move and every `variables_at(step_id)` past the first column step would
+    /// answer with a neighbour's values.
+    ///
+    /// Behaviourally identical to the `Step` arm of [`Self::observe`]; the Nim
+    /// writer reaches the same place by calling `writeStepValues` from
+    /// `registerColumnStep`.
+    pub fn open_step_record(&mut self) {
+        if self.seen_step {
+            self.records.push(std::mem::take(&mut self.current));
+        } else {
+            self.seen_step = true;
+        }
+    }
+
     /// Number of value records built so far (excludes the in-progress record).
     pub fn len(&self) -> usize {
         self.records.len()
@@ -600,7 +621,6 @@ pub struct EncodedValueStream {
 /// length). Each chunk is independently Zstd-compressed.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn encode_value_stream(records: &[ValueRecordEntry], chunk_size: usize, zstd_level: i32) -> Result<EncodedValueStream, String> {
-    use std::io::Cursor;
     let chunk_size = chunk_size.max(1);
     let mut dat: Vec<u8> = Vec::new();
     let mut idx: Vec<u8> = Vec::new();
@@ -620,7 +640,11 @@ pub fn encode_value_stream(records: &[ValueRecordEntry], chunk_size: usize, zstd
             encode_varint(rec_bytes.len() as u64, &mut raw);
             raw.extend_from_slice(&rec_bytes);
         }
-        let compressed = zstd::encode_all(Cursor::new(&raw[..]), zstd_level).map_err(|e| format!("values.dat: zstd encode failed: {e}"))?;
+        // One-shot, so the frame header pledges its content size. `value_stream.nim`
+        // sizes its destination buffer from `ZSTD_getFrameContentSize` and returns
+        // "cannot determine decompressed size for value chunk" on UNKNOWN, which is
+        // what `zstd::encode_all` produces. See `codetracer_ctfs::zstd_frame`.
+        let compressed = codetracer_ctfs::compress_pledged(&raw, zstd_level, "values.dat")?;
         dat.extend_from_slice(&compressed);
         i = end;
     }

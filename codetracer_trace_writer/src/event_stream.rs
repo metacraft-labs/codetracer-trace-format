@@ -281,7 +281,6 @@ pub struct EncodedIoEventStream {
 /// length). Each chunk is independently Zstd-compressed.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn encode_io_event_stream(records: &[IoEventRecord], chunk_size: usize, zstd_level: i32) -> Result<EncodedIoEventStream, String> {
-    use std::io::Cursor;
     let chunk_size = chunk_size.max(1);
     let mut dat: Vec<u8> = Vec::new();
     let mut idx: Vec<u8> = Vec::new();
@@ -301,7 +300,10 @@ pub fn encode_io_event_stream(records: &[IoEventRecord], chunk_size: usize, zstd
             encode_varint(rec_bytes.len() as u64, &mut raw);
             raw.extend_from_slice(&rec_bytes);
         }
-        let compressed = zstd::encode_all(Cursor::new(&raw[..]), zstd_level).map_err(|e| format!("events.dat: zstd encode failed: {e}"))?;
+        // One-shot: `io_event_stream.nim` returns "cannot determine decompressed
+        // size for io event chunk" on a streaming frame, and `event_count` reads
+        // back as 0 rather than refusing. See `codetracer_ctfs::zstd_frame`.
+        let compressed = codetracer_ctfs::compress_pledged(&raw, zstd_level, "events.dat")?;
         dat.extend_from_slice(&compressed);
         i = end;
     }

@@ -8,10 +8,13 @@
 //! rely on (this M23a reader is the format-level reference the round-trip test
 //! drives, mirroring the M17a `CallStreamReader`).
 //!
-//! The stream is gated by the `has_step_stream` capability flag (bit 9) in
-//! `meta.dat`. A reader that does not see the flag, or a container without
-//! `steps.dat`, simply has no step stream — the unified `events.log` step
-//! sequence remains the source of truth.
+//! The stream's existence is answered by the STRUCTURAL PRESENCE of `steps.dat`
+//! (`findFile` + `FileEntry.Size`), NOT by the `has_step_stream` hint bit (bit
+//! 9) in `meta.dat` — that bit may be stamped only at close, so gating on it
+//! would refuse a step stream that structurally exists in a still-recording
+//! trace (trace-format spec: "Stream-presence flags are a hint, not a gate").
+//! A container without `steps.dat` simply has no step stream — the unified
+//! `events.log` step sequence remains the source of truth.
 //!
 //! # Independent chunk decode
 //!
@@ -24,7 +27,6 @@
 //! neighbours.
 
 use codetracer_ctfs::CtfsReader;
-use codetracer_trace_writer::meta_dat::meta_dat_has_step_stream;
 use codetracer_trace_writer::step_stream::{StepStreamRecord, decode_record};
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -120,10 +122,14 @@ impl StepStreamReader {
     /// This keeps the format-level reader independent of how the container bytes
     /// were sourced (local file, follow source, HTTP range, overlay) while
     /// preserving the exact same decode/cache path as [`Self::open`].
-    pub fn from_files(meta: &[u8], dat: Vec<u8>, idx: Vec<u8>) -> Result<Option<StepStreamReader>, String> {
-        if !meta_dat_has_step_stream(meta) {
-            return Ok(None);
-        }
+    pub fn from_files(_meta: &[u8], dat: Vec<u8>, idx: Vec<u8>) -> Result<Option<StepStreamReader>, String> {
+        // Existence is answered by STRUCTURAL PRESENCE — the caller resolved
+        // `steps.dat` / `steps.idx` by `findFile` + `FileEntry.Size` and handed
+        // their bytes here. The `meta.dat` `has_step_stream` hint bit (bit 9) is
+        // NOT consulted: a writer may stamp it only at close, so gating on it
+        // would refuse a step stream that structurally exists in a still-recording
+        // trace (trace-format spec: "Stream-presence flags are a hint, not a
+        // gate"). `_meta` is retained in the signature for source compatibility.
         let index = StepsIndex::parse(&idx)?;
 
         // Compute the total record count: all chunks but the last hold
@@ -151,25 +157,18 @@ impl StepStreamReader {
     }
 
     /// Open the step stream from an already-open CTFS reader. Returns
-    /// `Ok(None)` when the container has no dedicated step stream (no `meta.dat`
-    /// flag, or no `steps.dat`) — the caller falls back to the unified stream.
+    /// `Ok(None)` when the container has no `steps.dat` — existence is answered
+    /// by STRUCTURAL PRESENCE of the stream file, not by the `has_step_stream`
+    /// hint bit (see [`Self::from_files`]).
     pub fn open(reader: &mut CtfsReader) -> Result<Option<StepStreamReader>, String> {
-        // Honor the meta.dat capability flag: only treat steps.dat as
-        // authoritative when has_step_stream is set.
-        let meta = match reader.read_file("meta.dat") {
-            Ok(meta) => meta,
-            Err(_) => return Ok(None),
-        };
-        if !meta_dat_has_step_stream(&meta) {
-            return Ok(None);
-        }
         let dat = match reader.read_file("steps.dat") {
             Ok(d) => d,
             Err(_) => return Ok(None),
         };
         let idx = reader
             .read_file("steps.idx")
-            .map_err(|e| format!("steps.idx missing despite has_step_stream flag: {e}"))?;
+            .map_err(|e| format!("steps.idx missing despite steps.dat presence: {e}"))?;
+        let meta = reader.read_file("meta.dat").unwrap_or_default();
         StepStreamReader::from_files(&meta, dat, idx)
     }
 

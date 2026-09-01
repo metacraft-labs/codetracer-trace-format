@@ -15,7 +15,6 @@
 
 use codetracer_ctfs::CtfsReader;
 use codetracer_trace_writer::call_stream::CallStreamRecord;
-use codetracer_trace_writer::meta_dat::meta_dat_has_call_stream;
 
 #[cfg(not(target_arch = "wasm32"))]
 fn decode_zstd_chunk(compressed: &[u8]) -> Result<Vec<u8>, String> {
@@ -132,10 +131,12 @@ impl CallStreamReader {
     /// This keeps the format-level reader independent of how the container bytes
     /// were sourced (local file, follow source, HTTP range, overlay) while
     /// preserving the exact same decode/cache path as [`Self::open`].
-    pub fn from_files(meta: &[u8], dat: Vec<u8>, idx: Vec<u8>) -> Result<Option<CallStreamReader>, String> {
-        if !meta_dat_has_call_stream(meta) {
-            return Ok(None);
-        }
+    pub fn from_files(_meta: &[u8], dat: Vec<u8>, idx: Vec<u8>) -> Result<Option<CallStreamReader>, String> {
+        // Existence is STRUCTURAL — the caller resolved `calls.dat` / `calls.idx`
+        // by `findFile` + `FileEntry.Size`. The `has_call_stream` hint bit (bit 8)
+        // is NOT consulted (trace-format spec: "Stream-presence flags are a hint,
+        // not a gate"; a writer may stamp the bit only at close). `_meta` is
+        // retained for source compatibility.
         let index = CallsIndex::parse(&idx)?;
 
         // Compute the total record count: all chunks but the last hold
@@ -163,25 +164,18 @@ impl CallStreamReader {
     }
 
     /// Open the call stream from an already-open CTFS reader. Returns
-    /// `Ok(None)` when the container has no dedicated call stream (no `meta.dat`
-    /// flag, or no `calls.dat`) — the caller falls back to the unified stream.
+    /// `Ok(None)` when the container has no `calls.dat` — existence is answered
+    /// by STRUCTURAL PRESENCE of the stream file, not by the `has_call_stream`
+    /// hint bit (see [`Self::from_files`]).
     pub fn open(reader: &mut CtfsReader) -> Result<Option<CallStreamReader>, String> {
-        // Honor the meta.dat capability flag: only treat calls.dat as
-        // authoritative when has_call_stream is set.
-        let meta = match reader.read_file("meta.dat") {
-            Ok(meta) => meta,
-            Err(_) => return Ok(None),
-        };
-        if !meta_dat_has_call_stream(&meta) {
-            return Ok(None);
-        }
         let dat = match reader.read_file("calls.dat") {
             Ok(d) => d,
             Err(_) => return Ok(None),
         };
         let idx = reader
             .read_file("calls.idx")
-            .map_err(|e| format!("calls.idx missing despite has_call_stream flag: {e}"))?;
+            .map_err(|e| format!("calls.idx missing despite calls.dat presence: {e}"))?;
+        let meta = reader.read_file("meta.dat").unwrap_or_default();
         CallStreamReader::from_files(&meta, dat, idx)
     }
 

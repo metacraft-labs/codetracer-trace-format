@@ -146,8 +146,11 @@ fn main() {
     }
     if msvc {
         // MSVC-ABI consumer: Nim must emit MSVC objects (it defaults to
-        // MinGW gcc on Windows).
+        // MinGW gcc on Windows). cl.exe defaults to the static CRT (/MT),
+        // while Rust's MSVC target defaults to the dynamic CRT, so align the
+        // Nim objects explicitly to avoid an LNK2038 RuntimeLibrary mismatch.
         nim.arg("--cc:vcc");
+        nim.arg("--passC:-MD");
     } else if windows {
         // windows-gnu consumer: MinGW gcc objects (ABI-compatible with the
         // x86_64-pc-windows-gnu Rust target).

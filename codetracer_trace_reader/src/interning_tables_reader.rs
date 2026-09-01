@@ -9,19 +9,38 @@
 //! (two `u64`s), then slice the `.dat` between them — there is NO sequential
 //! scan, so resolving a mid-table id costs the same as the first.
 //!
-//! The tables are gated by the `has_interning_tables` capability flag (bit 12)
-//! in `meta.dat`. A reader that does not see the flag, or a container without
-//! the table files, simply has no binary interning tables — the legacy
-//! `events.log` / `paths.json` interning remains the source of truth. M23d does
-//! NOT migrate any consumer off that legacy interning; this reader is additive.
+//! # Detection is by PRESENCE; `meta.dat` bit 12 selects only the LAYOUT
 //!
-//! # Record layouts (mirrors `codetracer_trace_writer::interning_tables`)
+//! EXISTENCE of the binary interning tables is decided by STRUCTURAL PRESENCE of
+//! `paths.dat` (written first and unconditionally by every writer that emits the
+//! tables), never by the `has_interning_tables` capability flag (bit 12) in
+//! `meta.dat`. Bit 12 is NOT a presence check: the production Nim
+//! `MultiStreamTraceWriter` emits all four tables but leaves the bit clear,
+//! because the bit means "these records are in the M23d STRUCTURED layout" and
+//! its records are in the simpler PLAIN layout. A reader that took the flag as a
+//! presence gate found nothing on every real trace — a blank Variables pane over
+//! data sitting on disk (this is exactly the gate removed from the
+//! call/step/value/io stream readers; it was mirrored in db-backend's
+//! `ctfs_trace_reader::interning_tables`, and this brought the format crate into
+//! line). `meta.dat` is read best-effort and its bit 12 chooses ONLY how to
+//! decode ([`RecordLayout`]). A missing/absent `meta.dat` (a still-recording
+//! trace) therefore reads as PLAIN rather than refusing the tables.
+//!
+//! The legacy `events.log` / `paths.json` interning remains the source of truth;
+//! M23d does NOT migrate any consumer off it, and this reader is additive.
+//!
+//! # Record layouts (mirrors `codetracer_trace_writer::interning_tables` and
+//! db-backend's `ctfs_trace_reader::interning_tables`)
 //!
 //! ```text
-//!   paths.dat / varnames.dat record = raw bytes
-//!   funcs.dat   record = global_line_index: varint, name_len: varint, name: bytes
-//!   types.dat   record = kind: u8, lang_type_len: varint, lang_type: bytes,
-//!                        specific_info: binary (CBOR of TypeSpecificInfo)
+//!   [`RecordLayout::Plain`] — what the production Nim writer emits (bit 12 clear)
+//!     paths.dat / funcs.dat / types.dat / varnames.dat = raw name bytes
+//!
+//!   [`RecordLayout::Structured`] — M23d (bit 12 set)
+//!     paths.dat / varnames.dat record = raw bytes
+//!     funcs.dat   record = global_line_index: varint, name_len: varint, name: bytes
+//!     types.dat   record = kind: u8, lang_type_len: varint, lang_type: bytes,
+//!                          specific_info: binary (CBOR of TypeSpecificInfo)
 //! ```
 
 use codetracer_ctfs::CtfsReader;
@@ -147,6 +166,19 @@ impl VarSizeTable {
     }
 }
 
+/// Which on-disk record layout the four interning tables use. Selected by
+/// `meta.dat` bit 12 (`has_interning_tables`) — the flag is a LAYOUT selector,
+/// never a presence gate (see the module docs).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RecordLayout {
+    /// M23d structured records: `funcs.dat` carries a `global_line_index`
+    /// varint prefix and `types.dat` a kind byte + CBOR specific-info tail.
+    Structured,
+    /// What the production Nim writer emits (bit 12 clear): every table record
+    /// is raw name bytes, with no varint prefix or kind byte.
+    Plain,
+}
+
 /// A reader over a container's binary interning tables, resolving interned
 /// records by id with O(1) random access.
 pub struct InterningTablesReader {
@@ -154,23 +186,37 @@ pub struct InterningTablesReader {
     funcs: VarSizeTable,
     types: VarSizeTable,
     varnames: VarSizeTable,
+    /// How `funcs.dat` / `types.dat` records are decoded (bit 12 layout
+    /// selector; `paths.dat` / `varnames.dat` are raw bytes in both layouts).
+    layout: RecordLayout,
 }
 
 impl InterningTablesReader {
     /// Open the interning tables from an already-open CTFS reader. Returns
-    /// `Ok(None)` when the container has no binary interning tables (no
-    /// `meta.dat` flag, or the table files are absent) — the caller falls back
-    /// to the legacy `events.log` / `paths.json` interning.
+    /// `Ok(None)` only when the container genuinely carries no binary interning
+    /// tables — the caller then falls back to the legacy `events.log` /
+    /// `paths.json` interning.
+    ///
+    /// EXISTENCE is decided by STRUCTURAL PRESENCE of `paths.dat`, not by
+    /// `meta.dat` bit 12; the flag selects only the decode [`RecordLayout`]. See
+    /// the module docs for why the two are separate (the production Nim writer
+    /// emits the tables with bit 12 clear).
     pub fn open(reader: &mut CtfsReader) -> Result<Option<InterningTablesReader>, String> {
-        let has_flag = match reader.read_file("meta.dat") {
-            Ok(meta) => meta_dat_has_interning_tables(&meta),
-            Err(_) => false,
+        // `meta.dat` is read best-effort: a missing/absent one (still-recording
+        // trace) simply reads as the PLAIN layout rather than refusing the
+        // tables.
+        let layout = match reader.read_file("meta.dat") {
+            Ok(meta) if meta_dat_has_interning_tables(&meta) => RecordLayout::Structured,
+            _ => RecordLayout::Plain,
         };
-        if !has_flag {
+        // `paths.dat` is written first and unconditionally by both writers, so
+        // its presence is the container's own answer to "do I carry interning
+        // tables". Absent ⇒ no binary tables (legacy path).
+        if reader.file_size("paths.dat").is_none() {
             return Ok(None);
         }
-        // Read each table; a missing data file with the flag set is an error
-        // (the writer always emits all four together).
+        // Read each table; a missing data file once `paths.dat` exists is an
+        // error (the writer always emits all four together).
         let paths = Self::load_table(reader, "paths")?;
         let funcs = Self::load_table(reader, "funcs")?;
         let types = Self::load_table(reader, "types")?;
@@ -180,16 +226,22 @@ impl InterningTablesReader {
             funcs,
             types,
             varnames,
+            layout,
         }))
+    }
+
+    /// Which on-disk record layout this reader decodes (bit 12 selector).
+    pub fn layout(&self) -> RecordLayout {
+        self.layout
     }
 
     fn load_table(reader: &mut CtfsReader, name: &str) -> Result<VarSizeTable, String> {
         let dat = reader
             .read_file(&format!("{name}.dat"))
-            .map_err(|e| format!("{name}.dat missing despite has_interning_tables flag: {e}"))?;
+            .map_err(|e| format!("{name}.dat missing despite paths.dat presence: {e}"))?;
         let off = reader
             .read_file(&format!("{name}.off"))
-            .map_err(|e| format!("{name}.off missing despite has_interning_tables flag: {e}"))?;
+            .map_err(|e| format!("{name}.off missing despite paths.dat presence: {e}"))?;
         VarSizeTable::new(name, dat, &off)
     }
 
@@ -224,40 +276,68 @@ impl InterningTablesReader {
     }
 
     /// Resolve a function id to its decoded record (`global_line_index` + name).
+    ///
+    /// In the PLAIN layout (the production Nim writer) `funcs.dat` records are
+    /// raw name bytes with no `global_line_index` prefix, so it is stubbed to
+    /// `0` — parity with db-backend's `RecordLayout::Plain` and the Nim FFI
+    /// reader, which stub the same field rather than lose data that is not on
+    /// disk in that layout.
     pub fn func(&self, function_id: u64) -> Result<FuncRecord, String> {
         let raw = self.funcs.record(function_id as usize)?;
-        let mut pos = 0usize;
-        let global_line_index = decode_varint(raw, &mut pos)?;
-        let name_len = decode_varint(raw, &mut pos)? as usize;
-        if pos + name_len > raw.len() {
-            return Err(format!("funcs.dat: record {function_id} name extends past record"));
+        match self.layout {
+            RecordLayout::Plain => Ok(FuncRecord {
+                global_line_index: 0,
+                name: raw.to_vec(),
+            }),
+            RecordLayout::Structured => {
+                let mut pos = 0usize;
+                let global_line_index = decode_varint(raw, &mut pos)?;
+                let name_len = decode_varint(raw, &mut pos)? as usize;
+                if pos + name_len > raw.len() {
+                    return Err(format!("funcs.dat: record {function_id} name extends past record"));
+                }
+                let name = raw[pos..pos + name_len].to_vec();
+                Ok(FuncRecord { global_line_index, name })
+            }
         }
-        let name = raw[pos..pos + name_len].to_vec();
-        Ok(FuncRecord { global_line_index, name })
     }
 
     /// Resolve a type id to its decoded record (kind / lang_type / specific_info).
+    ///
+    /// In the PLAIN layout `types.dat` records are the raw type NAME only, so the
+    /// kind degrades to [`TypeKind::Raw`] and specific-info to
+    /// [`TypeSpecificInfo::None`] — again matching db-backend's
+    /// `RecordLayout::Plain` and the Nim FFI reader.
     pub fn type_record(&self, type_id: u64) -> Result<DecodedTypeRecord, String> {
         let raw = self.types.record(type_id as usize)?;
-        if raw.is_empty() {
-            return Err(format!("types.dat: record {type_id} is empty (missing kind byte)"));
+        match self.layout {
+            RecordLayout::Plain => Ok(DecodedTypeRecord {
+                kind: TypeKind::Raw as u8,
+                lang_type: raw.to_vec(),
+                specific_info: TypeSpecificInfo::None,
+            }),
+            RecordLayout::Structured => {
+                if raw.is_empty() {
+                    return Err(format!("types.dat: record {type_id} is empty (missing kind byte)"));
+                }
+                let kind = raw[0];
+                let mut pos = 1usize;
+                let lang_type_len = decode_varint(raw, &mut pos)? as usize;
+                if pos + lang_type_len > raw.len() {
+                    return Err(format!("types.dat: record {type_id} lang_type extends past record"));
+                }
+                let lang_type = raw[pos..pos + lang_type_len].to_vec();
+                pos += lang_type_len;
+                // The remainder is the CBOR-encoded TypeSpecificInfo blob.
+                let specific_info: TypeSpecificInfo = cbor4ii::serde::from_slice(&raw[pos..])
+                    .map_err(|e| format!("types.dat: record {type_id} specific_info CBOR decode failed: {e}"))?;
+                Ok(DecodedTypeRecord {
+                    kind,
+                    lang_type,
+                    specific_info,
+                })
+            }
         }
-        let kind = raw[0];
-        let mut pos = 1usize;
-        let lang_type_len = decode_varint(raw, &mut pos)? as usize;
-        if pos + lang_type_len > raw.len() {
-            return Err(format!("types.dat: record {type_id} lang_type extends past record"));
-        }
-        let lang_type = raw[pos..pos + lang_type_len].to_vec();
-        pos += lang_type_len;
-        // The remainder is the CBOR-encoded TypeSpecificInfo blob.
-        let specific_info: TypeSpecificInfo =
-            cbor4ii::serde::from_slice(&raw[pos..]).map_err(|e| format!("types.dat: record {type_id} specific_info CBOR decode failed: {e}"))?;
-        Ok(DecodedTypeRecord {
-            kind,
-            lang_type,
-            specific_info,
-        })
     }
 
     /// Resolve a variable-name id to its name (raw bytes; UTF-8 for recorders).

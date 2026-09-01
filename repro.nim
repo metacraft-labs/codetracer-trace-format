@@ -155,6 +155,29 @@ package codetracer_trace_format:
       extraInputs = workspaceInputs)
     discard collect("default", @[workspaceBuild])
 
+    # ---- Granular targeted binary: codetracer-managed-upload ----------
+    #
+    # codetracer-ci consumes ONLY this one binary (built from source via
+    # the flake's buildRustPackage). Emit a dedicated edge restricted to
+    # the ``codetracer_ctfs`` member crate + its ``codetracer-managed-upload``
+    # bin so ``repro build .#managed-upload`` (and downstream consumers)
+    # rebuild just this artifact instead of the whole 16-crate workspace.
+    # ``codetracer_ctfs``'s dep closure is crates.io + ``zstd`` only — no
+    # in-repo ``path`` deps — so it does NOT pull in the nim-staticlib
+    # (``codetracer_trace_writer_nim``) or capnpc (``codetracer_trace_format_capnp``)
+    # ``build.rs`` edges, and the declared input set is just that crate.
+    #
+    # Requires the ``--package``/``--bin`` cargo selectors added in
+    # reprobuild#84 (bump the reprobuild pin before this edge resolves).
+    let managedUploadBuild = cargo.build(
+      locked = true,
+      release = true,
+      package = "codetracer_ctfs",
+      bin = "codetracer-managed-upload",
+      actionId = "codetracer-trace-format.managed-upload",
+      extraInputs = @["Cargo.toml", "Cargo.lock", "codetracer_ctfs"])
+    discard collect("managed-upload", @[managedUploadBuild])
+
     # ---- Test-binary build + run edges (the `test` collection) -------
     #
     # Two-stage shape per Repo-Requirements.md §2.8: ``cargo.test(noRun =

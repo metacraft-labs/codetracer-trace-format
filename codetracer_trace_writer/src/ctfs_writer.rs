@@ -6,32 +6,35 @@ use codetracer_ctfs::{ChunkedWriter, CompressionMethod, CtfsWriter};
 use codetracer_trace_format_cbor_zstd::HEADERV1;
 
 // The legacy `Cbor` serialization mode streams through zeekstd, which is
-// libzstd-backed (C) and therefore unbuildable for
-// `wasm32-unknown-unknown`.  The DEFAULT `SplitBinary` mode does not use it
-// at all -- it compresses whole chunks through `codetracer_ctfs::zstd_compat`,
-// which has a pure-Rust arm.  So on wasm the encoder is replaced by a stub
-// with the same shape whose only job is to keep the `Cbor` code paths
-// compiling; `begin_writing_trace_events` refuses `Cbor` on that target
-// before any stub method can be reached.
-#[cfg(not(target_arch = "wasm32"))]
+// libzstd-backed (C) and needs a libc.  `wasm32-wasip1` has one (wasi-libc)
+// and links it; `wasm32-unknown-unknown` does not, and is the only target
+// where the encoder is replaced by a stub with the same shape whose only job
+// is to keep the `Cbor` code paths compiling.  The DEFAULT `SplitBinary` mode
+// does not use zeekstd at all -- it compresses whole chunks through
+// `codetracer_ctfs::zstd_compat` -- and `begin_writing_trace_events` refuses
+// `Cbor` on that one target before any stub method can be reached.
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 use zeekstd::{EncodeOptions, Encoder, FrameSizePolicy};
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 use wasm_cbor_mode_stub::{EncodeOptions, Encoder, FrameSizePolicy};
 
 /// Stand-in for the zeekstd streaming encoder on `wasm32-unknown-unknown`.
 ///
 /// Mirrors only the surface [`CtfsTraceWriter`]'s `Cbor` mode uses. Every
 /// method fails; nothing constructs one, because `begin_writing_trace_events`
-/// rejects `EventSerializationFormat::Cbor` on wasm up front. Keeping the
-/// shape means the `Cbor` arms need no `cfg` of their own.
-#[cfg(target_arch = "wasm32")]
+/// rejects `EventSerializationFormat::Cbor` on that target up front. Keeping
+/// the shape means the `Cbor` arms need no `cfg` of their own.
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 mod wasm_cbor_mode_stub {
     use std::io::{Error, Result, Write};
     use std::marker::PhantomData;
 
     fn unsupported() -> Error {
-        Error::other("the CTFS `Cbor` serialization mode is not available on wasm32; use `SplitBinary` (the default)")
+        Error::other(
+            "the CTFS `Cbor` serialization mode is not available on wasm32-unknown-unknown, which has no libc for zeekstd \
+             to link against; use `SplitBinary` (the default), or build for wasm32-wasip1, where zeekstd does link",
+        )
     }
 
     pub enum FrameSizePolicy {
@@ -1098,11 +1101,15 @@ impl TraceWriter for CtfsTraceWriter {
 
     fn begin_writing_trace_events(&mut self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
         // The legacy CBOR mode streams through zeekstd (libzstd, C), which
-        // does not exist on wasm32. Refuse it up front rather than letting the
-        // stub encoder fail deeper in.
-        #[cfg(target_arch = "wasm32")]
+        // needs a libc and so does not exist on `wasm32-unknown-unknown`.
+        // Refuse it up front rather than letting the stub encoder fail deeper
+        // in. `wasm32-wasip1` has wasi-libc and is not gated here.
+        #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
         if self.serialization_format == EventSerializationFormat::Cbor {
-            return Err("the CTFS `Cbor` serialization mode is not available on wasm32; use `SplitBinary` (the default)".into());
+            return Err("the CTFS `Cbor` serialization mode is not available on wasm32-unknown-unknown, which has no libc \
+                        for zeekstd to link against; use `SplitBinary` (the default), or build for wasm32-wasip1, where \
+                        zeekstd does link"
+                .into());
         }
 
         let mut writer = match self.output {

@@ -4,30 +4,49 @@ version = "0.1.0"
 edition = "2021"
 description = "CodeTracer File System (CTFS) binary container format"
 
+# THE ZSTANDARD BACKEND IS A FEATURE, NOT A TARGET PROPERTY.
+#
+# `c-zstd` links libzstd (C, through `zstd-sys`); `pure-rust-zstd` links
+# `ruzstd`. `zstd_compat` selects between them and `pure-rust-zstd` wins when
+# both are on, which is stated here because cargo features are additive and a
+# dependent that only ADDS one cannot turn the other off.
+#
+# `zstd-sys` cross-builds for both wasm targets: it ships its own
+# `wasm-shim/{assert,stdio,stdlib,string,time}.h` and its build script enables
+# that shim for `wasm32-unknown-unknown` and for every `wasm32-wasi*` triple,
+# so the five C symbols libzstd needs (`malloc`, `calloc`, `free`, `memcpy`,
+# `memset`) are resolved by Rust's own allocator shim and re-exported as
+# `rust_zstd_wasm_shim_*`. What it DOES need is a clang that can emit wasm32,
+# supplied as `CC_<target>`/`CFLAGS_<target>` — a build-environment
+# requirement Cargo has no way to state, which is the reason
+# `pure-rust-zstd` exists as an opt-out rather than the reason the default
+# was a target gate.
+[features]
+default = ["c-zstd"]
+c-zstd = ["dep:zstd"]
+pure-rust-zstd = ["dep:ruzstd"]
+
 [dependencies]
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 sha2 = "0.10"
 urlencoding = "2.1"
 
+# libzstd (C, via `zstd-sys`): faster, and its output is the byte-for-byte
+# reference the golden fixtures pin.  See `zstd_compat`.
+zstd = { version = "0.13", optional = true }
+# Pure-Rust Zstandard codec.  0.8 has both a decoder and an encoder, and its
+# frames are standard-conformant, so containers written through it are read
+# back by the ordinary libzstd-backed host readers (`ct-print`, the Nim
+# reader).  See `zstd_compat`.
+ruzstd = { version = "0.8.1", optional = true }
+
 # `ureq` is only needed by `trace_storage` for HTTP uploads, which is
 # disabled on `wasm32-unknown-unknown` (see `src/lib.rs`).  Restricting
 # the dep to non-wasm targets keeps the entire rustls/ring TLS stack
-# out of the WASM build graph.
+# out of the WASM build graph.  This one IS a target property.
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 ureq = { version = "2.12", features = ["json"] }
-# libzstd (C, via `zstd-sys`) is the compressor on every host target: it is
-# faster and its output is the byte-for-byte reference the golden fixtures
-# pin.  It cannot be built for `wasm32-unknown-unknown` (no libc), so the
-# wasm build below swaps in the pure-Rust `ruzstd`.  See `zstd_compat`.
-zstd = "0.13"
-
-[target.'cfg(target_arch = "wasm32")'.dependencies]
-# Pure-Rust Zstandard codec used in place of the C `zstd` on wasm.  0.8 has
-# both a decoder and an encoder, and its frames are standard-conformant, so
-# containers written from wasm are read back by the ordinary libzstd-backed
-# host readers (`ct-print`, the Nim reader).  See `zstd_compat`.
-ruzstd = "0.8.1"
 
 [[bin]]
 name = "codetracer-managed-upload"
@@ -35,3 +54,14 @@ path = "src/bin/codetracer-managed-upload.rs"
 
 [dev-dependencies]
 tempfile = "3"
+# THE ORACLE, AND IT IS UNCONDITIONAL ON PURPOSE.
+#
+# `zstd_frame`'s tests read a frame's pledged content size with
+# `zstd::zstd_safe::get_frame_content_size` — libzstd answering a question
+# about a frame this crate produced, which is the whole value of the
+# assertion. Behind the backend feature it would disappear from exactly the
+# build where it matters most: `--features pure-rust-zstd` is the one whose
+# frames are patched by hand. A dev-dependency is linked for `cargo test`
+# under every feature combination and is absent from `cargo build`, so the
+# oracle cannot go missing without anybody noticing.
+zstd = "0.13"

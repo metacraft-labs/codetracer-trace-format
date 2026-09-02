@@ -2,11 +2,11 @@ pub mod abstract_trace_writer;
 pub mod non_streaming_trace_writer;
 pub mod trace_writer;
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 #[path = "./cbor_zstd_writer_wasm.rs"]
 mod cbor_zstd_writer;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 mod cbor_zstd_writer;
 
 pub mod ctfs_writer;
@@ -30,7 +30,7 @@ pub mod meta_dat;
 
 pub mod split_binary;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 pub mod streaming_writer;
 
 #[derive(Debug, Clone, Copy)]

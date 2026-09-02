@@ -8,21 +8,43 @@ repository = "https://github.com/metacraft-labs/runtime_tracing"
 license = "MIT"
 keywords = ["debugging", "development-tools"]
 
+# Forwarded to `codetracer_ctfs`, which is where the choice is made and
+# documented. They are re-declared here so a dependent that never names
+# `codetracer_ctfs` can still express the choice in its own manifest.
+[features]
+default = ["c-zstd"]
+c-zstd = ["codetracer_ctfs/c-zstd"]
+pure-rust-zstd = ["codetracer_ctfs/pure-rust-zstd"]
+
 [dependencies]
 codetracer_trace_types.workspace = true
 codetracer_trace_format_capnp.workspace = true
 codetracer_trace_format_cbor_zstd.workspace = true
-codetracer_ctfs = { path = "../codetracer_ctfs" }
+# `default-features = false` so `pure-rust-zstd` really is an opt-out: without it
+# this crate would go on requesting `codetracer_ctfs`'s default `c-zstd`, and a
+# consumer with no C compiler for its target would still be asked for one.
+codetracer_ctfs = { path = "../codetracer_ctfs", default-features = false }
 serde_json = "1.0"
 cbor4ii = { version = "1.0.0", features = ["serde1", "use_std"] }
 num-traits = "0.2"
 serde = { version = "1.0", features = ["derive"] }
 
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+# `zeekstd` — the SEEKABLE zstd wrapper the `Cbor` mode and `streaming_writer`
+# use — is gated on the absence of a libc, not on the wasm32 architecture. It
+# cross-builds for `wasm32-wasip1` and its seekable framing produces the same
+# frames there that it does natively: measured at 4,465 bytes for a 1 MB ramp
+# at `FrameSizePolicy::Uncompressed(65536)`, sixteen frames, against 354 bytes
+# for the same input through plain one-shot compression. Only
+# `wasm32-unknown-unknown` keeps the stub encoder.
+#
+# This is NOT the `pure-rust-zstd` feature's business. That feature chooses
+# between two ONE-SHOT codecs; this gate decides whether the streaming seekable
+# encoder exists at all, and no feature can make it exist without a libc.
+[target.'cfg(not(all(target_arch = "wasm32", target_os = "unknown")))'.dependencies]
 zeekstd = "0.6.0"
 zstd = "0.13"
 
-[target.'cfg(target_arch = "wasm32")'.dependencies]
+[target.'cfg(all(target_arch = "wasm32", target_os = "unknown"))'.dependencies]
 ruzstd = "0.8.1"
 
 [dev-dependencies]

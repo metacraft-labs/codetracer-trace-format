@@ -1,3 +1,18 @@
+// EXACTLY ONE ZSTANDARD BACKEND MUST BE REACHABLE.
+//
+// `zstd_compat` selects on `feature = "pure-rust-zstd"`, so with both features
+// off the libzstd arm is the one compiled and `zstd` is not in the graph — a
+// failure that would otherwise surface as `use of undeclared crate zstd` in
+// the module whose whole subject is which crate is in use. Cargo features are
+// additive, so with BOTH on the pure-Rust arm wins and libzstd is linked and
+// unreferenced; that precedence is declared in `Cargo.toml` rather than left
+// for a reader to derive from the `cfg` polarity.
+#[cfg(not(any(feature = "c-zstd", feature = "pure-rust-zstd")))]
+compile_error!(
+    "codetracer_ctfs needs a Zstandard backend: enable the default `c-zstd` feature (libzstd \
+     through zstd-sys, which needs a C compiler for the target) or `pure-rust-zstd` (ruzstd)."
+);
+
 pub mod base40;
 pub mod block_alloc;
 pub(crate) mod block_bounds;

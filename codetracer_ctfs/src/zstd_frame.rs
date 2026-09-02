@@ -52,27 +52,26 @@
 ///
 /// Returns the frame. An empty input still produces a valid (pledged-zero)
 /// frame, which is what `ZSTD_compress` does and what the readers expect.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(feature = "pure-rust-zstd"))]
 pub fn compress_pledged(raw: &[u8], level: i32, stream: &str) -> Result<Vec<u8>, String> {
     zstd::bulk::compress(raw, level).map_err(|e| format!("{stream}: zstd compress failed: {e}"))
 }
 
-/// The `wasm32` arm. The contract is the host variant's — a frame whose header
-/// pledges its decompressed size — and the route to it is different, because
-/// there is no `ZSTD_compress` here to ask.
+/// The `pure-rust-zstd` arm. The contract is the libzstd variant's — a frame
+/// whose header pledges its decompressed size — and the route to it is
+/// different, because there is no `ZSTD_compress` here to ask.
 ///
-/// `zstd-sys` builds the reference C library with `cc` and there is no libc on
-/// `wasm32-unknown-unknown`, so this crate swaps in the pure-Rust encoder
+/// Under that feature the crate uses the pure-Rust encoder
 /// ([`crate::zstd_compat::encode_all`], `ruzstd`), which writes
 /// `frame_content_size: None` unconditionally and exposes no way to ask for it.
 /// The pledge is therefore added to the FINISHED frame by
 /// [`pledge_frame_content_size`], which is a conformant edit for the reason set
-/// out on that function. Eight bytes per frame, no new dependency, and the
-/// module's wasm import count is unchanged at zero.
+/// out on that function. Eight bytes per frame, no new dependency, and a wasm
+/// module built this way keeps its import count of zero.
 ///
-/// Without this arm a wasm-produced container has exactly the defect this
-/// module exists to prevent, and the readers report it as an EMPTY stream.
-#[cfg(target_arch = "wasm32")]
+/// Without this arm a container written through `ruzstd` has exactly the defect
+/// this module exists to prevent, and the readers report it as an EMPTY stream.
+#[cfg(feature = "pure-rust-zstd")]
 pub fn compress_pledged(raw: &[u8], level: i32, stream: &str) -> Result<Vec<u8>, String> {
     let frame = crate::zstd_compat::encode_all(raw, level).map_err(|e| format!("{stream}: zstd compress failed: {e}"))?;
     pledge_frame_content_size(frame, raw.len() as u64).map_err(|e| format!("{stream}: {e}"))
@@ -82,15 +81,15 @@ pub fn compress_pledged(raw: &[u8], level: i32, stream: &str) -> Result<Vec<u8>,
 ///
 /// # Who needs this
 ///
-/// [`compress_pledged`] is the answer wherever libzstd is available. It is not
-/// available on `wasm32-unknown-unknown`: `zstd-sys` builds the reference C
-/// library and there is no libc to build it against, so the wasm build of this
-/// crate swaps in a pure-Rust encoder. The one in use, `ruzstd`, writes
+/// [`compress_pledged`] delegates to `ZSTD_compress` whenever libzstd is the
+/// selected backend. It is not selected under the `pure-rust-zstd` feature —
+/// the opt-out for a build that cannot supply a C compiler for its target —
+/// and the encoder that replaces it, `ruzstd`, writes
 /// `frame_content_size: None` unconditionally —
 /// `ruzstd-0.8.3/src/encoding/frame_compressor.rs:145`, under its own
 /// `TODO: The Frame_Content_Size field isn't set at all, we should prefer to
 /// include it always` — and exposes no way to ask for it. A container written
-/// from wasm therefore has exactly the defect this module exists to prevent,
+/// through it therefore has exactly the defect this module exists to prevent,
 /// and the readers report it as an EMPTY stream.
 ///
 /// Replacing or forking the encoder is not needed. RFC 8878 §3.1.1 lays a frame

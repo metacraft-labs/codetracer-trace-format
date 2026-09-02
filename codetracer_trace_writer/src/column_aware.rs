@@ -853,7 +853,7 @@ mod tests {
         assert!(err.contains("cannot be the first step"), "{err}");
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
     #[test]
     fn chunk_boundary_promotes_a_delta_to_an_absolute() {
         // Two events per chunk. The third event opens chunk 1 and must be
@@ -884,7 +884,7 @@ mod tests {
         assert_eq!(decode_step_event(&raw1, &mut pos).unwrap(), StepEvent::DeltaColumn { column_delta: 1 });
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
     #[test]
     fn chunks_pledge_their_content_size() {
         // The Nim reader's `decodeSpecChunkRecordCount` and `chunkSlot` both

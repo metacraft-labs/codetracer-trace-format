@@ -526,3 +526,82 @@ findings recorded.
 
 Differential: **12 tests → 13**, all passing. Compared set grew from 6 files +
 a masked flags word to 11 files + every `meta.dat` field but one.
+
+## Step 9 — final state
+
+`origin/dev` had moved while this work was in progress, by two commits that are
+directly adjacent to the bit-12 finding above:
+
+```
+e8c85ab fix(reader): interning tables resolve by structural presence, not bit 12 (F3)
+9ad9454 fix(reader): resolve stream presence structurally, not by meta.dat bit
+```
+
+Those fix the *reader* side — consumers no longer trust bit 12 and instead
+detect the tables structurally. They do **not** fix the writer: the Nim writer
+still emits four interning tables without stamping the bit, and the
+field-by-field `meta.dat` test still pins that, correctly. If anything the
+finding is sharpened — the readers have had to work around a writer defect.
+
+Merged, re-ran, pushed to `blocktracer` and fast-forwarded `dev`
+(`706f9e0`).
+
+### Suite
+
+| point | targets | passed | failed |
+|---|---|---|---|
+| baseline (`235e377`) | 64 | 353 | 0 |
+| after my three commits | 64 | 356 | 0 |
+| after merging `origin/dev` (`706f9e0`) | 64 | 358 | 0 |
+
++3 are mine and each is named: `meta_dat_decodes_back_to_the_fields_that_were_encoded`,
+`meta_dat_decode_rejects_a_truncated_field_block`, and
+`the_two_writers_meta_dat_agrees_on_every_field_except_the_minted_recording_id`.
++2 came with the merged reader work. No test was deleted, skipped or ignored;
+the ignored count is 0 at every point and the target count never moved.
+
+### Differential scope
+
+| | before | after |
+|---|---|---|
+| tests | 12 | 13 |
+| files byte-compared | 6 | 11 |
+| `meta.dat` | masked flags word only | every field but `recording_id` |
+| `KNOWN_DIVERGENCES` | 6 entries, 3 with wrong/vague reasons | 5 entries, each with a measured cause and a spec citation |
+| `RUST_ONLY` / `NIM_ONLY` | enforced one direction | enforced both directions |
+| negative controls | 3 | 3 (all kept) |
+
+### Is whole-container byte equality reachable?
+
+**No, and the reason is now exactly one, measured, and outside this repo:** the
+Rust writer must keep emitting `events.log` + `events.fmt`, because two shipping
+readers use the *absence* of `events.log` as their format discriminator. Until
+that absence test is replaced by a positive marker in `codetracer` and
+`codetracer-trace-format-nim`, dropping the file turns every container this
+writer produces into one that opens successfully and reports zero steps.
+
+Everything else that stood between the two writers is either fixed, or reduced
+to a named defect in `codetracer-trace-format-nim` with the fix specified:
+
+| remaining | where the fix goes |
+|---|---|
+| `funcs.dat` / `funcs.off` record shape | Nim: give funcs its own record encoder (`global_line_index` + `name_len` + name per `internal-files.md:46`); the FFI already receives `(name, path, line)` |
+| `types.dat` / `types.off` record shape | Nim: same, per `internal-files.md:45` |
+| `types.dat` `type_0` invention | `codetracer_trace_writer_nim/src/lib.rs`: route `ValueRecord::Int` through the id-taking `ct_value_write_int(h, value, type_id)` instead of the name-taking fast path, so no type name is invented. Deferred here because it moves the value-encoding path that currently produces byte-identical `values.dat`, and that identity must be re-measured. |
+| `meta.dat` empty `workdir` | Nim: `multi_stream_writer` passes no workdir through |
+| `meta.dat` bit 12 | Nim: `multi_stream_writer.nim:1298` never passes `hasInterningTables` |
+| `recording_id` | genuinely inherent; seeding needs an FFI entry point on the writer path (only the standalone `ct_write_meta_dat_to_buffer` accepts one today) |
+
+### Spec defects worth an upstream PR
+
+1. `first_step_id` semantics undefined — the divergence fixed in `6fac0ca` was
+   possible only because the spec never said which index it means.
+2. `values.dat` / `values.idx` do not exist in the spec; both writers emit them.
+3. `internal-files.md:45-46` and `trace-events.md:14,16,194,195` disagree on the
+   `name_len` / `lang_type_len` prefix.
+4. Encoding rule 4's ±1048575 delta window does not match either writer's ±63/64.
+5. Reserved flag bits: `internal-files.md:407` says 8..15, `trace-events.md`
+   says 4..15 in four places.
+6. `ctfs-container.md:50` says per-stream compression settings live in
+   `meta.dat`; `meta.dat`'s documented layout has no such field.
+7. Nothing about zstd pledged content size, though five readers require it.

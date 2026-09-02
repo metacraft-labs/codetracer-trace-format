@@ -23,7 +23,6 @@
 
 use codetracer_ctfs::CtfsReader;
 use codetracer_trace_writer::event_stream::IoEventRecord;
-use codetracer_trace_writer::meta_dat::meta_dat_has_io_event_stream;
 
 /// A loaded `events.idx`: the per-chunk byte offsets into `events.dat`.
 struct EventsIndex {
@@ -118,26 +117,18 @@ pub struct IoEventStreamReader {
 
 impl IoEventStreamReader {
     /// Open the I/O event stream from an already-open CTFS reader. Returns
-    /// `Ok(None)` when the container has no dedicated I/O event stream (no
-    /// `meta.dat` flag, or no `events.dat`) — the caller falls back to the
-    /// unified stream.
+    /// `Ok(None)` when the container has no `events.dat` — existence is answered
+    /// by STRUCTURAL PRESENCE of the stream file, NOT by the `has_io_event_stream`
+    /// hint bit (bit 11), which a writer may stamp only at close (trace-format
+    /// spec: "Stream-presence flags are a hint, not a gate").
     pub fn open(reader: &mut CtfsReader) -> Result<Option<IoEventStreamReader>, String> {
-        // Honor the meta.dat capability flag: only treat events.dat as
-        // authoritative when has_io_event_stream is set.
-        let has_flag = match reader.read_file("meta.dat") {
-            Ok(meta) => meta_dat_has_io_event_stream(&meta),
-            Err(_) => false,
-        };
-        if !has_flag {
-            return Ok(None);
-        }
         let dat = match reader.read_file("events.dat") {
             Ok(d) => d,
             Err(_) => return Ok(None),
         };
         let idx = reader
             .read_file("events.idx")
-            .map_err(|e| format!("events.idx missing despite has_io_event_stream flag: {e}"))?;
+            .map_err(|e| format!("events.idx missing despite events.dat presence: {e}"))?;
         let index = EventsIndex::parse(&idx)?;
 
         // Compute the total record count: all chunks but the last hold

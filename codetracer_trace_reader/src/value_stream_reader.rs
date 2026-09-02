@@ -32,7 +32,6 @@
 //! one file).
 
 use codetracer_ctfs::CtfsReader;
-use codetracer_trace_writer::meta_dat::meta_dat_has_value_stream;
 use codetracer_trace_writer::value_stream::ValueRecordEntry;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -155,10 +154,12 @@ impl ValueStreamReader {
     /// This keeps the format-level reader independent of how the container bytes
     /// were sourced (local file, follow source, HTTP range, overlay) while
     /// preserving the exact same decode/cache path as [`Self::open`].
-    pub fn from_files(meta: &[u8], dat: Vec<u8>, idx: Vec<u8>) -> Result<Option<ValueStreamReader>, String> {
-        if !meta_dat_has_value_stream(meta) {
-            return Ok(None);
-        }
+    pub fn from_files(_meta: &[u8], dat: Vec<u8>, idx: Vec<u8>) -> Result<Option<ValueStreamReader>, String> {
+        // Existence is STRUCTURAL — the caller resolved `values.dat` / `values.idx`
+        // by `findFile` + `FileEntry.Size`. The `has_value_stream` hint bit (bit
+        // 10) is NOT consulted (trace-format spec: "Stream-presence flags are a
+        // hint, not a gate"; a writer may stamp the bit only at close). `_meta`
+        // is retained for source compatibility.
         let index = ValuesIndex::parse(&idx)?;
 
         // Compute the total record count: all chunks but the last hold
@@ -186,25 +187,18 @@ impl ValueStreamReader {
     }
 
     /// Open the value stream from an already-open CTFS reader. Returns
-    /// `Ok(None)` when the container has no dedicated value stream (no `meta.dat`
-    /// flag, or no `values.dat`) — the caller falls back to the unified stream.
+    /// `Ok(None)` when the container has no `values.dat` — existence is answered
+    /// by STRUCTURAL PRESENCE of the stream file, not by the `has_value_stream`
+    /// hint bit (see [`Self::from_files`]).
     pub fn open(reader: &mut CtfsReader) -> Result<Option<ValueStreamReader>, String> {
-        // Honor the meta.dat capability flag: only treat values.dat as
-        // authoritative when has_value_stream is set.
-        let meta = match reader.read_file("meta.dat") {
-            Ok(meta) => meta,
-            Err(_) => return Ok(None),
-        };
-        if !meta_dat_has_value_stream(&meta) {
-            return Ok(None);
-        }
         let dat = match reader.read_file("values.dat") {
             Ok(d) => d,
             Err(_) => return Ok(None),
         };
         let idx = reader
             .read_file("values.idx")
-            .map_err(|e| format!("values.idx missing despite has_value_stream flag: {e}"))?;
+            .map_err(|e| format!("values.idx missing despite values.dat presence: {e}"))?;
+        let meta = reader.read_file("meta.dat").unwrap_or_default();
         ValueStreamReader::from_files(&meta, dat, idx)
     }
 

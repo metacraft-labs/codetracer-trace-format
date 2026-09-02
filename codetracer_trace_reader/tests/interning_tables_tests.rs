@@ -302,3 +302,130 @@ fn legacy_trace_has_no_interning_tables_and_files_byte_identical() {
         assert!(r_on.read_file(f).is_ok(), "{f} must be present when the flag is set");
     }
 }
+
+/// Encode a PLAIN Variable-Size Record Table: raw record bytes concatenated into
+/// `.dat`, and `record_count + 1` little-endian `u64` byte offsets into `.off`
+/// (the trailing entry is the total data length). This is what the production
+/// Nim writer emits for all four interning tables.
+fn encode_plain_table(records: &[&[u8]]) -> (Vec<u8>, Vec<u8>) {
+    let mut dat = Vec::new();
+    let mut off = Vec::new();
+    off.extend_from_slice(&0u64.to_le_bytes());
+    for r in records {
+        dat.extend_from_slice(r);
+        off.extend_from_slice(&(dat.len() as u64).to_le_bytes());
+    }
+    (dat, off)
+}
+
+/// The real-trace case F3 fixes: the production Nim `MultiStreamTraceWriter`
+/// emits all four interning tables in the PLAIN layout and leaves `meta.dat`
+/// bit 12 (`has_interning_tables`) CLEAR. Existence must be resolved by
+/// `paths.dat` STRUCTURAL PRESENCE, never by the flag — otherwise EVERY real
+/// trace resolves to no interning tables (a blank Variables pane over data that
+/// is on disk). Before the fix, `open` returned `Ok(None)` here.
+#[test]
+fn plain_layout_bit12_clear_resolves_interned_names() {
+    use codetracer_ctfs::CtfsWriter;
+    use codetracer_trace_reader::interning_tables_reader::{InterningTablesReader, RecordLayout};
+    use codetracer_trace_writer::meta_dat::{encode_meta_dat, meta_dat_has_interning_tables};
+
+    let paths = [b"/test/main.rs".as_slice(), b"/test/mod.rs".as_slice()];
+    let funcs = [b"main".as_slice(), b"helper".as_slice()];
+    let types = [b"i64".as_slice(), b"bool".as_slice()];
+    let varnames = [b"x".as_slice(), b"y".as_slice(), b"z".as_slice()];
+
+    let dir = tempfile::tempdir().unwrap();
+    let ct_path = dir.path().join("plain.ct");
+    {
+        let mut w = CtfsWriter::create(&ct_path, 4096, 31).unwrap();
+        // meta.dat WITHOUT the interning-tables flag — the real-trace case.
+        let meta = encode_meta_dat("01949fcc-7d92-7e9c-aaaa-bbbbbbbbbbbb", "prog", &[], "", "", &[], 0);
+        assert!(!meta_dat_has_interning_tables(&meta), "fixture must have bit 12 CLEAR");
+        let h = w.add_file("meta.dat").unwrap();
+        w.write(h, &meta).unwrap();
+        for (name, records) in [
+            ("paths", &paths[..]),
+            ("funcs", &funcs[..]),
+            ("types", &types[..]),
+            ("varnames", &varnames[..]),
+        ] {
+            let (dat, off) = encode_plain_table(records);
+            let h = w.add_file(&format!("{name}.dat")).unwrap();
+            w.write(h, &dat).unwrap();
+            let h = w.add_file(&format!("{name}.off")).unwrap();
+            w.write(h, &off).unwrap();
+        }
+        w.close().unwrap();
+    }
+
+    let mut reader = codetracer_ctfs::CtfsReader::open(&ct_path).unwrap();
+    let it = InterningTablesReader::open(&mut reader)
+        .expect("open ok")
+        .expect("paths.dat present ⇒ interning tables resolve even with bit 12 CLEAR");
+
+    // bit 12 clear ⇒ PLAIN decode; paths.dat presence answered existence.
+    assert_eq!(it.layout(), RecordLayout::Plain);
+
+    // Names (raw bytes in both layouts) resolve — the case the gate broke.
+    assert_eq!(it.path_count(), 2);
+    assert_eq!(it.path_str(0).unwrap(), "/test/main.rs");
+    assert_eq!(it.path_str(1).unwrap(), "/test/mod.rs");
+    assert_eq!(it.varname_count(), 3);
+    assert_eq!(it.varname_str(0).unwrap(), "x");
+    assert_eq!(it.varname_str(2).unwrap(), "z");
+
+    // Plain func/type records are raw names: global_line_index stubbed to 0,
+    // type kind degrades to Raw (parity with db-backend / the Nim FFI reader).
+    assert_eq!(it.func_count(), 2);
+    let f = it.func(1).unwrap();
+    assert_eq!(String::from_utf8(f.name).unwrap(), "helper");
+    assert_eq!(f.global_line_index, 0);
+    assert_eq!(it.type_count(), 2);
+    let t = it.type_record(0).unwrap();
+    assert_eq!(t.type_kind(), Some(TypeKind::Raw));
+    assert_eq!(String::from_utf8(t.lang_type).unwrap(), "i64");
+}
+
+/// A container with NO `meta.dat` at all (a still-recording trace whose meta is
+/// written only at close) but with the interning tables present must still
+/// resolve names — `meta.dat` is read best-effort and its absence reads as the
+/// PLAIN layout rather than refusing the tables.
+#[test]
+fn missing_meta_dat_still_resolves_interned_names() {
+    use codetracer_ctfs::CtfsWriter;
+    use codetracer_trace_reader::interning_tables_reader::{InterningTablesReader, RecordLayout};
+
+    let paths = [b"/a.rs".as_slice(), b"/b.rs".as_slice()];
+    let funcs = [b"f".as_slice()];
+    let types = [b"T".as_slice()];
+    let varnames = [b"v".as_slice()];
+
+    let dir = tempfile::tempdir().unwrap();
+    let ct_path = dir.path().join("nometa.ct");
+    {
+        let mut w = CtfsWriter::create(&ct_path, 4096, 31).unwrap();
+        // Deliberately NO meta.dat.
+        for (name, records) in [
+            ("paths", &paths[..]),
+            ("funcs", &funcs[..]),
+            ("types", &types[..]),
+            ("varnames", &varnames[..]),
+        ] {
+            let (dat, off) = encode_plain_table(records);
+            let h = w.add_file(&format!("{name}.dat")).unwrap();
+            w.write(h, &dat).unwrap();
+            let h = w.add_file(&format!("{name}.off")).unwrap();
+            w.write(h, &off).unwrap();
+        }
+        w.close().unwrap();
+    }
+
+    let mut reader = codetracer_ctfs::CtfsReader::open(&ct_path).unwrap();
+    let it = InterningTablesReader::open(&mut reader)
+        .expect("open ok")
+        .expect("paths.dat present ⇒ resolves even with meta.dat absent");
+    assert_eq!(it.layout(), RecordLayout::Plain);
+    assert_eq!(it.path_str(1).unwrap(), "/b.rs");
+    assert_eq!(it.varname_str(0).unwrap(), "v");
+}

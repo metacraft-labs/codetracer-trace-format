@@ -324,9 +324,117 @@ pub fn read_meta_dat_program(data: &[u8]) -> Result<String, String> {
     String::from_utf8(data[pos..pos + plen].to_vec()).map_err(|e| format!("meta.dat: program not UTF-8: {e}"))
 }
 
+/// The decoded core field block of a `meta.dat` v3 header.
+///
+/// Covers the fields every container carries, in the order
+/// `internal-files.md` §"Metadata (meta.dat)" lays them out. The
+/// flag-gated extension blocks (MCR, replay-launch, layout snapshot, filter
+/// provenance) are not decoded into fields; `trailing` holds whatever bytes
+/// follow the path list so a caller can still tell "same core, different
+/// extensions" from "identical".
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MetaDat {
+    pub version: u16,
+    pub flags: u16,
+    pub recording_id: String,
+    pub program: String,
+    pub args: Vec<String>,
+    pub workdir: String,
+    pub recorder_id: String,
+    pub paths: Vec<String>,
+    pub trailing: Vec<u8>,
+}
+
+fn decode_varint_str(data: &[u8], pos: &mut usize) -> Result<String, String> {
+    let len = decode_varint(data, pos)? as usize;
+    if *pos + len > data.len() {
+        return Err("meta.dat: string extends past end".to_string());
+    }
+    let s = String::from_utf8(data[*pos..*pos + len].to_vec()).map_err(|e| format!("meta.dat: string not UTF-8: {e}"))?;
+    *pos += len;
+    Ok(s)
+}
+
+/// Decode a `meta.dat` buffer into its core fields.
+///
+/// The inverse of [`encode_meta_dat`]. Exists so a consumer can compare or
+/// report the metadata field by field rather than treating the file as an
+/// opaque blob — comparing whole `meta.dat` bytes conflates a differing
+/// `recording_id`, which differs by construction on every run, with a
+/// differing `workdir` or capability flag, which is a defect.
+pub fn decode_meta_dat(data: &[u8]) -> Result<MetaDat, String> {
+    let flags = read_meta_dat_flags(data)?; // validates magic + version
+    let version = u16::from_le_bytes([data[4], data[5]]);
+    let mut pos = 8usize;
+    let recording_id = decode_varint_str(data, &mut pos)?;
+    let program = decode_varint_str(data, &mut pos)?;
+    let args_count = decode_varint(data, &mut pos)? as usize;
+    let mut args = Vec::with_capacity(args_count);
+    for _ in 0..args_count {
+        args.push(decode_varint_str(data, &mut pos)?);
+    }
+    let workdir = decode_varint_str(data, &mut pos)?;
+    let recorder_id = decode_varint_str(data, &mut pos)?;
+    let path_count = decode_varint(data, &mut pos)? as usize;
+    let mut paths = Vec::with_capacity(path_count);
+    for _ in 0..path_count {
+        paths.push(decode_varint_str(data, &mut pos)?);
+    }
+    Ok(MetaDat {
+        version,
+        flags,
+        recording_id,
+        program,
+        args,
+        workdir,
+        recorder_id,
+        paths,
+        trailing: data[pos..].to_vec(),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn meta_dat_decodes_back_to_the_fields_that_were_encoded() {
+        let buf = encode_meta_dat(
+            "01949fcc-7d92-7e9c-aaaa-bbbbbbbbbbbb",
+            "prog",
+            &["a".to_string(), "b".to_string()],
+            "/wd",
+            "rec",
+            &["/p".to_string(), "/q".to_string()],
+            FLAG_HAS_CALL_STREAM | FLAG_HAS_INTERNING_TABLES,
+        );
+        let m = decode_meta_dat(&buf).expect("decodes");
+        assert_eq!(m.version, META_DAT_VERSION);
+        assert_eq!(m.flags, FLAG_HAS_CALL_STREAM | FLAG_HAS_INTERNING_TABLES);
+        assert_eq!(m.recording_id, "01949fcc-7d92-7e9c-aaaa-bbbbbbbbbbbb");
+        assert_eq!(m.program, "prog");
+        assert_eq!(m.args, vec!["a".to_string(), "b".to_string()]);
+        assert_eq!(m.workdir, "/wd");
+        assert_eq!(m.recorder_id, "rec");
+        assert_eq!(m.paths, vec!["/p".to_string(), "/q".to_string()]);
+        // Nothing follows the path list when no extension block is flagged;
+        // asserted so a decoder that stopped short would be caught here rather
+        // than by a caller silently seeing extra "trailing" bytes.
+        assert!(m.trailing.is_empty(), "trailing = {:?}", m.trailing);
+    }
+
+    #[test]
+    fn meta_dat_decode_rejects_a_truncated_field_block() {
+        // A length prefix that overruns the buffer must be an error, not a
+        // panic and not a silently short string.
+        let buf = encode_meta_dat("01949fcc-7d92-7e9c-aaaa-bbbbbbbbbbbb", "prog", &[], "/wd", "rec", &[], 0);
+        for cut in [9usize, 20, buf.len() - 1] {
+            assert!(
+                decode_meta_dat(&buf[..cut]).is_err(),
+                "a meta.dat truncated to {cut} bytes must not decode"
+            );
+        }
+    }
 
     #[test]
     fn meta_dat_flag_roundtrip() {

@@ -540,8 +540,12 @@ const NIM_ONLY: [&str; 0] = [];
 const KNOWN_DIVERGENCES: [(&str, &str); 5] = [
     (
         "meta.dat",
-        "recording_id is a freshly minted UUIDv7 on both sides, and the Rust header carries \
-         program/args fields the Nim one does not. Compared on its masked flags word instead.",
+        "three measured causes, none of them the field set: (1) recording_id is a freshly minted \
+         UUIDv7 on both sides — inherent; (2) the Nim writer stores an empty workdir where the \
+         Rust writer stores the real one; (3) the Nim writer emits all four interning tables and \
+         then never stamps FLAG_HAS_INTERNING_TABLES (bit 12). Compared FIELD BY FIELD by \
+         `the_two_writers_meta_dat_agrees_on_every_field_except_the_minted_recording_id`, which \
+         pins (2) and (3) individually.",
     ),
     (
         "funcs.dat",
@@ -726,6 +730,99 @@ fn every_file_in_the_container_is_either_compared_or_a_named_divergence() {
             "{stream} must be byte-identical; identical set = {identical:?}"
         );
     }
+}
+
+#[test]
+fn the_two_writers_meta_dat_agrees_on_every_field_except_the_minted_recording_id() {
+    // `meta.dat` was excluded from the byte comparison on the stated grounds
+    // that "recording_id is a freshly minted UUIDv7 on both sides, and the Rust
+    // header carries program/args fields the Nim one does not". The second half
+    // of that is false — both encoders write the identical field sequence
+    // (magic, u16 version, u16 flags, recording_id, program, args, workdir,
+    // recorder_id, paths), and a blanket exclusion on a wrong reason is exactly
+    // how the `values.dat` finding hid. So the file is decoded and compared
+    // field by field here: only `recording_id` is inherently un-comparable, and
+    // every other field is either asserted equal or named as a defect.
+    //
+    // Both containers are written with the SAME program name, in different
+    // directories, because the census fixture's `census_nim` / `census_rust`
+    // names would otherwise make `program` differ for a test-harness reason and
+    // mask a real one.
+    let _guard = nim_lock();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dn = dir.path().join("n");
+    let dr = dir.path().join("r");
+    std::fs::create_dir_all(&dn).expect("mkdir n");
+    std::fs::create_dir_all(&dr).expect("mkdir r");
+    let nim_ct = write_populated(&dn, "same", true);
+    let rust_ct = write_populated(&dr, "same", false);
+
+    use codetracer_trace_writer::meta_dat::decode_meta_dat;
+    let n = decode_meta_dat(&read_internal(&nim_ct, "meta.dat")).expect("nim meta.dat decodes");
+    let r = decode_meta_dat(&read_internal(&rust_ct, "meta.dat")).expect("rust meta.dat decodes");
+
+    // The fields that already agree, asserted positively.
+    assert_eq!(n.version, r.version, "meta.dat version");
+    assert_eq!(n.program, r.program, "program");
+    assert_eq!(n.args, r.args, "args");
+    assert_eq!(n.recorder_id, r.recorder_id, "recorder_id");
+    assert_eq!(n.paths, r.paths, "paths");
+    assert_eq!(n.trailing, r.trailing, "trailing extension blocks");
+    // Non-degeneracy: `paths` is the one multi-valued field here, and comparing
+    // two empty vectors would prove nothing.
+    assert_eq!(n.paths.len(), 3, "control: the fixture registers three paths");
+
+    // The inherent one. Both must be well-formed UUIDs and they must differ,
+    // or the exclusion below is not describing reality.
+    assert_eq!(n.recording_id.len(), 36, "nim recording_id is a canonical UUIDv7");
+    assert_eq!(r.recording_id.len(), 36, "rust recording_id is a canonical UUIDv7");
+    assert_ne!(
+        n.recording_id, r.recording_id,
+        "control: the two recording_ids must differ, or `meta.dat` could simply be compared whole"
+    );
+
+    // Defect (2): the Nim writer drops the working directory.
+    assert!(!r.workdir.is_empty(), "the Rust writer must record a real workdir; got {:?}", r.workdir);
+    assert_eq!(
+        n.workdir, "",
+        "MEASURED DEFECT (codetracer-trace-format-nim): the Nim writer stores an empty workdir. \
+         When it is fixed this assertion fails and the workdir joins the compared set above."
+    );
+
+    // Defect (3): the interning-tables capability bit. Both containers carry
+    // funcs/types/paths/varnames tables; only the Rust one says so.
+    use codetracer_trace_writer::meta_dat::FLAG_HAS_INTERNING_TABLES;
+    for (label, ct) in [("nim", &nim_ct), ("rust", &rust_ct)] {
+        let mut reader = CtfsReader::open(ct).expect("open");
+        for t in ["paths.dat", "funcs.dat", "types.dat", "varnames.dat"] {
+            assert!(
+                reader.list_files().contains(&t.to_string()),
+                "{label}: the container must carry {t} for the flag assertion below to mean anything"
+            );
+        }
+    }
+    assert_ne!(
+        r.flags & FLAG_HAS_INTERNING_TABLES,
+        0,
+        "the Rust writer stamps bit 12 on a container that has the interning tables"
+    );
+    assert_eq!(
+        n.flags & FLAG_HAS_INTERNING_TABLES,
+        0,
+        "MEASURED DEFECT (codetracer-trace-format-nim): multi_stream_writer.nim never passes \
+         hasInterningTables to writeMetaDat, so bit 12 is clear on a container that HAS the \
+         tables. When it is fixed this assertion fails and the whole flags word joins the \
+         compared set."
+    );
+    // Every other bit must already agree, so the exclusion is exactly one bit
+    // wide rather than "the flags differ somehow".
+    assert_eq!(
+        n.flags | FLAG_HAS_INTERNING_TABLES,
+        r.flags | FLAG_HAS_INTERNING_TABLES,
+        "the flags words must differ in bit 12 and nothing else: nim {:#06x} rust {:#06x}",
+        n.flags,
+        r.flags
+    );
 }
 
 #[test]

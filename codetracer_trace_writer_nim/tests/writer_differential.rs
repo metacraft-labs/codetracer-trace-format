@@ -8,30 +8,73 @@
 //! reader that is lenient in the same place the writer is wrong reports
 //! success. So the assertion here is byte equality of the produced streams.
 //!
-//! Whole-**container** byte equality is structurally unreachable, and the
-//! reasons are enumerated rather than waved at, because each one is a place
-//! where a narrower comparison could hide a real difference:
+//! # Why whole-container equality is not reached
 //!
-//! 1. **The Rust writer emits four files the Nim writer never does** —
-//!    `events.log`, `events.fmt`, `meta.json`, `paths.json`. They are the
-//!    legacy unified-stream surface kept for old readers. Different file
-//!    *sets* mean different CTFS directory blocks.
-//! 2. **`recording_id` is a freshly minted UUIDv7 on both sides**, so
-//!    `meta.dat` and `meta.json` differ in bytes on every run by construction.
-//!    `meta.dat` is therefore compared on its *flags word*, not its body.
-//! 3. **The Nim writer emits files of its own** the Rust writer does not
-//!    (`step-map.ns`, the span/linehit tables, …).
-//! 4. **CTFS block allocation** follows the file set, so even a shared file
-//!    lands at a different container offset.
+//! The operative spec revision is **`ff95fe4`** (tip of `origin/dev` and
+//! `origin/main` in `codetracer-trace-format-spec`). Note that the repo's
+//! default branch `origin/latest` is a *different lineage* that does not
+//! contain the column format at all — it has zero hits for `global_position`,
+//! `line_lengths` or `Layout A` — so "the spec" must be qualified by revision
+//! or it names the wrong document.
 //!
-//! None of those touch the contents of a stream. What IS compared, in full:
+//! Exactly **one** structural reason remains, and it is not a property of the
+//! encoders:
 //!
-//! * `steps.dat` — every encoded step record, including chunk framing and the
-//!   Zstd frames themselves.
-//! * `steps.idx` — the companion offset index.
+//! * **The Rust writer emits four files the Nim writer never does** —
+//!   `events.log`, `events.fmt`, `meta.json`, `paths.json` — and cannot yet
+//!   stop, because two shipping readers use the ABSENCE of `events.log` as
+//!   their format discriminator. See [`RUST_ONLY`] for the measurement and the
+//!   two call sites. Different file sets in turn mean different CTFS directory
+//!   blocks, so shared files land at different container offsets.
+//!
+//! Three reasons previously listed here have been measured and removed:
+//!
+//! * *"The Nim writer emits files of its own (`step-map.ns`, the span/linehit
+//!   tables, …)"* — **false**. On a fixture that populates every stream the Nim
+//!   container emits no file the Rust one lacks; `NIM_ONLY` is empty and the
+//!   census now proves it rather than assuming it. Those Nim files exist only
+//!   when a recorder opts into spans / linehits / step-map, which neither
+//!   writer does here.
+//! * *"CTFS block allocation follows the file set"* — true, but it is a
+//!   consequence of the file-set difference above, not an independent reason.
+//! * *"`meta.dat` is compared on its flags word because `recording_id` differs
+//!   and the Rust header carries program/args fields the Nim one does not"* —
+//!   the second half is **false**. Both encoders write the identical field
+//!   sequence. `meta.dat` is now decoded and compared FIELD BY FIELD; see
+//!   [`the_two_writers_meta_dat_agrees_on_every_field_except_the_minted_recording_id`].
+//!
+//! What IS compared, in full:
+//!
+//! * `steps.dat` / `steps.idx` — every encoded step record, including chunk
+//!   framing and the Zstd frames themselves, plus the companion offset index.
 //! * `paths.dat` / `paths.off` — the interning table, in spec Layout A.
 //! * `values.dat` / `values.idx` — the parallel-indexed value stream.
-//! * the `meta.dat` flags word, masked to the column bits.
+//! * `calls.dat` / `calls.idx`, `events.dat` / `events.idx`,
+//!   `varnames.dat` / `varnames.off` — asserted byte-identical by name in the
+//!   census.
+//! * every field of `meta.dat` except the minted `recording_id`.
+//!
+//! # Two divergences from the spec that this differential CANNOT see
+//!
+//! Byte equality between the two writers is agreement, not correctness, and on
+//! two points they agree with each other and not with the spec:
+//!
+//! 1. **`values.dat` / `values.idx` are not in the spec at all.** Grep
+//!    `ff95fe4` for either name and you get nothing: the spec puts the value
+//!    stream INSIDE `steps.dat` (`trace-events.md:49` heads the section "Value
+//!    Stream (`steps.dat`)"; `internal-files.md:85` calls `steps.dat` the
+//!    "Combined execution + values stream"). Both writers instead emit a
+//!    separate pair, identically. The spec's own account of the combined file
+//!    is not implementable as written — the execution and value tag spaces both
+//!    start at 0 in one file and the correspondence is defined circularly — so
+//!    the split is the sane choice, but it is an undocumented extension.
+//! 2. **The delta window is out of spec in both writers.** `trace-events.md:656`
+//!    encoding rule 4 says a `DeltaStep` is used when the delta fits in three
+//!    varint bytes (±1048575); both writers promote to `AbsoluteStep` at ±63/64,
+//!    and the fixture below deliberately pins that narrower window. Output stays
+//!    decodable — an `AbsoluteStep` where a `DeltaStep` was permitted resolves
+//!    identically — so this costs compression, not correctness. But it means the
+//!    fixture pins agreement with the *other writer*, not with the spec.
 //!
 //! # The exclusion list is a measurement, not an omission
 //!
@@ -61,6 +104,16 @@
 //! below deliberately break something and assert the comparison goes red:
 //! a wrong column delta, a wrong `line_lengths` table, and the streaming-Zstd
 //! framing the writer used to emit. Each names which comparison caught it.
+//!
+//! Note what the Zstd control is really pinning. The spec at `ff95fe4` says
+//! nothing about frame headers — grep it for `pledge`, `content size`,
+//! `ZSTD_c_` or `skippable` and you get nothing; it says only "each chunk
+//! independently compressed with Zstd", level 3. The requirement that a frame
+//! declare its content size is a **reader** contract, not a spec rule: the
+//! canonical Nim readers call `ZSTD_getFrameContentSize` and fail on `UNKNOWN`,
+//! reporting a stream they cannot size as EMPTY rather than as an error. That
+//! is why the control exists and why it is worth keeping even though no
+//! document mandates it.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -522,9 +575,36 @@ fn the_two_writers_agree_across_a_chunk_boundary() {
 // The exclusion list, as a measurement
 // ---------------------------------------------------------------------------
 
-/// Files only the Rust writer emits, with the reason. These are the legacy
-/// unified-stream surface it keeps for old readers plus its JSON sidecars; the
-/// Nim writer routes the same information through the split streams only.
+/// Files only the Rust writer emits, with the reason.
+///
+/// All four are legacy: at spec revision `ff95fe4` they appear **only** in
+/// `fixtures/README.md`, describing the pre-redesign fixture container, and
+/// nowhere in `internal-files.md` / `trace-events.md` / `ctfs-container.md`.
+/// `meta.json` is affirmatively historical — `internal-files.md:437` puts it in
+/// the removed v1 window — and `ctfs-container.md:14` states the container
+/// property "All metadata in binary format within the container; no external
+/// files or JSON".
+///
+/// They are nevertheless NOT deletable today, and the reason is not
+/// nostalgia. `events.log` is load-bearing as a *format discriminator*: at
+/// least two shipping readers key off its ABSENCE to decide which decoder to
+/// use —
+///
+/// * `codetracer/src/db-backend/src/ctfs_trace_reader/mod.rs`:
+///   `fn is_new_format(ctfs) -> bool { has_file("steps.dat") && !has_file("events.log") }`
+/// * `codetracer-trace-format-nim/src/codetracer_trace_reader.nim`:
+///   `let isV4 = ... "events.log" ... .size == 0`
+///
+/// Dropping `events.log` from this writer flips both predicates for every
+/// container it produces and routes them to a decoder that cannot read this
+/// writer's index layout. The failure mode is a trace that opens successfully
+/// and reports ZERO steps — the same silently-empty answer this whole file
+/// exists to catch. `events.fmt` is coupled to it: both readers default to
+/// CBOR when it is missing, so removing it alone silently misdecodes every
+/// split-binary container.
+///
+/// Retiring them therefore requires replacing the absence-discriminator with a
+/// positive marker first, in repos this crate does not own.
 const RUST_ONLY: [&str; 4] = ["events.log", "events.fmt", "meta.json", "paths.json"];
 
 /// Files only the Nim writer emits. Empty today; the constant exists so a Nim
@@ -549,14 +629,26 @@ const KNOWN_DIVERGENCES: [(&str, &str); 5] = [
     ),
     (
         "funcs.dat",
-        "the function interning table's record shape: Nim writes the bare name bytes, Rust writes \
-         a length/id-prefixed record. The same class M24 flagged for paths.dat, unfixed for funcs.",
+        "record shape, and the spec settles it AGAINST the Nim writer. internal-files.md:46 at \
+         spec ff95fe4 gives the funcs.dat record as `global_line_index: varint, name_len: varint, \
+         name: bytes`, which is what the Rust writer emits; the Nim writer emits the bare name \
+         bytes and no global_line_index at all. Root cause: Nim uses ONE generic bare-bytes \
+         InterningTableWriter for paths/funcs/types/varnames alike. The data is not lost at the \
+         boundary — trace_writer_ensure_function_id receives (name, path, line) and stores them — \
+         it is dropped at the interning call. Fix belongs in codetracer-trace-format-nim.",
     ),
     ("funcs.off", "follows funcs.dat's record lengths."),
     (
         "types.dat",
-        "the Rust writer does not auto-register a type name for an Int value; the Nim writer \
-         registers `type_0`.",
+        "two independent defects. (a) Record shape: internal-files.md:45 gives `kind: u8, \
+         lang_type_len: varint, lang_type: bytes, specific_info: binary`, which the Rust writer \
+         emits; Nim writes bare bytes through the same generic table as funcs.dat. (b) An \
+         invention: codetracer_trace_writer_nim/src/lib.rs synthesises `format!(\"type_{}\", \
+         type_id.0)` for a value that carries only a TypeId, so a fixture whose ValueRecord::Int \
+         references an unregistered TypeId(0) makes the Nim container intern `type_0` while the \
+         Rust one leaves types.dat empty. The spec has NO auto-registration rule, no reserved \
+         type ids, and no defined behaviour for a dangling type_id; trace-events.md:383 shows the \
+         RECORDER calling ensure_type_id explicitly. Neither writer should invent a type.",
     ),
     ("types.off", "follows types.dat."),
 ];
@@ -689,6 +781,30 @@ fn every_file_in_the_container_is_either_compared_or_a_named_divergence() {
             differing.iter().any(|d| d == name),
             "{name} no longer differs — remove it from KNOWN_DIVERGENCES and let the census compare it. \
              Its declared reason was: {why}"
+        );
+    }
+
+    // The same rule for the one-sided lists, which were enforced in one
+    // direction only: a name could be deleted from a writer and left in
+    // `RUST_ONLY` forever, and the census would stay green while quietly
+    // describing a file that no longer exists. That is the identical failure
+    // mode as a stale `KNOWN_DIVERGENCES` entry, so it gets the identical
+    // check.
+    let nim_names = nim_reader.list_files();
+    let rust_names = rust_reader.list_files();
+    for name in RUST_ONLY {
+        assert!(
+            rust_names.contains(&name.to_string()) && !nim_names.contains(&name.to_string()),
+            "{name} is listed in RUST_ONLY but is no longer Rust-only \
+             (in rust: {}, in nim: {}) — update the list",
+            rust_names.contains(&name.to_string()),
+            nim_names.contains(&name.to_string()),
+        );
+    }
+    for name in NIM_ONLY {
+        assert!(
+            nim_names.contains(&name.to_string()) && !rust_names.contains(&name.to_string()),
+            "{name} is listed in NIM_ONLY but is no longer Nim-only — update the list"
         );
     }
 

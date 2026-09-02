@@ -294,7 +294,7 @@ impl CallStreamBuilder {
                     None => -1,
                 };
                 let depth = self.open_stack.len() as u64;
-                let first_step_id = self.current_step_id();
+                let first_step_id = self.entry_step_id();
                 let args_bytes = if args.is_empty() { Vec::new() } else { cbor_bytes(args) };
                 self.records.push(CallStreamRecord {
                     call_key,
@@ -313,7 +313,15 @@ impl CallStreamBuilder {
             TraceLowLevelEvent::Return(ReturnRecord { return_value }) => {
                 if let Some(idx) = self.open_stack.pop() {
                     let last = self.current_step_id();
+                    let leaf = self.step_index == self.records[idx].first_step_id;
                     let rec = &mut self.records[idx];
+                    // Leaf-call clamp: the call emitted no body step, so
+                    // `first_step_id` still points one past the last real step
+                    // and the range `[first, last]` would be empty. Pull it
+                    // back to the call-site step so the entry still surfaces.
+                    if leaf {
+                        rec.first_step_id = last;
+                    }
                     rec.last_step_id = last;
                     rec.return_value = cbor_bytes(return_value);
                 }
@@ -322,10 +330,22 @@ impl CallStreamBuilder {
         }
     }
 
-    /// The step id to attribute to an entry/exit at the current position: the
-    /// last real step index, or 0 before any step has been seen.
+    /// The step id to attribute to an *exit* at the current position: the last
+    /// real step index, or 0 before any step has been seen.
     fn current_step_id(&self) -> u64 {
         if self.any_step { self.step_index - 1 } else { 0 }
+    }
+
+    /// The step id to attribute to a call *entry*: the index of the first step
+    /// belonging to the callee's body, i.e. the next step the writer will emit.
+    ///
+    /// This is the "next-step" semantic. It puts a non-leaf callee's body on
+    /// the correct frame — the range `[first_step_id, last_step_id]` spans the
+    /// callee's steps rather than the caller's call-site step. A call that
+    /// turns out to have no body step at all is corrected by the leaf clamp in
+    /// the `Return` arm, which is where the empty range first becomes visible.
+    fn entry_step_id(&self) -> u64 {
+        self.step_index
     }
 
     /// Number of call records built so far.

@@ -537,17 +537,11 @@ const NIM_ONLY: [&str; 0] = [];
 /// directions: a file here that stops differing fails the test (so a fix cannot
 /// leave a stale exclusion behind), and a file that differs without being here
 /// fails it too.
-const KNOWN_DIVERGENCES: [(&str, &str); 6] = [
+const KNOWN_DIVERGENCES: [(&str, &str); 5] = [
     (
         "meta.dat",
         "recording_id is a freshly minted UUIDv7 on both sides, and the Rust header carries \
          program/args fields the Nim one does not. Compared on its masked flags word instead.",
-    ),
-    (
-        "calls.dat",
-        "call/step attribution differs by one: for a call registered after step index 2 the Nim \
-         writer records first_step_id = 3 and the Rust writer 2. A real divergence, outside the \
-         column work, and NOT a framing difference — the frames are pledged on both sides now.",
     ),
     (
         "funcs.dat",
@@ -718,6 +712,14 @@ fn every_file_in_the_container_is_either_compared_or_a_named_divergence() {
         "values.dat",
         "values.idx",
         "events.dat",
+        // The call stream. Its `first_step_id` was off by one against the Nim
+        // writer's documented "CTFS-M entry_step" convention; asserted
+        // positively here so a regression is reported as "calls.dat stopped
+        // matching" rather than as a new line in KNOWN_DIVERGENCES.
+        "calls.dat",
+        "calls.idx",
+        "varnames.dat",
+        "varnames.off",
     ] {
         assert!(
             identical.contains(&stream.to_string()),

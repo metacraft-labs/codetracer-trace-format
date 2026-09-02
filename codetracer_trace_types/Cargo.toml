@@ -20,3 +20,9 @@ serde_with = "3.15.1"
 # M-REC-1: UUIDv7 generation for recording_id (RFC 9562, §5.7).  The
 # `v7` feature pulls in `getrandom` for CSPRNG entropy.
 uuid = { version = "1.10", features = ["v7", "serde"] }
+
+[dev-dependencies]
+# Only the tests need a CBOR codec: `base64.rs` asserts that a `BigInt` magnitude
+# lands as a byte string (major 2) rather than text (major 3), which is a claim about
+# the encoder and cannot be made without one.
+ciborium = "0.2"

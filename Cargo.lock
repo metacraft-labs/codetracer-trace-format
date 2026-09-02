@@ -395,6 +395,7 @@ name = "codetracer_trace_types"
 version = "0.19.0"
 dependencies = [
  "base64",
+ "ciborium",
  "num-derive",
  "num-traits",
  "schemars 0.8.22",

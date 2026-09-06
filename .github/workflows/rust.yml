@@ -36,10 +36,10 @@ jobs:
       # build.rs-canonical env var exported, otherwise build.rs panics
       # before clippy gets a chance to lint.
       - name: Clone codetracer-trace-format-nim
-        uses: metacraft-labs/metacraft-github-actions/clone-repo@main
+        uses: metacraft-labs/metacraft-github-actions/clone-repo@dev
         with:
           repo: metacraft-labs/codetracer-trace-format-nim
-          ref: main
+          ref: dev
           path: codetracer-trace-format-nim
           gh-token: ${{ steps.app-token.outputs.token }}
       # Even `cargo clippy` runs build.rs, and codetracer_trace_writer_nim's
@@ -85,10 +85,10 @@ jobs:
       # action so the CI_TOKEN_PROVIDER_APP_ID secret (which the org
       # provisions to every CI repo) authenticates against private repos.
       - name: Clone codetracer-trace-format-nim
-        uses: metacraft-labs/metacraft-github-actions/clone-repo@main
+        uses: metacraft-labs/metacraft-github-actions/clone-repo@dev
         with:
           repo: metacraft-labs/codetracer-trace-format-nim
-          ref: main
+          ref: dev
           path: codetracer-trace-format-nim
           gh-token: ${{ steps.app-token.outputs.token }}
       - name: Install Nim
@@ -116,31 +116,31 @@ jobs:
       # enforce the "no private storage parser" contract.  codetracer-native-recorder
       # is private; clone-repo + CI_TOKEN_PROVIDER_APP_ID handles auth.
       - name: Clone codetracer-python-recorder
-        uses: metacraft-labs/metacraft-github-actions/clone-repo@main
+        uses: metacraft-labs/metacraft-github-actions/clone-repo@dev
         with:
           repo: metacraft-labs/codetracer-python-recorder
-          ref: main
+          ref: stable
           path: codetracer-python-recorder
           gh-token: ${{ steps.app-token.outputs.token }}
       - name: Clone codetracer-ruby-recorder
-        uses: metacraft-labs/metacraft-github-actions/clone-repo@main
+        uses: metacraft-labs/metacraft-github-actions/clone-repo@dev
         with:
           repo: metacraft-labs/codetracer-ruby-recorder
-          ref: main
+          ref: dev
           path: codetracer-ruby-recorder
           gh-token: ${{ steps.app-token.outputs.token }}
       - name: Clone codetracer-js-recorder
-        uses: metacraft-labs/metacraft-github-actions/clone-repo@main
+        uses: metacraft-labs/metacraft-github-actions/clone-repo@dev
         with:
           repo: metacraft-labs/codetracer-js-recorder
-          ref: main
+          ref: dev
           path: codetracer-js-recorder
           gh-token: ${{ steps.app-token.outputs.token }}
       - name: Clone codetracer-native-recorder
-        uses: metacraft-labs/metacraft-github-actions/clone-repo@main
+        uses: metacraft-labs/metacraft-github-actions/clone-repo@dev
         with:
           repo: metacraft-labs/codetracer-native-recorder
-          ref: main
+          ref: dev
           path: codetracer-native-recorder
           gh-token: ${{ steps.app-token.outputs.token }}
 

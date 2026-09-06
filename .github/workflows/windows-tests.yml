@@ -14,9 +14,94 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - uses: dtolnay/rust-toolchain@stable
-      - name: Install capnproto
+
+      - name: Generate CI token
+        id: ci_token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ secrets.CI_TOKEN_PROVIDER_APP_ID }}
+          private-key: ${{ secrets.CI_TOKEN_PROVIDER_PRIVATE_KEY }}
+          owner: metacraft-labs
+
+      # Cap'n Proto comes from codetracer's pinned `ensure-capnp.ps1`
+      # component, NOT from Chocolatey.
+      #
+      # WHY THIS CHANGED. The previous step was `choco install capnproto -y`,
+      # and it failed on every self-hosted Windows run it ever reached.
+      # Crucially it was never an INSTALL error. Two successive signatures,
+      # both "not on the box":
+      #
+      #   earlier runs -> "pwsh: command not found"
+      #                   The step never executed at all: `shell: pwsh` has to
+      #                   resolve before the script is written, so these runs
+      #                   say nothing about Chocolatey one way or the other.
+      #   later runs   -> "The term 'choco' is not recognized as a name of a
+      #                   cmdlet..." -- the step ran, and Chocolatey was absent.
+      #
+      # The message changed because the runner image gained pwsh in between,
+      # letting the job get one step further. Only the later runs are evidence
+      # about Chocolatey, and what they show is that it is simply not
+      # installed.
+      #
+      # The general point is the one in
+      # Reprobuild-Windows-Runners.runbook.md:297-300: a tool named in a
+      # recipe is pinned and lockable, whereas `choco install` is "whatever
+      # that box happened to get" -- and here the box happened to get nothing.
+      #
+      # `ensure-capnp.ps1` downloads the pinned official archive named by
+      # CAPNP_VERSION and verifies it against CAPNP_WIN_X64_SHA256 from
+      # codetracer's toolchain-versions.env, then writes
+      # `capnp.install.relative-path` and `capnp.install.meta` so a second
+      # run is a cache hit rather than a re-download.
+      #
+      # WINDOWS_DIY_ONLY names the one component this repo wants. It is a
+      # positive allowlist rather than a list of WINDOWS_DIY_SKIP_* variables
+      # for the other twenty-one, because a subtractive list would silently
+      # start installing a twenty-third component the day one is added.
+      - name: Provision Cap'n Proto from the pinned component
+        uses: metacraft-labs/metacraft-github-actions/setup-dev-env@dev
+        with:
+          env-flavor: windows-diy
+          gh-token: ${{ steps.ci_token.outputs.token }}
+          # Empty ref: resolve codetracer from the workspace lock, matching
+          # the convention in codetracer-integration.yml.
+          siblings: |
+            codetracer=
+          env-ps1-path: ../codetracer/env.ps1
+        env:
+          WINDOWS_DIY_ONLY: CAPNP
+
+      - name: Verify capnp came from the pinned component, not choco
         shell: pwsh
-        run: choco install capnproto -y
+        # Asserts the provenance requirement directly on the runner rather than
+        # trusting the step above: the pointer/meta files ensure-capnp.ps1
+        # writes must exist, and `capnp` must resolve inside the install root
+        # it names. A capnp that came from anywhere else fails here.
+        run: |
+          $installRoot = $env:WINDOWS_DIY_INSTALL_ROOT
+          if ([string]::IsNullOrWhiteSpace($installRoot)) {
+            throw "env.ps1 did not export WINDOWS_DIY_INSTALL_ROOT."
+          }
+          $pointer = Get-ChildItem -Path $installRoot -Recurse -Filter "capnp.install.relative-path" -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+          if ($null -eq $pointer) {
+            throw "ensure-capnp.ps1 wrote no capnp.install.relative-path under '$installRoot'."
+          }
+          $meta = Join-Path $pointer.DirectoryName "capnp.install.meta"
+          if (-not (Test-Path -LiteralPath $meta -PathType Leaf)) {
+            throw "ensure-capnp.ps1 wrote no capnp.install.meta beside '$($pointer.FullName)'."
+          }
+          Write-Host "pointer: $($pointer.FullName)"
+          Get-Content -LiteralPath $meta | ForEach-Object { Write-Host "  meta: $_" }
+
+          $capnp = Get-Command capnp -CommandType Application -ErrorAction SilentlyContinue |
+            Select-Object -First 1
+          if ($null -eq $capnp) { throw "capnp is not on PATH after provisioning." }
+          if (-not $capnp.Source.StartsWith($installRoot, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "capnp resolved to '$($capnp.Source)', which is outside the pinned install root '$installRoot'."
+          }
+          Write-Host "capnp: $($capnp.Source)"
+          & $capnp.Source --version
       # Two crates are excluded on Windows:
       #
       # * codetracer_trace_writer_nim: links against libcodetracer_trace_writer.a

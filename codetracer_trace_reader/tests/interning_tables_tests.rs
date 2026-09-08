@@ -95,7 +95,7 @@ fn expected_record(dat: &[u8], off: &[u8], i: usize) -> Vec<u8> {
 }
 
 #[test]
-fn interning_tables_resolve_by_id_matching_events_and_paths_json() {
+fn interning_tables_resolve_by_id_matching_events_and_recorded_paths() {
     let dir = tempfile::tempdir().unwrap();
     let ct_path = write_trace(&dir, true);
 
@@ -103,13 +103,19 @@ fn interning_tables_resolve_by_id_matching_events_and_paths_json() {
         .expect("open_interning_tables ok")
         .expect("interning tables present when has_interning_tables flag is set");
 
-    // Read the same events / paths.json that reference these ids.
-    let (events, paths_json) = {
+    // Read the same events / recorded path list that reference these ids.
+    //
+    // The oracle used to be the legacy `paths.json` sidecar.  That is retired,
+    // so the independent reference is now `meta.dat`'s recorded path list —
+    // kept alongside the `Path` event comparison below so the interning table
+    // is still checked against TWO references it did not produce, not one.
+    let (events, recorded_paths) = {
         let mut r = codetracer_ctfs::CtfsReader::open(&ct_path).unwrap();
-        let paths_json: Vec<String> = serde_json::from_slice(&r.read_file("paths.json").unwrap()).unwrap();
+        let meta = codetracer_trace_writer::meta_dat::decode_meta_dat(&r.read_file("meta.dat").unwrap())
+            .expect("meta.dat must decode");
         let mut reader = codetracer_trace_reader::create_trace_reader(codetracer_trace_reader::TraceEventsFileFormat::Ctfs);
         let events = reader.load_trace_events(&ct_path).unwrap();
-        (events, paths_json)
+        (events, meta.paths)
     };
 
     // --- Paths: resolved path equals paths.json[id] and the Path events. ---
@@ -120,12 +126,12 @@ fn interning_tables_resolve_by_id_matching_events_and_paths_json() {
             _ => None,
         })
         .collect();
-    assert_eq!(it.path_count(), paths_json.len(), "path table count must equal paths.json length");
+    assert_eq!(it.path_count(), recorded_paths.len(), "path table count must equal meta.dat's path count");
     assert_eq!(it.path_count(), path_events.len(), "path table count must equal the Path event count");
     assert!(it.path_count() >= N, "expected at least N interned paths");
     for id in 0..it.path_count() {
         let resolved = it.path_str(id as u64).unwrap();
-        assert_eq!(resolved, paths_json[id], "path id {id} must equal paths.json[{id}]");
+        assert_eq!(resolved, recorded_paths[id], "path id {id} must equal meta.dat paths[{id}]");
         assert_eq!(resolved, path_events[id], "path id {id} must equal the {id}-th Path event");
     }
 
@@ -253,8 +259,11 @@ fn random_access_by_mid_table_id() {
 #[test]
 fn legacy_trace_has_no_interning_tables_and_files_byte_identical() {
     // The interning-tables emission is ADDITIVE: enabling it must not perturb
-    // events.log or paths.json a single byte, and a flag-off trace must carry no
-    // binary tables.
+    // events.log a single byte, and a flag-off trace must carry no binary
+    // tables.  (This used to also pin `paths.json` byte-identity; that sidecar
+    // is retired.  `meta.dat` is not a substitute for that half of the check —
+    // it carries the stream-capability flags, so it differs BY DESIGN between
+    // flag-on and flag-off.)
     let dir_off = tempfile::tempdir().unwrap();
     let dir_on = tempfile::tempdir().unwrap();
     let ct_off = write_trace(&dir_off, false);
@@ -263,17 +272,28 @@ fn legacy_trace_has_no_interning_tables_and_files_byte_identical() {
     let mut r_off = codetracer_ctfs::CtfsReader::open(&ct_off).unwrap();
     let mut r_on = codetracer_ctfs::CtfsReader::open(&ct_on).unwrap();
 
-    // events.log + paths.json byte-identical regardless of the flag.
+    // events.log byte-identical regardless of the flag.
     assert_eq!(
         r_off.read_file("events.log").unwrap(),
         r_on.read_file("events.log").unwrap(),
         "events.log must be byte-identical regardless of the interning-tables flag"
     );
+
+    // Both bundles carry a metadata document, and it records the same paths in
+    // the same order either way — the part of the old paths.json check that was
+    // about the recording rather than about byte layout.
+    let meta_off = codetracer_trace_writer::meta_dat::decode_meta_dat(&r_off.read_file("meta.dat").unwrap())
+        .expect("flag-off meta.dat must decode");
+    let meta_on = codetracer_trace_writer::meta_dat::decode_meta_dat(&r_on.read_file("meta.dat").unwrap())
+        .expect("flag-on meta.dat must decode");
     assert_eq!(
-        r_off.read_file("paths.json").unwrap(),
-        r_on.read_file("paths.json").unwrap(),
-        "paths.json must be byte-identical regardless of the interning-tables flag"
+        meta_off.paths, meta_on.paths,
+        "meta.dat must record the same paths regardless of the interning-tables flag"
     );
+
+    // The legacy JSON sidecars are retired in both bundles.
+    assert!(r_off.read_file("meta.json").is_err(), "meta.json was written");
+    assert!(r_off.read_file("paths.json").is_err(), "paths.json was written");
 
     // The flag-off container carries no binary interning tables, and opening the
     // reader returns None (legacy path).

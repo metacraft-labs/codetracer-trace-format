@@ -605,7 +605,11 @@ fn the_two_writers_agree_across_a_chunk_boundary() {
 ///
 /// Retiring them therefore requires replacing the absence-discriminator with a
 /// positive marker first, in repos this crate does not own.
-const RUST_ONLY: [&str; 4] = ["events.log", "events.fmt", "meta.json", "paths.json"];
+///
+/// `meta.json` and `paths.json` were on this list until the legacy JSON
+/// metadata sidecars were retired from the Rust writer; neither writer emits
+/// them now, so listing them would fail the bidirectional check below.
+const RUST_ONLY: [&str; 2] = ["events.log", "events.fmt"];
 
 /// Files only the Nim writer emits. Empty today; the constant exists so a Nim
 /// stream that appears later is a failure with a name rather than a silent

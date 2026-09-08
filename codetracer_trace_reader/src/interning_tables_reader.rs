@@ -45,26 +45,31 @@
 
 use codetracer_ctfs::CtfsReader;
 use codetracer_trace_types::{TypeKind, TypeSpecificInfo};
+use codetracer_trace_writer::line_position::{LinePositionError, LinePositionSpace};
 use codetracer_trace_writer::meta_dat::meta_dat_has_interning_tables;
-use codetracer_trace_writer::step_stream::unpack_global_line_index;
 use num_traits::FromPrimitive;
 
 /// A decoded `funcs.dat` record: the `global_line_index` and the function name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FuncRecord {
-    /// Packed source location of the function (see
-    /// `codetracer_trace_writer::step_stream::pack_global_line_index`); use
-    /// [`FuncRecord::path_id_and_line`] to recover `(path_id, line)`.
+    /// The address of the function's declaration site in the trace's global
+    /// position space; use [`FuncRecord::path_id_and_line`] to recover
+    /// `(path_id, line)`.
     pub global_line_index: u64,
     /// The function name (raw bytes; UTF-8 for the recorders that produce it).
     pub name: Vec<u8>,
 }
 
 impl FuncRecord {
-    /// Recover the `(path_id, line)` the function's `global_line_index` was
-    /// packed from. Inverse of the writer's `pack_global_line_index`.
-    pub fn path_id_and_line(&self) -> (usize, i64) {
-        unpack_global_line_index(self.global_line_index)
+    /// Recover the `(path_id, line)` the function was declared at.
+    ///
+    /// The caller supplies the trace's own address space — the one built from
+    /// its `paths.dat` — because an address means nothing without it. A record
+    /// whose address the space cannot hold is refused rather than answered
+    /// with a location the trace never contained; see
+    /// [`codetracer_trace_writer::line_position`].
+    pub fn path_id_and_line(&self, space: &LinePositionSpace) -> Result<(usize, i64), LinePositionError> {
+        space.resolve(self.global_line_index)
     }
 }
 

@@ -21,7 +21,7 @@ use std::path::Path;
 use codetracer_trace_types::*;
 use codetracer_trace_writer::ctfs_writer::CtfsTraceWriter;
 use codetracer_trace_writer::interning_tables::InterningTablesBuilder;
-use codetracer_trace_writer::step_stream::pack_global_line_index;
+use codetracer_trace_writer::line_position::LinePositionSpace;
 use codetracer_trace_writer::trace_writer::TraceWriter;
 
 /// Number of distinct source files / functions / variables interned. Chosen
@@ -141,13 +141,17 @@ fn interning_tables_resolve_by_id_matching_events_and_paths_json() {
     for (id, (name, path_id, line)) in func_events.iter().enumerate() {
         let rec = it.func(id as u64).unwrap();
         assert_eq!(String::from_utf8(rec.name.clone()).unwrap(), *name, "func id {id} name");
-        // The funcs.dat global_line_index packs (path_id, line); it must decode
-        // back to exactly the Function event's (path_id, line).
-        let expected_gli = pack_global_line_index(path_id.0, line.0);
+        // The funcs.dat global_line_index addresses the declaration site in the
+        // trace's own space; it must resolve back to exactly the Function
+        // event's (path_id, line).
+        let mut space = LinePositionSpace::uniform(it.path_count());
+        let expected_gli = space.global_index(path_id.0, line.0);
         assert_eq!(rec.global_line_index, expected_gli, "func id {id} global_line_index");
-        let (decoded_path_id, decoded_line) = rec.path_id_and_line();
-        assert_eq!(decoded_path_id, path_id.0, "func id {id} decoded path_id");
-        assert_eq!(decoded_line, line.0, "func id {id} decoded line");
+        assert_eq!(
+            rec.path_id_and_line(&space),
+            Ok((path_id.0, line.0)),
+            "func id {id} must resolve to the location its Function event carried"
+        );
     }
 
     // --- Types: resolved (kind, lang_type, specific_info) equals the Type events. ---

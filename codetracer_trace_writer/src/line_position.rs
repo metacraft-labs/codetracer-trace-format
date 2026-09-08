@@ -112,12 +112,22 @@ impl std::error::Error for LinePositionError {}
 /// Built once per trace and shared by the encode and the decode sides so they
 /// cannot answer differently. See the module header for the arithmetic and for
 /// why there is only one scheme.
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinePositionSpace {
     /// `prefix_sum[i]` is the first address of file `i`; the last element is
     /// one past the highest address. Length is `file_count + 1` (and 1 for an
     /// empty space, holding the single element 0).
     prefix_sum: Vec<u64>,
+}
+
+impl Default for LinePositionSpace {
+    /// The empty space. Spelled out rather than derived: the invariant is
+    /// `prefix_sum.len() == file_count + 1`, so the empty space still holds the
+    /// single element `0`, and a derived `Vec::default()` would break every
+    /// accessor.
+    fn default() -> Self {
+        LinePositionSpace::new()
+    }
 }
 
 impl LinePositionSpace {

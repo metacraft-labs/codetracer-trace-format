@@ -433,3 +433,193 @@ fn missing_meta_dat_still_resolves_interned_names() {
     assert_eq!(it.path_str(1).unwrap(), "/b.rs");
     assert_eq!(it.varname_str(0).unwrap(), "v");
 }
+
+// ---------------------------------------------------------------------------
+// The per-file line-count table (`meta.dat` bit 14)
+// ---------------------------------------------------------------------------
+//
+// A line-only container used to state nothing about how its address space was
+// apportioned between files, so a reader could only re-apply the writer's
+// convention of `DEFAULT_LINES_PER_FILE` addresses each. Bit 14 makes every
+// `paths.dat` record carry its file's line count, and the space is laid out
+// from those. The fixtures below are hand-encoded rather than produced by a
+// writer, so the test pins the WIRE FORMAT the canonical Nim writer emits and
+// would catch this reader drifting from it.
+
+/// Encode a `paths.dat` line-count-table record: `payload_len + payload +
+/// line_count`.
+fn encode_line_count_record(payload: &[u8], line_count: u64) -> Vec<u8> {
+    fn varint(mut v: u64, out: &mut Vec<u8>) {
+        loop {
+            let mut b = (v & 0x7f) as u8;
+            v >>= 7;
+            if v != 0 {
+                b |= 0x80;
+            }
+            out.push(b);
+            if v == 0 {
+                break;
+            }
+        }
+    }
+    let mut out = Vec::new();
+    varint(payload.len() as u64, &mut out);
+    out.extend_from_slice(payload);
+    varint(line_count, &mut out);
+    out
+}
+
+/// Build a container whose `paths.dat` holds the given `(path, line_count)`
+/// records, with bit 14 set unless `declare` is false.
+fn write_line_count_container(dir: &tempfile::TempDir, name: &str, records: &[Vec<u8>], declare: bool) -> std::path::PathBuf {
+    use codetracer_ctfs::CtfsWriter;
+    use codetracer_trace_writer::meta_dat::{FLAG_HAS_LINE_COUNT_TABLE, encode_meta_dat};
+
+    let ct_path = dir.path().join(name);
+    let mut w = CtfsWriter::create(&ct_path, 4096, 31).unwrap();
+    let flags = if declare { FLAG_HAS_LINE_COUNT_TABLE } else { 0 };
+    let meta = encode_meta_dat("01949fcc-7d92-7e9c-aaaa-bbbbbbbbbbbb", "prog", &[], "", "", &[], flags);
+    let h = w.add_file("meta.dat").unwrap();
+    w.write(h, &meta).unwrap();
+
+    let refs: Vec<&[u8]> = records.iter().map(|r| r.as_slice()).collect();
+    let (dat, off) = encode_plain_table(&refs);
+    let h = w.add_file("paths.dat").unwrap();
+    w.write(h, &dat).unwrap();
+    let h = w.add_file("paths.off").unwrap();
+    w.write(h, &off).unwrap();
+    // The other three tables must exist once `paths.dat` does.
+    for other in ["funcs", "types", "varnames"] {
+        let (dat, off) = encode_plain_table(&[b"x".as_slice()]);
+        let h = w.add_file(&format!("{other}.dat")).unwrap();
+        w.write(h, &dat).unwrap();
+        let h = w.add_file(&format!("{other}.off")).unwrap();
+        w.write(h, &off).unwrap();
+    }
+    w.close().unwrap();
+    ct_path
+}
+
+/// A container that declares bit 14 resolves both the path and the recorded
+/// size, and the space it defines is the sum of the counts rather than
+/// `paths × DEFAULT_LINES_PER_FILE`.
+#[test]
+fn line_count_table_states_each_files_size() {
+    use codetracer_trace_reader::interning_tables_reader::InterningTablesReader;
+    use codetracer_trace_writer::line_position::{DEFAULT_LINES_PER_FILE, LinePositionSpace};
+
+    let dir = tempfile::tempdir().unwrap();
+    let ct = write_line_count_container(
+        &dir,
+        "counted.ct",
+        &[
+            encode_line_count_record(b"/src/alpha.rb", 10),
+            encode_line_count_record(b"/src/beta.rb", 7),
+        ],
+        true,
+    );
+
+    let mut reader = codetracer_ctfs::CtfsReader::open(&ct).unwrap();
+    let it = InterningTablesReader::open(&mut reader).expect("open ok").expect("paths.dat present");
+
+    assert_eq!(it.path_count(), 2);
+    assert_eq!(
+        it.path_str(0).unwrap(),
+        "/src/alpha.rb",
+        "the record's framing must not leak into the path string"
+    );
+    assert_eq!(it.path_str(1).unwrap(), "/src/beta.rb");
+    assert_eq!(it.line_count(0), Some(10));
+    assert_eq!(it.line_count(1), Some(7));
+
+    let space = LinePositionSpace::from_line_counts(it.line_counts());
+    assert_eq!(
+        space.total_lines(),
+        17,
+        "the space must be the sum of the recorded counts, not {}",
+        2 * DEFAULT_LINES_PER_FILE
+    );
+    // The boundary the sizing exists to get right: file 0's last line is the
+    // last address of file 0's slot, and file 1's first line is file 1's base.
+    assert_eq!(space.resolve(9), Ok((0, 10)));
+    assert_eq!(space.resolve(10), Ok((1, 1)));
+    assert_eq!(space.resolve(16), Ok((1, 7)));
+    assert!(space.resolve(17).is_err(), "17 is one past a 17-address space");
+}
+
+/// The mutation control for the flag. The same records with bit 14 CLEAR are
+/// read as bare path bytes — framing and all — and the reader reports no
+/// recorded size. If clearing the bit changed nothing, the bit would be
+/// decorative and the test above would prove nothing about it.
+#[test]
+fn without_bit_14_the_same_records_read_as_bare_paths() {
+    use codetracer_trace_reader::interning_tables_reader::InterningTablesReader;
+
+    let dir = tempfile::tempdir().unwrap();
+    let records = [
+        encode_line_count_record(b"/src/alpha.rb", 10),
+        encode_line_count_record(b"/src/beta.rb", 7),
+    ];
+    let ct = write_line_count_container(&dir, "undeclared.ct", &records, false);
+
+    let mut reader = codetracer_ctfs::CtfsReader::open(&ct).unwrap();
+    let it = InterningTablesReader::open(&mut reader).expect("open ok").expect("paths.dat present");
+
+    assert_eq!(it.line_count(0), None, "a container without bit 14 records no size");
+    assert!(it.line_counts().is_empty());
+    assert_ne!(
+        it.path_str(0).unwrap(),
+        "/src/alpha.rb",
+        "without the bit the record is read as bare bytes, so the path must come back with its \
+         framing attached"
+    );
+}
+
+/// A record that states a count of zero fails the OPEN. Under bit 14 every
+/// file's size is a number the container states, and a file sized zero shares
+/// its base with the next one — substituting a default there is the assumption
+/// the table was added to remove, reintroduced by the reader.
+#[test]
+fn a_recorded_count_of_zero_fails_the_open() {
+    use codetracer_trace_reader::interning_tables_reader::InterningTablesReader;
+
+    let dir = tempfile::tempdir().unwrap();
+    let ct = write_line_count_container(
+        &dir,
+        "zeroed.ct",
+        &[
+            encode_line_count_record(b"/src/alpha.rb", 10),
+            encode_line_count_record(b"/src/beta.rb", 0),
+        ],
+        true,
+    );
+
+    let mut reader = codetracer_ctfs::CtfsReader::open(&ct).unwrap();
+    let err = match InterningTablesReader::open(&mut reader) {
+        Err(e) => e,
+        Ok(_) => panic!("line_count 0 must fail the open"),
+    };
+    assert!(err.contains("line_count 0"), "the refusal must name the field; got: {err}");
+    assert!(err.contains("record 1"), "the refusal must name the record; got: {err}");
+}
+
+/// A record whose declared payload length runs past the record fails the open
+/// rather than yielding a truncated path. The container DECLARED this layout,
+/// so a record that does not decode is corruption, and falling back to the bare
+/// layout would answer with a path that has its own length prefix inside it.
+#[test]
+fn a_truncated_line_count_record_fails_the_open() {
+    use codetracer_trace_reader::interning_tables_reader::InterningTablesReader;
+
+    let dir = tempfile::tempdir().unwrap();
+    // payload_len = 200 over a 6-byte record.
+    let bogus = vec![200u8, b'a', b'b', b'c', b'd', 4u8];
+    let ct = write_line_count_container(&dir, "truncated.ct", &[bogus], true);
+
+    let mut reader = codetracer_ctfs::CtfsReader::open(&ct).unwrap();
+    let err = match InterningTablesReader::open(&mut reader) {
+        Err(e) => e,
+        Ok(_) => panic!("a truncated record must fail the open"),
+    };
+    assert!(err.contains("paths.dat: record 0"), "the refusal must name the record; got: {err}");
+}

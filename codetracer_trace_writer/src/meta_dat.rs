@@ -160,15 +160,43 @@ pub const FLAG_HAS_INTERNING_TABLES: u16 = 0x1000;
 /// span-bearing container outright. Rollout consequence: reader support must
 /// ship everywhere before any writer sets this bit.
 ///
-/// Bits 14 and 15 are the last two free bits and are deliberately left
-/// UNALLOCATED by RS-M1; whether the final bit becomes an "extended flag word
-/// follows" escape (or the `u16` is widened by a version bump) is a format
-/// decision that needs its own milestone.
-///
 /// Must match the canonical Nim writer's `meta_dat.nim` bit 13
 /// (`FlagHasSpanStream`) and the db-backend
 /// `ctfs_trace_reader::meta_dat::FLAG_HAS_SPAN_STREAM` (RS-M2).
 pub const FLAG_HAS_SPAN_STREAM: u16 = 0x2000;
+/// Bit 14 — every `paths.dat` record carries its file's line count after the
+/// path bytes (`payload_len + payload + line_count`), and the line-only global
+/// position space is laid out from those counts instead of from
+/// [`crate::line_position::DEFAULT_LINES_PER_FILE`].
+///
+/// This is the container stating what a line-only reader previously had to
+/// assume. Spec `trace-events.md` §"Per-File Contiguous Integer Ranges" sizes a
+/// line-only file at `file_size = line_count`, but no line-only container
+/// carried the counts, so a reader could only re-apply the writer's convention
+/// — unrecorded, and wrong above its own ceiling: a file with more lines
+/// addresses positions inside the *next* file's range, which is a well-formed
+/// address of a location that was never recorded and which no reader can
+/// detect. The writer that records the counts is therefore also the party that
+/// must refuse such a step.
+///
+/// **Mutually exclusive with [`FLAG_HAS_COLUMN_AWARE_STEPS`]**: a Layout A
+/// record already carries `line_count` as the length of its per-line table, and
+/// that mode sizes a file in addressable columns rather than lines. A header
+/// setting both declares the same field under two record layouts.
+///
+/// **Like bit 13, NOT backward-compatible at the reader**, and for a sharper
+/// reason: the record layout itself changes, so a reader that ignored the bit
+/// would return a path with its own length prefix glued to the front. Rollout
+/// is "readers before writers".
+///
+/// Must match the canonical Nim writer's `meta_dat.nim` bit 14
+/// (`FlagHasLineCountTable`) and the db-backend
+/// `ctfs_trace_reader::meta_dat::FLAG_HAS_LINE_COUNT_TABLE`.
+///
+/// Bit 15 is the last free bit; whether it becomes an "extended flag word
+/// follows" escape (or the `u16` is widened by a version bump) is a format
+/// decision that needs its own milestone.
+pub const FLAG_HAS_LINE_COUNT_TABLE: u16 = 0x4000;
 
 fn encode_varint(mut value: u64, out: &mut Vec<u8>) {
     loop {
@@ -366,6 +394,21 @@ pub fn meta_dat_has_span_stream(data: &[u8]) -> bool {
 pub fn meta_dat_has_column_aware_steps(data: &[u8]) -> bool {
     match read_meta_dat_flags(data) {
         Ok(flags) => flags & FLAG_HAS_COLUMN_AWARE_STEPS != 0,
+        Err(_) => false,
+    }
+}
+
+/// Convenience: returns whether the `has_line_count_table` flag (bit 14) is
+/// set. A missing/invalid `meta.dat` ⇒ `false`.
+///
+/// Belongs to the same family as [`meta_dat_has_column_aware_steps`] and the
+/// same caution applies with more force: this one selects a `paths.dat` record
+/// LAYOUT, so a caller that consults it without having gated on the version
+/// first decodes the wrong shape rather than less of it. Use it downstream of a
+/// container constructor, never in front of one.
+pub fn meta_dat_has_line_count_table(data: &[u8]) -> bool {
+    match read_meta_dat_flags(data) {
+        Ok(flags) => flags & FLAG_HAS_LINE_COUNT_TABLE != 0,
         Err(_) => false,
     }
 }

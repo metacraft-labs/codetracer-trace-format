@@ -7,12 +7,12 @@
 //! new `has_call_stream` capability flag (bit 8) can be carried in the canonical
 //! place, and read that flag back in the Rust reader.
 //!
-//! Layout (version 3), per
+//! Layout (version 4), per
 //! `codetracer-trace-format-spec/internal-files.md` §"Metadata (meta.dat)":
 //!
 //! ```text
 //!   [4] magic "CTMD"
-//!   [2] version u16 LE (3)
+//!   [2] version u16 LE (4)
 //!   [2] flags   u16 LE
 //!   varint-prefixed recording_id (UUIDv7, 36-char canonical form)
 //!   varint-prefixed program
@@ -24,11 +24,51 @@
 //!
 //! The optional extended blocks (MCR / replay-launch / layout / filter
 //! provenance) are not emitted by the Rust writer — their flag bits stay clear.
+//!
+//! # Version history
+//!
+//! * **v3** — added the required `recording_id` UUIDv7 ahead of `program`, and
+//!   the trace-filter provenance flag bit.
+//! * **v4** — the line-only `global_position_index` encode became
+//!   `prefix_sum[file_id] + (line - 1)`, the exact inverse of the decode the
+//!   spec states, where it had been `prefix_sum[file_id] + line`. Spec:
+//!   `codetracer-trace-format-spec/internal-files.md` §"Global Line Index".
+//!   The version had to move because the two encodes are INDISTINGUISHABLE in
+//!   the bytes: both address a line the trace's own space can hold, so a
+//!   container written under the old one reads back under the new one as a
+//!   `(path, line)` pair for every step, each exactly one line high, with
+//!   nothing to refuse. (The retired `(path_id << 32) | line` packing is
+//!   catchable only because it lands OUTSIDE the space — see
+//!   [`crate::line_position`].) `recorder_id` names the producer, not its
+//!   address packing, and the same recorders span the change, so the schema
+//!   version is the only field that tells the two apart. Pre-1.0 there is no
+//!   shim, and one is not merely unimplemented: subtracting one from every
+//!   address would correct a trace the old writer produced, but the version is
+//!   what would have said it did.
 
 /// `meta.dat` magic bytes ("CTMD").
 pub const META_DAT_MAGIC: [u8; 4] = [0x43, 0x54, 0x4D, 0x44];
 /// Current `meta.dat` version.
-pub const META_DAT_VERSION: u16 = 3;
+///
+/// Both sides of this module move together with it: [`encode_meta_dat`] stamps
+/// it, and [`read_meta_dat_flags`] — the reader every `meta_dat_has_*` helper
+/// and [`decode_meta_dat`] go through — accepts only it. A container from the
+/// canonical Nim writer and one from [`crate::CtfsTraceWriter`] are the same
+/// wire format, so the two implementations must carry the same number or each
+/// refuses the other's traces; see `LastShiftedGlobalIndexVersion` in
+/// `codetracer-trace-format-nim/src/codetracer_trace_writer/meta_dat.nim`.
+pub const META_DAT_VERSION: u16 = 4;
+/// The highest schema version whose writer packed a line-only
+/// `global_position_index` as `prefix_sum[file_id] + line`.
+///
+/// A container at or below it is refused by [`read_meta_dat_flags`] with the
+/// reason named, rather than by the generic version mismatch, because the
+/// consequence of reading one anyway is not a parse failure — it is a plausible
+/// wrong answer at every step. Named rather than written as a literal `3` at
+/// the refusal so the bound and the refusal move together: a later version that
+/// changed the packing again would raise it, and a reader comparing against a
+/// stale literal would answer such a container instead of refusing it.
+pub const LAST_SHIFTED_GLOBAL_INDEX_VERSION: u16 = 3;
 /// Bit 4 — the trace is column-aware. Must match the canonical Nim writer's
 /// `meta_dat.nim` `FlagHasColumnAwareSteps`.
 ///
@@ -199,7 +239,7 @@ pub fn encode_meta_dat(
 }
 
 /// Read the `flags` field from a `meta.dat` buffer. Returns an error if the
-/// magic/version are not the expected `meta.dat` v3 header.
+/// magic/version are not the expected [`META_DAT_VERSION`] header.
 pub fn read_meta_dat_flags(data: &[u8]) -> Result<u16, String> {
     if data.len() < 8 {
         return Err(format!("meta.dat too short: {} bytes", data.len()));
@@ -208,6 +248,22 @@ pub fn read_meta_dat_flags(data: &[u8]) -> Result<u16, String> {
         return Err("meta.dat: bad magic".to_string());
     }
     let version = u16::from_le_bytes([data[4], data[5]]);
+    if version <= LAST_SHIFTED_GLOBAL_INDEX_VERSION {
+        // Phrased about the WRITER rather than about this container's contents:
+        // the gate is on the schema version, so it also refuses a container at
+        // that version that holds no steps at all, and "its steps were packed
+        // as" would be a claim about such a trace that is not true.
+        return Err(format!(
+            "meta.dat: schema version {version} predates the global line index correction, and this \
+             trace cannot be read. Writers at that version packed a line-only step position as \
+             prefix_sum[path_id] + line; version {META_DAT_VERSION} packs \
+             prefix_sum[path_id] + (line - 1). Both land inside the trace's address space, so a \
+             step read under the current decode would come back one line high rather than fail, \
+             and the container records nothing else that tells the two apart. Re-record the trace \
+             with a current recorder. Spec: codetracer-trace-format-spec/internal-files.md \
+             \"Global Line Index\""
+        ));
+    }
     if version != META_DAT_VERSION {
         return Err(format!("meta.dat: unsupported version {version}"));
     }
@@ -218,6 +274,30 @@ pub fn read_meta_dat_flags(data: &[u8]) -> Result<u16, String> {
 /// is set in a `meta.dat` buffer. A missing/invalid `meta.dat` ⇒ `false`
 /// (the legacy unified-stream path), never an error — callers treat absence of
 /// the flag as "no dedicated call stream".
+///
+/// # Why swallowing the error is sound here, and where it would not be
+///
+/// Turning a parse failure into `false` makes an unreadable header
+/// indistinguishable from a readable one that clears the bit, which is the
+/// shape of a real defect elsewhere. It is sound in this family because none of
+/// these helpers is a GATE: the trace-format spec makes stream-presence flags a
+/// hint rather than a gate (a writer may stamp one only at close), so every
+/// reader in this crate answers presence STRUCTURALLY — see
+/// [`crate::call_stream::CallStreamRecord`]'s reader, whose `from_files` spells
+/// the argument `_meta`. The version check that decides whether a container may
+/// be read at all lives in the container constructors, upstream and separate:
+/// `readMetaDat` in the Nim reader and `parse_meta_dat` in the db-backend, both
+/// of which propagate the refusal.
+///
+/// The consequence to keep in view is that after a version bump these helpers
+/// answer `false` for every field of a superseded container, because
+/// [`read_meta_dat_flags`] refuses its header. That is only harmless while the
+/// helper's answer selects nothing that changes a decode. It is not harmless
+/// for [`meta_dat_has_interning_tables`] and [`meta_dat_has_column_aware_steps`],
+/// which select a record LAYOUT: a caller that consults either of those without
+/// having gated on the version first would decode the wrong shape rather than
+/// less of it, so those two belong downstream of a container constructor and
+/// not in front of one.
 pub fn meta_dat_has_call_stream(data: &[u8]) -> bool {
     match read_meta_dat_flags(data) {
         Ok(flags) => flags & FLAG_HAS_CALL_STREAM != 0,
@@ -324,7 +404,7 @@ pub fn read_meta_dat_program(data: &[u8]) -> Result<String, String> {
     String::from_utf8(data[pos..pos + plen].to_vec()).map_err(|e| format!("meta.dat: program not UTF-8: {e}"))
 }
 
-/// The decoded core field block of a `meta.dat` v3 header.
+/// The decoded core field block of a [`META_DAT_VERSION`] header.
 ///
 /// Covers the fields every container carries, in the order
 /// `internal-files.md` §"Metadata (meta.dat)" lays them out. The
@@ -434,6 +514,43 @@ mod tests {
                 "a meta.dat truncated to {cut} bytes must not decode"
             );
         }
+    }
+
+    /// A header at the superseded schema version is refused, and the refusal
+    /// says what reading it anyway would do — "one line high" is the only fact
+    /// that tells a caller why re-recording is the remedy rather than a reader
+    /// upgrade.
+    ///
+    /// The fixture is the header this writer emits with the version field set
+    /// back, because the writer can no longer produce one: that is the whole
+    /// point of the bump. Everything else about it is what a v3 writer wrote.
+    #[test]
+    fn a_header_from_before_the_line_index_correction_is_refused_by_name() {
+        let mut buf = encode_meta_dat(
+            "01949fcc-7d92-7e9c-aaaa-bbbbbbbbbbbb",
+            "prog",
+            &[],
+            "/wd",
+            "rec",
+            &["/p".to_string()],
+            FLAG_HAS_STEP_STREAM,
+        );
+        assert_eq!(
+            read_meta_dat_flags(&buf),
+            Ok(FLAG_HAS_STEP_STREAM),
+            "the header this writer emits must be readable before it is aged"
+        );
+
+        buf[4..6].copy_from_slice(&LAST_SHIFTED_GLOBAL_INDEX_VERSION.to_le_bytes());
+        let err = read_meta_dat_flags(&buf).expect_err("a pre-correction container must be refused");
+        assert!(err.contains("one line high"), "must name the consequence: {err}");
+        assert!(err.contains("prefix_sum[path_id] + line"), "must name the superseded encode: {err}");
+        assert!(err.contains("Re-record"), "must name the remedy: {err}");
+
+        // The refusal is what makes the flag helpers answer `false`, so a
+        // caller that reads a capability bit off such a container gets the
+        // absence of the capability rather than the bit the writer stamped.
+        assert!(!meta_dat_has_step_stream(&buf));
     }
 
     #[test]

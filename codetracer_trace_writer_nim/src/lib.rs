@@ -2745,6 +2745,83 @@ pub trait TraceWriter: Send {
             .into())
     }
 
+    /// Intern a correlation-marker boundary label and return its id.
+    ///
+    /// The default ERRORS rather than returning a placeholder: every other
+    /// marker call keys on this id, so a backend that cannot intern cannot
+    /// write a findable marker, and saying otherwise would produce markers
+    /// that are invisible rather than broken.
+    fn ensure_marker_id(&mut self, _label: &str) -> Result<u64, Box<dyn Error>> {
+        Err("this trace-writer backend does not support correlation markers \
+             (only the multi-stream CTFS backend writes corrmark.ns)"
+            .into())
+    }
+
+    /// Declare a boundary crossing against an already-interned label id.
+    /// Defaults to an error, for the reason above.
+    #[allow(clippy::too_many_arguments)]
+    fn mark_correlation_by_id(
+        &mut self,
+        _marker_id: u64,
+        _boundary_label: &str,
+        _direction: &str,
+        _key_value: &str,
+        _show_value: &str,
+        _description: &str,
+        _key_text: &str,
+        _show_text: &str,
+    ) -> Result<(), Box<dyn Error>> {
+        Err("this trace-writer backend does not support correlation markers \
+             (only the multi-stream CTFS backend writes corrmark.ns)"
+            .into())
+    }
+
+    /// Declare a boundary crossing by label; interns and forwards.
+    #[allow(clippy::too_many_arguments)]
+    fn mark_correlation(
+        &mut self,
+        _direction: &str,
+        _boundary_id: &str,
+        _key_value: &str,
+        _show_value: &str,
+        _description: &str,
+        _key_text: &str,
+        _show_text: &str,
+    ) -> Result<(), Box<dyn Error>> {
+        Err("this trace-writer backend does not support correlation markers \
+             (only the multi-stream CTFS backend writes corrmark.ns)"
+            .into())
+    }
+
+    /// Declare that this recording covers a distributed-trace span.
+    /// The ids are the WIRE bytes, never a hex rendering.
+    fn mark_span_coverage(
+        &mut self,
+        _trace_id: &[u8; 16],
+        _span_id: &[u8; 8],
+        _wall_time_unix_ns: u64,
+        _monotonic_time_ns: u64,
+    ) -> Result<(), Box<dyn Error>> {
+        Err("this trace-writer backend does not support correlation markers \
+             (only the multi-stream CTFS backend writes corrmark.ns)"
+            .into())
+    }
+
+    /// Hex form of `mark_span_coverage`: 32 hex characters for `trace_id`,
+    /// 16 for `span_id`. The conversion is done by the shared library so it
+    /// has one implementation rather than one per recorder.
+    fn mark_span_coverage_hex(
+        &mut self,
+        _trace_id_hex: &str,
+        _span_id_hex: &str,
+        _wall_time_unix_ns: u64,
+        _monotonic_time_ns: u64,
+    ) -> Result<(), Box<dyn Error>> {
+        Err("this trace-writer backend does not support correlation markers \
+             (only the multi-stream CTFS backend writes corrmark.ns)"
+            .into())
+    }
+
     /// RS-M1: seal the current partial span chunk without closing the writer.
     /// Default no-op — `close` flushes anyway.
     fn flush_spans(&mut self) -> Result<(), Box<dyn Error>> {
@@ -2873,6 +2950,62 @@ impl TraceWriter for NimTraceWriter {
     }
     fn register_span(&mut self, span: &SpanRecord) -> Result<(), Box<dyn Error>> {
         NimTraceWriter::register_span(self, span)
+    }
+    fn ensure_marker_id(&mut self, label: &str) -> Result<u64, Box<dyn Error>> {
+        NimTraceWriter::ensure_marker_id(self, label)
+    }
+    fn mark_correlation_by_id(
+        &mut self,
+        marker_id: u64,
+        boundary_label: &str,
+        direction: &str,
+        key_value: &str,
+        show_value: &str,
+        description: &str,
+        key_text: &str,
+        show_text: &str,
+    ) -> Result<(), Box<dyn Error>> {
+        NimTraceWriter::mark_correlation_by_id(
+            self, marker_id, boundary_label, direction, key_value, show_value,
+            description, key_text, show_text,
+        )
+    }
+    fn mark_correlation(
+        &mut self,
+        direction: &str,
+        boundary_id: &str,
+        key_value: &str,
+        show_value: &str,
+        description: &str,
+        key_text: &str,
+        show_text: &str,
+    ) -> Result<(), Box<dyn Error>> {
+        NimTraceWriter::mark_correlation(
+            self, direction, boundary_id, key_value, show_value, description,
+            key_text, show_text,
+        )
+    }
+    fn mark_span_coverage(
+        &mut self,
+        trace_id: &[u8; 16],
+        span_id: &[u8; 8],
+        wall_time_unix_ns: u64,
+        monotonic_time_ns: u64,
+    ) -> Result<(), Box<dyn Error>> {
+        NimTraceWriter::mark_span_coverage(
+            self, trace_id, span_id, wall_time_unix_ns, monotonic_time_ns,
+        )
+    }
+    fn mark_span_coverage_hex(
+        &mut self,
+        trace_id_hex: &str,
+        span_id_hex: &str,
+        wall_time_unix_ns: u64,
+        monotonic_time_ns: u64,
+    ) -> Result<(), Box<dyn Error>> {
+        NimTraceWriter::mark_span_coverage_hex(
+            self, trace_id_hex, span_id_hex, wall_time_unix_ns, monotonic_time_ns,
+        )
     }
     fn flush_spans(&mut self) -> Result<(), Box<dyn Error>> {
         NimTraceWriter::flush_spans(self)

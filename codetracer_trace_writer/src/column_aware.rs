@@ -20,34 +20,30 @@
 //! | [`encode_path_record_layout_a`] | `interning_table.nim` (`ensurePathIdColumnAware`) |
 //! | [`StepEncoder`] | `multi_stream_writer.nim` (`registerStep` / `registerStepWithColumn` / `registerColumnStep`) |
 //!
-//! # The two addressing modes, and why the legacy one is left alone
+//! # The two addressing modes
 //!
-//! Both writers address a step through one varint. What that varint *means*
-//! depends on a trace-global flag:
+//! Both writers address a step through one varint, and in both modes that varint
+//! is a position in a per-trace space built by concatenating the registered
+//! files in file-id order. What a *position* is depends on a trace-global flag:
 //!
-//! * **Line-only** (`FLAG_HAS_COLUMN_AWARE_STEPS` clear). Each integer addresses
-//!   one line. The two writers **disagree** here and always have: this crate's
-//!   [`crate::step_stream::pack_global_line_index`] uses `(path_id << 32) | line`
-//!   while the Nim writer uses `path_id * DefaultLinesPerFile + line` with
-//!   `DefaultLinesPerFile == 100_000`. That divergence is *not* repaired here.
-//!   `pack_global_line_index` / `unpack_global_line_index` are a published API
-//!   with consumers outside this repository — `codetracer/src/db-backend`'s
-//!   `linehits_namespace`, `recreator_session`, `materialization_cache`,
-//!   `follow_stream_source` and `step_value_stream_source` all round-trip
-//!   through them — so changing it would invalidate every container those
-//!   readers already hold, to no benefit for column support.
+//! * **Line-only** (`FLAG_HAS_COLUMN_AWARE_STEPS` clear). One position per line.
+//!   A file's slot is [`DEFAULT_LINES_PER_FILE`] until real per-file line counts
+//!   are recorded, and a line's address is `file_base + (line - 1)`. The
+//!   arithmetic and its inverse are [`crate::line_position`], shared with the
+//!   reader; both writers use it, so a step recorded by either lands at the same
+//!   address.
 //!
-//! * **Line + column** (`FLAG_HAS_COLUMN_AWARE_STEPS` set). Each integer
-//!   addresses one `(line, column)` pair, laid out as the prefix sum of the
-//!   per-file `line_lengths` tables. Here the two writers agree exactly,
-//!   because this module reproduces the Nim allocation including its fallback
-//!   for files whose `line_lengths` were not supplied.
+//! * **Line + column** (`FLAG_HAS_COLUMN_AWARE_STEPS` set). One position per
+//!   `(line, column)` pair, so a file's slot is the sum of its `line_lengths`
+//!   and a line's address is `file_base + sum(line_lengths[0 .. line-2])`. This
+//!   module reproduces the Nim allocation including its
+//!   [`DEFAULT_LINES_PER_FILE`] fallback for files whose `line_lengths` were not
+//!   supplied, which is what makes a partially-populated trace match.
 //!
-//! The Nim writer makes the same split for the same reason (see
-//! `multi_stream_writer.nim` `rebuildGli`: *"In line-only mode every file gets
-//! the legacy `DefaultLinesPerFile` allocation, preserving byte-for-byte output
-//! of pre-P6 traces"*). Parity is therefore *additive*: a line-only trace's
-//! bytes do not move, and a column-aware trace matches Nim.
+//! The two are the same scheme at different granularities: the in-file offset is
+//! 0-based in both, so offset 0 is line 1 (column 1) in both, and line-only is
+//! the column-aware layout with one address per line instead of one per column
+//! position.
 //!
 //! # Spec
 //!
@@ -260,9 +256,11 @@ pub fn decode_step_event(data: &[u8], pos: &mut usize) -> Result<StepEvent, Stri
 
 // --- the per-file position space --------------------------------------------
 
-/// Nim `multi_stream_writer.nim` `DefaultLinesPerFile`. Every file that has no
-/// per-line table is allocated this many addresses, in both modes.
-pub const DEFAULT_LINES_PER_FILE: u64 = 100_000;
+/// Every file that has no per-line table is allocated this many addresses, in
+/// both modes. Defined by [`crate::line_position`], which owns the line-only
+/// half of the same layout, and re-exported here because the column-aware
+/// allocation falls back to it.
+pub use crate::line_position::DEFAULT_LINES_PER_FILE;
 
 /// The trace's global position space: one contiguous, gap-free range per
 /// registered file, in file-id order.
@@ -355,13 +353,13 @@ impl PositionSpace {
 
     /// The `global_position_index` of column 1 on `line` in `path_id`.
     ///
-    /// Port of Nim `toGlobalLineIndex`. `line` is 1-based. In column-aware mode
-    /// this is `file_base + sum(line_lengths[0 .. line-2])`, clamped to the
-    /// file's known line count; in line-only mode it is the legacy
-    /// `file_base + line`.
+    /// Port of Nim `toGlobalLineIndex`. `line` is 1-based, so line 1 sits at the
+    /// file's own base in both modes. In column-aware mode the in-file offset is
+    /// `sum(line_lengths[0 .. line-2])`, clamped to the file's known line count;
+    /// in line-only mode it is `line - 1`.
     ///
-    /// An unregistered `path_id` yields the legacy form against a zero base,
-    /// which is what the Nim writer's bounds test degenerates to.
+    /// An unregistered `path_id` is addressed against a zero base, which is what
+    /// the Nim writer's bounds test degenerates to.
     pub fn position_of(&mut self, path_id: u64, line: u64) -> u64 {
         if self.dirty {
             self.rebuild();
@@ -380,7 +378,7 @@ impl PositionSpace {
                 }
             }
         }
-        base + line
+        base + if line <= 1 { 0 } else { line - 1 }
     }
 }
 
@@ -799,18 +797,27 @@ mod tests {
         space.push_path(&[]); // no table
         space.push_path(&[4]);
         assert_eq!(space.position_of(0, 1), 0);
-        assert_eq!(space.position_of(1, 7), 8 + 7);
+        assert_eq!(space.position_of(1, 7), 8 + 6);
         assert_eq!(space.position_of(2, 1), 8 + DEFAULT_LINES_PER_FILE);
     }
 
     #[test]
-    fn position_space_line_only_is_the_legacy_allocation() {
+    fn position_space_line_only_agrees_with_the_shared_line_space() {
         let mut space = PositionSpace::new(false);
         space.push_path(&[8]);
         space.push_path(&[5, 12, 3]);
         // line_lengths are ignored entirely when the trace is line-only.
-        assert_eq!(space.position_of(0, 42), 42);
-        assert_eq!(space.position_of(1, 42), DEFAULT_LINES_PER_FILE + 42);
+        let mut shared = crate::line_position::LinePositionSpace::uniform(2);
+        for (path_id, line) in [(0u64, 1u64), (0, 42), (1, 1), (1, 42)] {
+            assert_eq!(
+                space.position_of(path_id, line),
+                shared.global_index(path_id as usize, line as i64),
+                "the column-aware writer's line-only address must be the shared \
+                 space's address for (path {path_id}, line {line})"
+            );
+        }
+        assert_eq!(space.position_of(0, 42), 41);
+        assert_eq!(space.position_of(1, 42), DEFAULT_LINES_PER_FILE + 41);
     }
 
     #[test]

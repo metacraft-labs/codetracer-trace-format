@@ -28,17 +28,16 @@
 //!
 //! ## `global_line_index`
 //!
-//! The spec's canonical `global_line_index` is a per-file contiguous integer
-//! over `(line, column)` pairs, interned through `funcs.dat`. That interning
-//! table is a *later* sub-milestone (M23b+). For M23a — which only delivers the
-//! seekable execution stream additively, WITHOUT touching the interning tables
-//! or the value stream — the writer derives a deterministic `global_line_index`
-//! directly from the same `Step{path_id, line}` events that feed `events.log`,
-//! via [`global_line_index`]. The derivation is reversible by the reader: the
-//! mapping packs `(path_id, line)` into a single u64 the same way on both sides,
-//! so a decoded `global_line_index` recovers the exact `(path_id, line)` the
-//! `events.log` step carried. When the canonical interning lands, this packing
-//! is replaced by a `funcs.dat` lookup with no change to the stream's wire shape.
+//! A step's address is the spec's per-file contiguous range: the file's base in
+//! the trace's global position space plus the line's 0-based in-file offset. The
+//! arithmetic, its inverse and the reason there is no second scheme all live in
+//! [`crate::line_position`]; this module holds only the wire encoding around it.
+//!
+//! [`StepStreamBuilder`] carries the trace's [`LinePositionSpace`] and addresses
+//! each `Step{path_id, line}` event through it, so the execution stream and
+//! anything else that addresses a source line — `funcs.dat`, `linehits.tc`, a
+//! reader resolving a step back to a location — agree by construction rather
+//! than by two implementations happening to match.
 //!
 //! # Encoding rules (spec §"Encoding Rules")
 //!
@@ -69,7 +68,9 @@
 //! chunk, and decode forward within it carrying the running absolute value from
 //! the chunk's leading AbsoluteStep — O(1) chunks, no whole-stream decompression.
 
-use codetracer_trace_types::{StepRecord, ThreadId, TraceLowLevelEvent};
+use codetracer_trace_types::{ThreadId, TraceLowLevelEvent};
+
+use crate::line_position::LinePositionSpace;
 
 /// Default number of step records per chunk. Step records are tiny (2-4 bytes,
 /// spec §"Stream Summary"), so a larger chunk size than `calls.dat` keeps the
@@ -108,8 +109,8 @@ pub const TAG_DELTA_COLUMN: u8 = 7;
 
 /// One decoded execution-stream record. This is the on-disk projection of the
 /// compact step encoding; a [`StepStreamRecord::Step`] carries the recovered
-/// `global_line_index` (which [`unpack_global_line_index`] turns back into the
-/// `(path_id, line)` the `events.log` step held).
+/// `global_line_index`, which [`LinePositionSpace::resolve`] turns back into the
+/// `(path_id, line)` the `events.log` step held.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StepStreamRecord {
     /// A source-line step at the given (decoded-to-absolute) `global_line_index`.
@@ -183,43 +184,6 @@ fn decode_signed_varint(data: &[u8], pos: &mut usize) -> Result<i64, String> {
     Ok(((zz >> 1) as i64) ^ -((zz & 1) as i64))
 }
 
-// --- global_line_index packing ------------------------------------------------
-//
-// M23a derivation (see module docs): pack a `Step{path_id, line}` into a single
-// u64 `global_line_index` so the compact AbsoluteStep/DeltaStep encoding has the
-// integer coordinate the spec defines, and the reader can recover the exact
-// (path_id, line) the events.log step carried. `line` lives in the low 32 bits
-// and `path_id` in the high 32 bits. Both are non-negative in practice (Step
-// path/line are recorder-produced indices/line numbers); negative inputs are
-// clamped to 0 so packing is total and never panics.
-
-/// Number of bits reserved for the `line` component of a packed
-/// `global_line_index`. `path_id` occupies the bits above it.
-const GLI_LINE_BITS: u32 = 32;
-const GLI_LINE_MASK: u64 = (1u64 << GLI_LINE_BITS) - 1;
-
-/// Pack a `(path_id, line)` step location into the single `global_line_index`
-/// integer the compact step encoding stores. Inverse of
-/// [`unpack_global_line_index`].
-pub fn pack_global_line_index(path_id: usize, line: i64) -> u64 {
-    let p = path_id as u64;
-    let l = (line.max(0) as u64) & GLI_LINE_MASK;
-    (p << GLI_LINE_BITS) | l
-}
-
-/// Recover the `(path_id, line)` a packed `global_line_index` was built from.
-/// Inverse of [`pack_global_line_index`].
-pub fn unpack_global_line_index(gli: u64) -> (usize, i64) {
-    let path_id = (gli >> GLI_LINE_BITS) as usize;
-    let line = (gli & GLI_LINE_MASK) as i64;
-    (path_id, line)
-}
-
-/// Derive the `global_line_index` for a `Step` event (M23a packing).
-pub fn global_line_index(step: &StepRecord) -> u64 {
-    pack_global_line_index(step.path_id.0, step.line.0)
-}
-
 /// A finalized execution stream: records in stream order plus, for each `Step`
 /// record, whether it must be encoded AbsoluteStep (encoding rules 1-3). The
 /// `forced_absolute` flags are positional over `Step` records only (the i-th
@@ -245,14 +209,15 @@ impl StepStream {
 /// Builds the dedicated execution stream from the same event sequence that
 /// feeds `events.log`, so the two are guaranteed consistent.
 ///
-/// Only the events that belong to the execution stream are observed: `Step`
-/// (⇒ a step record carrying the derived `global_line_index`) and
-/// `ThreadSwitch` (⇒ a ThreadSwitch record). `Call`/`Return` are observed only
-/// to mark the *next* step as AbsoluteStep per the spec encoding rules; they do
-/// not themselves produce execution-stream records. Raise/Catch have no
-/// representation in the legacy `TraceLowLevelEvent` enum, so the builder never
-/// emits them today — but the wire format and reader support their tags so the
-/// stream is forward-compatible when recorders begin emitting them (M23b+).
+/// Only the events that belong to the execution stream are observed: `Path`
+/// (⇒ a file joins the position space), `Step` (⇒ a step record carrying that
+/// step's address) and `ThreadSwitch` (⇒ a ThreadSwitch record). `Call`/`Return`
+/// are observed only to mark the *next* step as AbsoluteStep per the spec
+/// encoding rules; they do not themselves produce execution-stream records.
+/// Raise/Catch have no representation in the legacy `TraceLowLevelEvent` enum,
+/// so the builder never emits them today — but the wire format and reader
+/// support their tags so the stream is forward-compatible when recorders begin
+/// emitting them (M23b+).
 #[derive(Default)]
 pub struct StepStreamBuilder {
     /// Finalized records in stream order.
@@ -262,6 +227,10 @@ pub struct StepStreamBuilder {
     /// Whether the next `Step` must be encoded as AbsoluteStep (the first step,
     /// or the step right after a Call/Return/ThreadSwitch). Starts true (rule 1).
     next_is_absolute: bool,
+    /// The trace's address space, grown as `Path` events intern files. A reader
+    /// rebuilds the same space from `paths.dat` and inverts every address with
+    /// it — see [`crate::line_position`].
+    space: LinePositionSpace,
 }
 
 impl StepStreamBuilder {
@@ -270,15 +239,29 @@ impl StepStreamBuilder {
             records: Vec::new(),
             forced_absolute: Vec::new(),
             next_is_absolute: true,
+            space: LinePositionSpace::new(),
         }
+    }
+
+    /// The address space this builder has addressed its steps in. A file joins
+    /// it when its `Path` event is observed, and appending never moves an
+    /// earlier file's addresses.
+    pub fn position_space(&self) -> &LinePositionSpace {
+        &self.space
     }
 
     /// Feed one event in stream order.
     pub fn observe(&mut self, event: &TraceLowLevelEvent) {
         match event {
+            TraceLowLevelEvent::Path(_) => {
+                // Paths are interned in event order, so the id this event
+                // assigns is the number of paths already seen.
+                let next_id = self.space.file_count();
+                self.space.ensure_file(next_id);
+            }
             TraceLowLevelEvent::Step(step) => {
                 self.records.push(StepStreamRecord::Step {
-                    global_line_index: global_line_index(step),
+                    global_line_index: self.space.global_index(step.path_id.0, step.line.0),
                 });
                 self.forced_absolute.push(self.next_is_absolute);
                 self.next_is_absolute = false;
@@ -542,7 +525,7 @@ pub fn encode_step_stream(stream: &StepStream, chunk_size: usize, zstd_level: i3
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codetracer_trace_types::{Line, PathId};
+    use codetracer_trace_types::{Line, PathId, StepRecord};
 
     fn step(path_id: usize, line: i64) -> TraceLowLevelEvent {
         TraceLowLevelEvent::Step(StepRecord {
@@ -572,14 +555,32 @@ mod tests {
         }
     }
 
+    /// The builder addresses a step through the trace's own position space, and
+    /// the space inverts it back to the step's location. Two files, because one
+    /// file cannot show how the addresses are apportioned.
     #[test]
-    fn gli_pack_unpack_roundtrip() {
-        for (p, l) in [(0usize, 0i64), (0, 1), (3, 42), (1234, 999999), (u32::MAX as usize, 7)] {
-            let gli = pack_global_line_index(p, l);
-            assert_eq!(unpack_global_line_index(gli), (p, l));
+    fn a_steps_address_resolves_to_the_step() {
+        let mut builder = StepStreamBuilder::new();
+        builder.observe(&TraceLowLevelEvent::Path("/a.rs".into()));
+        builder.observe(&TraceLowLevelEvent::Path("/b.rs".into()));
+        let recorded = [(0usize, 1i64), (0, 42), (1, 1), (1, 999)];
+        for (path_id, line) in recorded {
+            builder.observe(&step(path_id, line));
         }
-        // Negative line clamps to 0 (total, never panics).
-        assert_eq!(unpack_global_line_index(pack_global_line_index(0, -9)), (0, 0));
+
+        let space = builder.position_space().clone();
+        assert_eq!(space.file_count(), 2, "both Path events joined the space");
+        let stream = builder.finish();
+        for (record, (path_id, line)) in stream.records.iter().zip(recorded) {
+            let StepStreamRecord::Step { global_line_index } = record else {
+                panic!("expected a Step record, got {record:?}");
+            };
+            assert_eq!(
+                space.resolve(*global_line_index),
+                Ok((path_id, line)),
+                "address {global_line_index} was built for (path {path_id}, line {line})"
+            );
+        }
     }
 
     #[test]

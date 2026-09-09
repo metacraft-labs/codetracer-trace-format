@@ -175,12 +175,7 @@ extern "C" {
     // Every string is (ptr, len), never NUL-terminated — a host string may
     // legally contain NUL (Ruby's can), and `str_to_cstring` on that path is
     // a known process-wedge regression.
-    fn trace_writer_ensure_marker_id(
-        handle: *mut std::ffi::c_void,
-        label: *const u8,
-        label_len: usize,
-        out_id: *mut u64,
-    ) -> i32;
+    fn trace_writer_ensure_marker_id(handle: *mut std::ffi::c_void, label: *const u8, label_len: usize, out_id: *mut u64) -> i32;
     fn trace_writer_mark_correlation_by_id(
         handle: *mut std::ffi::c_void,
         marker_id: u64,
@@ -1851,9 +1846,7 @@ impl NimTraceWriter {
     /// cache and they would drift.
     pub fn ensure_marker_id(&mut self, label: &str) -> Result<u64, Box<dyn Error>> {
         let mut id: u64 = 0;
-        let rc = unsafe {
-            trace_writer_ensure_marker_id(self.handle, label.as_ptr(), label.len(), &mut id)
-        };
+        let rc = unsafe { trace_writer_ensure_marker_id(self.handle, label.as_ptr(), label.len(), &mut id) };
         if rc != 0 {
             return Err(format!("trace_writer_ensure_marker_id: {}", last_error()).into());
         }
@@ -2966,8 +2959,15 @@ impl TraceWriter for NimTraceWriter {
         show_text: &str,
     ) -> Result<(), Box<dyn Error>> {
         NimTraceWriter::mark_correlation_by_id(
-            self, marker_id, boundary_label, direction, key_value, show_value,
-            description, key_text, show_text,
+            self,
+            marker_id,
+            boundary_label,
+            direction,
+            key_value,
+            show_value,
+            description,
+            key_text,
+            show_text,
         )
     }
     fn mark_correlation(
@@ -2980,10 +2980,7 @@ impl TraceWriter for NimTraceWriter {
         key_text: &str,
         show_text: &str,
     ) -> Result<(), Box<dyn Error>> {
-        NimTraceWriter::mark_correlation(
-            self, direction, boundary_id, key_value, show_value, description,
-            key_text, show_text,
-        )
+        NimTraceWriter::mark_correlation(self, direction, boundary_id, key_value, show_value, description, key_text, show_text)
     }
     fn mark_span_coverage(
         &mut self,
@@ -2992,9 +2989,7 @@ impl TraceWriter for NimTraceWriter {
         wall_time_unix_ns: u64,
         monotonic_time_ns: u64,
     ) -> Result<(), Box<dyn Error>> {
-        NimTraceWriter::mark_span_coverage(
-            self, trace_id, span_id, wall_time_unix_ns, monotonic_time_ns,
-        )
+        NimTraceWriter::mark_span_coverage(self, trace_id, span_id, wall_time_unix_ns, monotonic_time_ns)
     }
     fn mark_span_coverage_hex(
         &mut self,
@@ -3003,9 +2998,7 @@ impl TraceWriter for NimTraceWriter {
         wall_time_unix_ns: u64,
         monotonic_time_ns: u64,
     ) -> Result<(), Box<dyn Error>> {
-        NimTraceWriter::mark_span_coverage_hex(
-            self, trace_id_hex, span_id_hex, wall_time_unix_ns, monotonic_time_ns,
-        )
+        NimTraceWriter::mark_span_coverage_hex(self, trace_id_hex, span_id_hex, wall_time_unix_ns, monotonic_time_ns)
     }
     fn flush_spans(&mut self) -> Result<(), Box<dyn Error>> {
         NimTraceWriter::flush_spans(self)

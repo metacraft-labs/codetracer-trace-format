@@ -120,15 +120,32 @@ pub const FLAG_HAS_INTERNING_TABLES: u16 = 0x1000;
 /// span-bearing container outright. Rollout consequence: reader support must
 /// ship everywhere before any writer sets this bit.
 ///
-/// Bits 14 and 15 are the last two free bits and are deliberately left
-/// UNALLOCATED by RS-M1; whether the final bit becomes an "extended flag word
-/// follows" escape (or the `u16` is widened by a version bump) is a format
-/// decision that needs its own milestone.
+/// Bit 14 is now `FLAG_HAS_CORRELATION_INDEX` (below); bit 15 is the last free
+/// bit, and whether it becomes an "extended flag word follows" escape (or the
+/// `u16` is widened by a version bump) is a format decision that needs its own
+/// milestone.
 ///
 /// Must match the canonical Nim writer's `meta_dat.nim` bit 13
 /// (`FlagHasSpanStream`) and the db-backend
 /// `ctfs_trace_reader::meta_dat::FLAG_HAS_SPAN_STREAM` (RS-M2).
 pub const FLAG_HAS_SPAN_STREAM: u16 = 0x2000;
+
+/// Flag bit 14 — the container ships `corrmark.ns`, the record-time index of
+/// the distributed-trace spans and boundary crossings the recording covers,
+/// plus the `markers.dat` / `markers.off` table its boundary labels resolve
+/// through.
+///
+/// A HINT, not a gate: the root file-entry array is the authority, and it is
+/// the entry's presence that distinguishes "never indexed" from "indexed and
+/// covering nothing". Recognising the bit still matters, because a reader
+/// refuses any container carrying a flag outside its known mask — so without
+/// it a reader would reject every marker-bearing recording instead of ignoring
+/// an index it has no use for.
+///
+/// Must match the canonical Nim writer's `meta_dat.nim` bit 14
+/// (`FlagHasCorrelationIndex`) and the db-backend
+/// `ctfs_trace_reader::meta_dat::FLAG_HAS_CORRELATION_INDEX`.
+pub const FLAG_HAS_CORRELATION_INDEX: u16 = 0x4000;
 
 fn encode_varint(mut value: u64, out: &mut Vec<u8>) {
     loop {

@@ -173,12 +173,14 @@ fn test_ctfs_container_has_expected_files() {
     let mut r = codetracer_ctfs::CtfsReader::open(&ct_path).unwrap();
     let files = r.list_files();
     assert!(files.contains(&"events.log".to_string()), "Missing events.log");
-    assert!(files.contains(&"meta.json".to_string()), "Missing meta.json");
-    assert!(files.contains(&"paths.json".to_string()), "Missing paths.json");
+    assert!(files.contains(&"meta.dat".to_string()), "Missing meta.dat");
+    // The legacy JSON sidecars are retired.
+    assert!(!files.contains(&"meta.json".to_string()), "meta.json was written");
+    assert!(!files.contains(&"paths.json".to_string()), "paths.json was written");
 
-    // Verify meta.json content
-    let meta_data = r.read_file("meta.json").unwrap();
-    let meta: codetracer_trace_types::TraceMetadata = serde_json::from_slice(&meta_data).unwrap();
+    // Verify meta.dat content
+    let meta_data = r.read_file("meta.dat").unwrap();
+    let meta = codetracer_trace_writer::meta_dat::decode_meta_dat(&meta_data).expect("meta.dat must decode");
     assert_eq!(meta.program, "test_program");
     // M-REC-1: the recorder must have stamped a canonical UUIDv7
     // recording_id.  Parse it back to verify the version and variant
@@ -191,10 +193,8 @@ fn test_ctfs_container_has_expected_files() {
         parsed_id.get_version_num()
     );
 
-    // Verify paths.json content
-    let paths_data = r.read_file("paths.json").unwrap();
-    let paths: Vec<std::path::PathBuf> = serde_json::from_slice(&paths_data).unwrap();
-    assert!(!paths.is_empty(), "Expected at least one path registered");
+    // meta.dat carries the registered paths.
+    assert!(!meta.paths.is_empty(), "Expected at least one path registered");
 }
 
 // ---- Split Binary format tests ----
@@ -350,6 +350,7 @@ fn test_ctfs_container_has_format_file() {
     let files = r.list_files();
     assert!(files.contains(&"events.fmt".to_string()), "Missing events.fmt, got: {:?}", files);
     assert!(files.contains(&"events.log".to_string()), "Missing events.log");
-    assert!(files.contains(&"meta.json".to_string()), "Missing meta.json");
-    assert!(files.contains(&"paths.json".to_string()), "Missing paths.json");
+    assert!(files.contains(&"meta.dat".to_string()), "Missing meta.dat");
+    assert!(!files.contains(&"meta.json".to_string()), "meta.json was written");
+    assert!(!files.contains(&"paths.json".to_string()), "paths.json was written");
 }

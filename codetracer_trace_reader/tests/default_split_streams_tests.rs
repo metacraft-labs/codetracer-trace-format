@@ -173,10 +173,19 @@ fn disabled_bundle_is_events_log_only_legacy() {
     for f in SPLIT_DATA_FILES {
         assert!(r.read_file(f).is_err(), "legacy (splits-off) bundle must NOT carry split file `{f}`");
     }
-    assert!(
-        r.read_file("meta.dat").is_err(),
-        "legacy (splits-off) bundle must NOT carry meta.dat (flags-off ⇒ byte-for-byte legacy)"
-    );
+    // meta.dat IS carried, even with every split stream off.
+    //
+    // It used to be omitted so a flags-off bundle stayed byte-for-byte
+    // identical to the legacy container — which was only tenable while the
+    // retired `meta.json` sidecar carried the metadata for that case. With the
+    // sidecars gone, omitting it here would leave this bundle with no metadata
+    // document at all.
+    let meta = codetracer_trace_writer::meta_dat::decode_meta_dat(
+        &r.read_file("meta.dat").expect("splits-off bundle must still carry meta.dat"),
+    )
+    .expect("meta.dat must decode");
+    assert_eq!(meta.flags, 0, "a splits-off bundle records no stream-capability flags");
+    assert!(!meta.recording_id.is_empty(), "meta.dat must carry a recording_id");
 
     // Events still round-trip through the legacy events.log path.
     let mut reader = codetracer_trace_reader::create_trace_reader(codetracer_trace_reader::TraceEventsFileFormat::Ctfs);

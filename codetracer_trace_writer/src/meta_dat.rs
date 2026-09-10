@@ -160,6 +160,10 @@ pub const FLAG_HAS_INTERNING_TABLES: u16 = 0x1000;
 /// span-bearing container outright. Rollout consequence: reader support must
 /// ship everywhere before any writer sets this bit.
 ///
+/// Bit 14 is `FLAG_HAS_LINE_COUNT_TABLE` and bit 15 is
+/// `FLAG_HAS_CORRELATION_INDEX`, so the flag word is now fully allocated.
+/// A further flag needs a `version` bump, not a spare bit.
+///
 /// Must match the canonical Nim writer's `meta_dat.nim` bit 13
 /// (`FlagHasSpanStream`) and the db-backend
 /// `ctfs_trace_reader::meta_dat::FLAG_HAS_SPAN_STREAM` (RS-M2).
@@ -193,10 +197,33 @@ pub const FLAG_HAS_SPAN_STREAM: u16 = 0x2000;
 /// (`FlagHasLineCountTable`) and the db-backend
 /// `ctfs_trace_reader::meta_dat::FLAG_HAS_LINE_COUNT_TABLE`.
 ///
-/// Bit 15 is the last free bit; whether it becomes an "extended flag word
-/// follows" escape (or the `u16` is widened by a version bump) is a format
-/// decision that needs its own milestone.
+/// Bit 15 is [`FLAG_HAS_CORRELATION_INDEX`], which spends the last one.
+/// Widening the flag word — an "extended flag word follows" escape, or a
+/// `u16` widened by a version bump — is a format decision that needs its own
+/// milestone, and the next flag cannot land without it.
 pub const FLAG_HAS_LINE_COUNT_TABLE: u16 = 0x4000;
+
+/// Flag bit 15 — the container ships `corrmark.ns`, the record-time index of
+/// the distributed-trace spans and boundary crossings the recording covers,
+/// plus the `markers.dat` / `markers.off` table its boundary labels resolve
+/// through.
+///
+/// A HINT, not a gate: the root file-entry array is the authority, and it is
+/// the entry's presence that distinguishes "never indexed" from "indexed and
+/// covering nothing". Recognising the bit still matters, because a reader
+/// refuses any container carrying a flag outside its known mask — so without
+/// it a reader would reject every marker-bearing recording instead of ignoring
+/// an index it has no use for.
+///
+/// This index was drafted against bit 14 while [`FLAG_HAS_LINE_COUNT_TABLE`]
+/// was taking the same bit on `dev`. Both describe the container, so the two
+/// meanings could not share a bit: the line-count table shipped first and kept
+/// 14, and the index took 15. Nothing on disk carried either bit at the time.
+///
+/// Must match the canonical Nim writer's `meta_dat.nim` bit 15
+/// (`FlagHasCorrelationIndex`) and the db-backend
+/// `ctfs_trace_reader::meta_dat::FLAG_HAS_CORRELATION_INDEX`.
+pub const FLAG_HAS_CORRELATION_INDEX: u16 = 0x8000;
 
 fn encode_varint(mut value: u64, out: &mut Vec<u8>) {
     loop {

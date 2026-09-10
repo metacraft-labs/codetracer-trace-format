@@ -995,28 +995,21 @@ impl TraceWriter for CtfsTraceWriter {
             let format_handle = writer.add_file("events.fmt")?;
             writer.write(format_handle, format_name)?;
 
-            // Write metadata as meta.json.
             // M-REC-1: mint a UUIDv7 recording_id for this trace.
             // Recorders that need to pin a pre-existing id (the
             // import flow, M-REC-7) should construct TraceMetadata
             // directly with their own id and then write it out.
+            //
+            // The metadata itself is written as `meta.dat` below; the legacy
+            // `meta.json` + `paths.json` JSON sidecars are retired.
             let trace_metadata =
                 codetracer_trace_types::TraceMetadata::new(self.base.program.clone(), self.base.args.clone(), self.base.workdir.clone());
-            let meta_json = serde_json::to_string(&trace_metadata)?;
-            let meta_handle = writer.add_file("meta.json")?;
-            writer.write(meta_handle, meta_json.as_bytes())?;
-
-            // Write paths as paths.json
-            let paths_json = serde_json::to_string(&self.base.path_list)?;
-            let paths_handle = writer.add_file("paths.json")?;
-            writer.write(paths_handle, paths_json.as_bytes())?;
 
             // M17a/M23a: emit the dedicated call stream and/or the dedicated
             // execution (step) stream, each with its companion seekable index,
             // plus a single meta.dat carrying the corresponding capability
-            // flags. This is ADDITIVE: events.log / events.fmt / meta.json /
-            // paths.json above are unchanged, and a reader that does not know a
-            // flag simply ignores the extra dat/idx files and meta.dat.
+            // flags. A reader that does not know a flag simply ignores the
+            // extra dat/idx files.
             let mut stream_flags: u16 = 0;
 
             // M17a: the dedicated call stream + companion index.
@@ -1144,24 +1137,25 @@ impl TraceWriter for CtfsTraceWriter {
                 }
             }
 
-            // Stamp meta.dat with the combined stream-capability flags. The
-            // recording_id mirrors the meta.json minted above so the two
-            // metadata files agree on the recording identity. Only written when
-            // at least one dedicated stream is present, so a flags-off bundle is
-            // byte-for-byte the legacy container.
-            if stream_flags != 0 {
-                let meta_dat = encode_meta_dat(
-                    &trace_metadata.recording_id,
-                    &self.base.program,
-                    &self.base.args,
-                    &self.base.workdir.to_string_lossy(),
-                    "",
-                    &self.base.path_list.iter().map(|p| p.to_string_lossy().into_owned()).collect::<Vec<_>>(),
-                    stream_flags,
-                );
-                let meta_dat_handle = writer.add_file("meta.dat")?;
-                writer.write(meta_dat_handle, &meta_dat)?;
-            }
+            // Stamp meta.dat with the combined stream-capability flags.
+            //
+            // Written UNCONDITIONALLY. This used to be gated on
+            // `stream_flags != 0`, so that a flags-off bundle stayed
+            // byte-for-byte identical to the legacy container — which was only
+            // safe while `meta.json` carried the metadata for that case. With
+            // the JSON sidecars retired, gating this would leave a flags-off
+            // bundle with no metadata document at all.
+            let meta_dat = encode_meta_dat(
+                &trace_metadata.recording_id,
+                &self.base.program,
+                &self.base.args,
+                &self.base.workdir.to_string_lossy(),
+                "",
+                &self.base.path_list.iter().map(|p| p.to_string_lossy().into_owned()).collect::<Vec<_>>(),
+                stream_flags,
+            );
+            let meta_dat_handle = writer.add_file("meta.dat")?;
+            writer.write(meta_dat_handle, &meta_dat)?;
         }
 
         // Close the CTFS container (takes ownership)

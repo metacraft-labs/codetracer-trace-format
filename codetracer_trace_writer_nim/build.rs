@@ -14,9 +14,36 @@
 
 use std::collections::hash_map::DefaultHasher;
 use std::env;
+use std::fs;
 use std::hash::{Hash, Hasher};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+
+/// Recursively collect the Nim source files under `dir` (`.nim` / `.nims` /
+/// `.cfg` / `.nimble`), skipping VCS and build-output directories. Used to make
+/// this crate rebuild when the SIBLING `codetracer-trace-format-nim` sources
+/// change — see the call site for why Cargo would otherwise miss them.
+fn collect_nim_sources(dir: &Path, out: &mut Vec<PathBuf>) {
+    let Ok(entries) = fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+            // Never descend into VCS metadata or Nim/Cargo build output — those
+            // change on every build and would defeat the cache key below.
+            if name == ".git" || name == "nimcache" || name == "target" {
+                continue;
+            }
+            collect_nim_sources(&path, out);
+        } else if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+            if matches!(ext, "nim" | "nims" | "cfg" | "nimble") {
+                out.push(path);
+            }
+        }
+    }
+}
 
 fn main() {
     let manifest_dir = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR is set by Cargo"));
@@ -47,6 +74,32 @@ fn main() {
         ffi_entry.display(),
     );
 
+    // --- track the Nim sources so a change on that side forces a rebuild --
+    // `nim_src` lives in the SIBLING `codetracer-trace-format-nim` repo, which
+    // Cargo does not track: it fingerprints only this crate's own files. So
+    // when only the Nim sources advance (e.g. the meta.dat writer moving from
+    // schema v3 to v4) but nothing in this crate changes, Cargo would consider
+    // the build script fresh, SKIP it, and relink the statically-cached Nim
+    // library compiled from the OLD sources — a recorder would then keep
+    // emitting the old format against a decoder that has moved on. Emit
+    // `rerun-if-changed` for every Nim source file so any such change re-runs
+    // this script, and fold a content hash of those sources into the nimcache
+    // key below so a stale nimcache is never reused across a source change.
+    println!("cargo:rerun-if-env-changed=CODETRACER_TRACE_FORMAT_NIM_DIR");
+    let mut nim_sources = Vec::new();
+    collect_nim_sources(&nim_src, &mut nim_sources);
+    nim_sources.sort();
+    nim_sources.dedup();
+    let mut nim_src_hasher = DefaultHasher::new();
+    for src in &nim_sources {
+        println!("cargo:rerun-if-changed={}", src.display());
+        src.to_string_lossy().hash(&mut nim_src_hasher);
+        if let Ok(bytes) = fs::read(src) {
+            bytes.hash(&mut nim_src_hasher);
+        }
+    }
+    let nim_src_hash = nim_src_hasher.finish();
+
     // --- choose a short nimcache directory -------------------------------
     // When the nimcache sits inside a deeply nested OUT_DIR (e.g. a napi-rs
     // build: <repo>/crates/<x>/target/<triple>/release/build/<hash>/out),
@@ -58,6 +111,9 @@ fn main() {
     // cargo build unit gets its own cache and incremental reuse still works.
     let mut hasher = DefaultHasher::new();
     out_dir.hash(&mut hasher);
+    // Include the Nim source hash so a source change lands in a fresh nimcache
+    // rather than incrementally reusing objects compiled from the old sources.
+    nim_src_hash.hash(&mut hasher);
     let nimcache = env::temp_dir().join("ctnw").join(format!("{:016x}", hasher.finish()));
 
     // --- resolve the Nim sources' nimble dependencies --------------------

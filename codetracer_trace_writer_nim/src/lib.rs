@@ -276,6 +276,23 @@ extern "C" {
         line_lengths: *const u32,
     ) -> i32;
 
+    // Opt the writer into recording a per-file line count in every
+    // paths.dat record (meta.dat bit 14, FLAG_HAS_LINE_COUNT_TABLE), so a
+    // reader lays the line-only position space out from the recorded sizes
+    // instead of assuming DEFAULT_LINES_PER_FILE for each file.
+    //
+    // Must be called before the first path is registered, and is refused on
+    // a column-aware writer. After it, every path MUST come through
+    // `trace_writer_register_path_with_line_count` — the implicit
+    // registration `trace_writer_register_step` performs has no count to
+    // record and is refused by name.
+    fn trace_writer_enable_line_count_table(handle: *mut std::ffi::c_void) -> i32;
+
+    // Register a path together with the number of lines its file has, which
+    // sizes the file's slot in the line-only position space. A count of 0 is
+    // refused: a file sized 0 shares its base with the next one.
+    fn trace_writer_register_path_with_line_count(handle: *mut std::ffi::c_void, path: *const std::os::raw::c_char, line_count: u64) -> i32;
+
     // Alternate Source Views (Deminification Support — spec section
     // "Alternate Source Views" in
     // `codetracer-trace-format-spec/internal-files.md`).  Buffers one
@@ -516,7 +533,15 @@ fn ensure_nim_initialized() {
 // Error helpers
 // ---------------------------------------------------------------------------
 
-fn last_error() -> String {
+/// The Nim writer's last error message, or a placeholder when it has none.
+///
+/// Public because several C entry points return `void`: `trace_writer_start`,
+/// `trace_writer_register_step` and `ct_assignment_with_column` have no status
+/// to hand back, so this channel is the only way a caller learns that a step
+/// was refused rather than recorded. The slot is process-global and sticky —
+/// nothing clears it on success — so read it against a known state (immediately
+/// after the call being tested) rather than as a running health check.
+pub fn last_error() -> String {
     unsafe {
         let ptr = trace_writer_last_error();
         if ptr.is_null() {
@@ -2111,6 +2136,47 @@ impl NimTraceWriter {
             line_lengths.as_ptr()
         };
         let rc = unsafe { trace_writer_register_path_with_line_lengths(self.handle, c_path.as_ptr(), line_count, line_lengths_ptr) };
+        if rc != 0 {
+            return Err(last_error().into());
+        }
+        Ok(PathId(0))
+    }
+
+    /// Opt this writer into recording a per-file line count in every
+    /// `paths.dat` record (`meta.dat` bit 14).
+    ///
+    /// After this call every path MUST be registered through
+    /// [`register_path_with_line_count`](Self::register_path_with_line_count):
+    /// the implicit registration a step performs for an unseen path has no
+    /// count to record and is refused by name, so a caller cannot end up with
+    /// a half-stated table by forgetting a call. A recorder that cannot count
+    /// a file's lines passes the ceiling it wants the file laid out with
+    /// (conventionally the `DEFAULT_LINES_PER_FILE` value of 100000), so the size
+    /// the space uses is the size the container states.
+    ///
+    /// Must be called before the first path is registered; refused on a
+    /// column-aware writer, whose Layout A records already carry the file's
+    /// `line_count` and which sizes files in addressable columns rather than
+    /// lines.
+    pub fn enable_line_count_table(&mut self) -> Result<(), Box<dyn Error>> {
+        let rc = unsafe { trace_writer_enable_line_count_table(self.handle) };
+        if rc != 0 {
+            return Err(last_error().into());
+        }
+        Ok(())
+    }
+
+    /// Register a source path together with the number of lines its file has.
+    ///
+    /// Only meaningful on a writer that called
+    /// [`enable_line_count_table`](Self::enable_line_count_table). A
+    /// `line_count` of 0 is refused rather than defaulted. The returned
+    /// `PathId(0)` is a placeholder mirroring
+    /// [`ensure_path_id`](Self::ensure_path_id) — the Nim library owns the
+    /// real ID assignment.
+    pub fn register_path_with_line_count(&mut self, path: &Path, line_count: u64) -> Result<PathId, Box<dyn Error>> {
+        let c_path = path_to_cstring(path);
+        let rc = unsafe { trace_writer_register_path_with_line_count(self.handle, c_path.as_ptr(), line_count) };
         if rc != 0 {
             return Err(last_error().into());
         }

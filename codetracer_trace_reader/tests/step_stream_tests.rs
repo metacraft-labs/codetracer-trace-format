@@ -6,8 +6,9 @@
 //!      (AbsoluteStep/DeltaStep decoded back to absolute `global_line_index`),
 //!      and
 //!   2. re-derived from the unchanged `events.log` (read with the normal
-//!      reader): every `Step{path_id, line}` event's expected
-//!      `global_line_index` is computed with the SAME packing the writer uses.
+//!      reader): every `Step{path_id, line}` event is addressed through a
+//!      position space rebuilt from the trace's own `Path` events, the way a
+//!      reader rebuilds it from `paths.dat`.
 //! The two MUST agree — proving `steps.dat` is consistent with the unified
 //! stream it was split from, and that AbsoluteStep/DeltaStep decode (incl.
 //! across a chunk boundary) recovers the exact step sequence. A flag-off
@@ -18,7 +19,8 @@ use std::path::Path;
 
 use codetracer_trace_types::*;
 use codetracer_trace_writer::ctfs_writer::CtfsTraceWriter;
-use codetracer_trace_writer::step_stream::{StepStreamRecord, global_line_index};
+use codetracer_trace_writer::line_position::LinePositionSpace;
+use codetracer_trace_writer::step_stream::StepStreamRecord;
 use codetracer_trace_writer::trace_writer::TraceWriter;
 
 /// Write a trace whose steps exercise: a forced-absolute first step, sequential
@@ -50,13 +52,15 @@ fn write_trace(dir: &tempfile::TempDir, with_step_stream: bool, steps_chunk_size
         lines.push(ln);
     }
 
-    // A large jump that exceeds the DeltaStep range → forces AbsoluteStep.
-    // global_line_index packs path_id<<32 | line, so even a modest line jump
-    // here stays in range; instead jump to a far line to exceed MAX_DELTA.
-    TraceWriter::register_step(&mut writer, src, Line(2_000_000));
-    lines.push(2_000_000);
-    TraceWriter::register_step(&mut writer, src, Line(2_000_001));
-    lines.push(2_000_001);
+    // A jump wide enough to exceed the DeltaStep range → forces AbsoluteStep.
+    // Within one file the addresses are one per line and the file's slot is
+    // 100_000 addresses, so no in-file jump can reach MAX_DELTA; crossing into
+    // a second file's range does.
+    let other = Path::new("/test/far.rs");
+    TraceWriter::register_step(&mut writer, other, Line(50));
+    lines.push(50);
+    TraceWriter::register_step(&mut writer, other, Line(51));
+    lines.push(51);
 
     // helper(): post-call → AbsoluteStep, then small deltas.
     TraceWriter::register_call(&mut writer, helper, vec![]);
@@ -78,16 +82,27 @@ fn write_trace(dir: &tempfile::TempDir, with_step_stream: bool, steps_chunk_size
 /// Re-derive the expected execution-stream `Step` records straight from
 /// `events.log` (read with the unchanged unified-stream reader): each `Step`
 /// event maps to its packed `global_line_index`.
-fn expected_step_glis_from_events(ct_path: &Path) -> Vec<u64> {
+fn expected_step_glis_from_events(ct_path: &Path) -> (Vec<u64>, Vec<(usize, i64)>) {
     let mut reader = codetracer_trace_reader::create_trace_reader(codetracer_trace_reader::TraceEventsFileFormat::Ctfs);
     let events = reader.load_trace_events(ct_path).unwrap();
+    let mut space = LinePositionSpace::new();
+    let mut paths_seen = 0usize;
     let mut out = Vec::new();
+    let mut locations = Vec::new();
     for ev in &events {
-        if let TraceLowLevelEvent::Step(s) = ev {
-            out.push(global_line_index(s));
+        match ev {
+            TraceLowLevelEvent::Path(_) => {
+                space.ensure_file(paths_seen);
+                paths_seen += 1;
+            }
+            TraceLowLevelEvent::Step(s) => {
+                out.push(space.global_index(s.path_id.0, s.line.0));
+                locations.push((s.path_id.0, s.line.0));
+            }
+            _ => {}
         }
     }
-    out
+    (out, locations)
 }
 
 #[test]
@@ -111,12 +126,23 @@ fn steps_dat_matches_events_log() {
         })
         .collect();
 
-    let expected = expected_step_glis_from_events(&ct_path);
+    let (expected, locations) = expected_step_glis_from_events(&ct_path);
     assert_eq!(
         dat_glis, expected,
         "steps.dat decoded global_line_indices must equal the events.log-derived step sequence"
     );
     assert!(!expected.is_empty(), "the trace must have produced steps");
+
+    // And the addresses name the locations: the trace registers two files, so a
+    // wrong apportionment shows up as a wrong file or a wrong line here.
+    let space = LinePositionSpace::uniform(2);
+    for (i, (address, location)) in dat_glis.iter().zip(locations.iter()).enumerate() {
+        assert_eq!(
+            space.resolve(*address),
+            Ok(*location),
+            "step {i}'s address {address} must resolve to the location events.log recorded"
+        );
+    }
 }
 
 #[test]
@@ -126,7 +152,7 @@ fn seek_to_step_across_chunk_boundary() {
     let (ct_path, _lines) = write_trace(&dir, true, 4);
 
     let mut ss = codetracer_trace_reader::step_stream_reader::open_step_stream(&ct_path).unwrap().unwrap();
-    let expected = expected_step_glis_from_events(&ct_path);
+    let (expected, _) = expected_step_glis_from_events(&ct_path);
     assert_eq!(ss.count() as usize, expected.len());
 
     // Seek to a step in a later chunk (index well past chunk 0): it must decode
@@ -224,6 +250,6 @@ fn legacy_trace_has_no_step_stream() {
 
     // ...and the unified events.log still reads exactly as before, with the
     // same step sequence derivable from it.
-    let expected = expected_step_glis_from_events(&ct_path);
+    let (expected, _) = expected_step_glis_from_events(&ct_path);
     assert!(!expected.is_empty());
 }

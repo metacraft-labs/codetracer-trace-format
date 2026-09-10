@@ -1,6 +1,14 @@
 //! M24a-1 cross-read proof: a NEW Nim-written production bundle's `steps.dat`
-//! is read by the canonical Rust `StepStreamReader`, and the decoded absolute
-//! `global_line_index` sequence equals the steps the Nim writer recorded.
+//! is read by the canonical Rust `StepStreamReader`, the decoded absolute
+//! `global_line_index` sequence equals the steps the Nim writer recorded, and
+//! every one of those addresses names a location inside the bundle's own
+//! address space.
+//!
+//! The last part is not decoration. Two readers comparing integers agree
+//! whatever those integers mean, so the integer comparison alone passed while
+//! the two sides disagreed about which `(path_id, line)` an integer named — a
+//! disagreement that only shows on a bundle with more than one source file,
+//! because file 0's base is 0 under every apportionment.
 //!
 //! This is the load-bearing byte-compatibility test for the M24a-1
 //! deliverable: the Nim multi-stream writer now emits the SPEC-canonical
@@ -21,7 +29,9 @@
 //! is a no-op: there is no Nim fixture to cross-read. The Nim driver is the one
 //! that makes this assertion load-bearing in CI.
 
+use codetracer_trace_reader::interning_tables_reader::open_interning_tables;
 use codetracer_trace_reader::step_stream_reader::open_step_stream;
+use codetracer_trace_writer::line_position::LinePositionSpace;
 use codetracer_trace_writer::step_stream::StepStreamRecord;
 
 #[test]
@@ -75,6 +85,24 @@ fn nim_steps_dat_read_by_rust_reader() {
         "Rust StepStreamReader must decode the Nim-written steps.dat to the \
          exact global_line_index sequence the Nim reader decoded — byte-compatible"
     );
+
+    // Every address must name a location this bundle can hold. The space is
+    // rebuilt from the bundle's own path table, exactly as a reader rebuilds it;
+    // an address from a different scheme lands above the top of it and is
+    // refused rather than answered.
+    let tables = open_interning_tables(std::path::Path::new(&fixture))
+        .expect("open the Nim bundle's interning tables")
+        .expect("a Nim-written bundle carries paths.dat");
+    let space = LinePositionSpace::uniform(tables.path_count());
+    assert!(tables.path_count() > 0, "the bundle must register at least one path");
+    for (i, address) in decoded_glis.iter().enumerate() {
+        let (path_id, line) = space.resolve(*address).unwrap_or_else(|e| panic!("step {i}: {e}"));
+        assert!(
+            path_id < tables.path_count(),
+            "step {i} resolves to path {path_id}, which the bundle does not register"
+        );
+        assert!(line >= 1, "step {i} resolves to line {line}; lines are 1-based");
+    }
 
     // Spot-check seeking into a later chunk decodes correctly (independent
     // per-chunk decode over the Nim-produced chunk boundaries).

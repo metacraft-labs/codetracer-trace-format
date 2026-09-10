@@ -45,26 +45,31 @@
 
 use codetracer_ctfs::CtfsReader;
 use codetracer_trace_types::{TypeKind, TypeSpecificInfo};
-use codetracer_trace_writer::meta_dat::meta_dat_has_interning_tables;
-use codetracer_trace_writer::step_stream::unpack_global_line_index;
+use codetracer_trace_writer::line_position::{LinePositionError, LinePositionSpace};
+use codetracer_trace_writer::meta_dat::{meta_dat_has_interning_tables, meta_dat_has_line_count_table};
 use num_traits::FromPrimitive;
 
 /// A decoded `funcs.dat` record: the `global_line_index` and the function name.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FuncRecord {
-    /// Packed source location of the function (see
-    /// `codetracer_trace_writer::step_stream::pack_global_line_index`); use
-    /// [`FuncRecord::path_id_and_line`] to recover `(path_id, line)`.
+    /// The address of the function's declaration site in the trace's global
+    /// position space; use [`FuncRecord::path_id_and_line`] to recover
+    /// `(path_id, line)`.
     pub global_line_index: u64,
     /// The function name (raw bytes; UTF-8 for the recorders that produce it).
     pub name: Vec<u8>,
 }
 
 impl FuncRecord {
-    /// Recover the `(path_id, line)` the function's `global_line_index` was
-    /// packed from. Inverse of the writer's `pack_global_line_index`.
-    pub fn path_id_and_line(&self) -> (usize, i64) {
-        unpack_global_line_index(self.global_line_index)
+    /// Recover the `(path_id, line)` the function was declared at.
+    ///
+    /// The caller supplies the trace's own address space — the one built from
+    /// its `paths.dat` — because an address means nothing without it. A record
+    /// whose address the space cannot hold is refused rather than answered
+    /// with a location the trace never contained; see
+    /// [`codetracer_trace_writer::line_position`].
+    pub fn path_id_and_line(&self, space: &LinePositionSpace) -> Result<(usize, i64), LinePositionError> {
+        space.resolve(self.global_line_index)
     }
 }
 
@@ -109,6 +114,49 @@ fn decode_varint(data: &[u8], pos: &mut usize) -> Result<u64, String> {
         shift += 7;
     }
     Ok(result)
+}
+
+/// Split a line-count-table `paths.dat` record into its payload and its line
+/// count.
+///
+/// The record is `payload_len + payload + line_count` — the column-aware
+/// Layout A framing without its trailing per-line table
+/// (`codetracer-trace-format-spec/internal-files.md` §"`paths.dat` line-count
+/// table").
+///
+/// Only ever called on a container that DECLARED this layout through
+/// `meta.dat` bit 14, so a record that does not decode is corruption and is
+/// reported as such. There is deliberately no probing counterpart: the record
+/// spaces of the three layouts overlap, so a bare record whose first byte
+/// happens to equal its own remaining length decodes cleanly here and would
+/// yield a truncated path and a fabricated count with no error.
+fn decode_line_count_path_record(raw: &[u8], id: usize) -> Result<(&[u8], u64), String> {
+    let mut pos = 0usize;
+    let payload_len = usize::try_from(decode_varint(raw, &mut pos)?).map_err(|_| format!("paths.dat: record {id} payload_len exceeds usize"))?;
+    let start = pos;
+    let end = pos
+        .checked_add(payload_len)
+        .ok_or_else(|| format!("paths.dat: record {id} payload_len overflows"))?;
+    if end > raw.len() {
+        return Err(format!(
+            "paths.dat: record {id} payload extends past the record (payload_len {payload_len}, {} byte(s) left)",
+            raw.len() - start
+        ));
+    }
+    pos = end;
+    let count = decode_varint(raw, &mut pos)?;
+    if count == 0 {
+        return Err(format!(
+            "paths.dat: record {id} states line_count 0. A container setting              FLAG_HAS_LINE_COUNT_TABLE states every file's size, and a file sized 0 shares its              base with the next one — the two would be indistinguishable at decode"
+        ));
+    }
+    if pos != raw.len() {
+        return Err(format!(
+            "paths.dat: record {id} has {} trailing byte(s) after line_count",
+            raw.len() - pos
+        ));
+    }
+    Ok((&raw[start..end], count))
 }
 
 /// A single Variable-Size Record Table: the `.dat` data file plus its parsed
@@ -187,8 +235,16 @@ pub struct InterningTablesReader {
     types: VarSizeTable,
     varnames: VarSizeTable,
     /// How `funcs.dat` / `types.dat` records are decoded (bit 12 layout
-    /// selector; `paths.dat` / `varnames.dat` are raw bytes in both layouts).
+    /// selector; `varnames.dat` is raw bytes in both layouts).
     layout: RecordLayout,
+    /// Per-file line counts decoded out of `paths.dat`, one per record, when
+    /// the container declares `meta.dat` bit 14. Empty when it does not.
+    ///
+    /// Empty is not "the files have no lines" — it is "this container states no
+    /// sizes", which is every trace without bit 14, and telling the two apart
+    /// is the whole point of the table: a caller that cannot is back to the
+    /// assumption the table exists to remove.
+    line_counts: Vec<u64>,
 }
 
 impl InterningTablesReader {
@@ -209,6 +265,14 @@ impl InterningTablesReader {
             Ok(meta) if meta_dat_has_interning_tables(&meta) => RecordLayout::Structured,
             _ => RecordLayout::Plain,
         };
+        // Bit 14 selects the `paths.dat` RECORD layout, independently of bit
+        // 12's `funcs.dat`/`types.dat` selector. Read best-effort for the same
+        // reason bit 12 is: a still-recording trace has no `meta.dat` yet, and
+        // that reads as the bare layout, which is what it is.
+        let has_line_counts = match reader.read_file("meta.dat") {
+            Ok(meta) => meta_dat_has_line_count_table(&meta),
+            Err(_) => false,
+        };
         // `paths.dat` is written first and unconditionally by both writers, so
         // its presence is the container's own answer to "do I carry interning
         // tables". Absent ⇒ no binary tables (legacy path).
@@ -221,12 +285,27 @@ impl InterningTablesReader {
         let funcs = Self::load_table(reader, "funcs")?;
         let types = Self::load_table(reader, "types")?;
         let varnames = Self::load_table(reader, "varnames")?;
+        // Decoded eagerly, and a failure here fails the OPEN. The container
+        // declared this layout, so a record that does not decode is a corrupt
+        // trace; falling back to the bare layout would hand the caller a path
+        // with its own length prefix inside it and put every file back on the
+        // assumed stride.
+        let line_counts = if has_line_counts {
+            let mut counts = Vec::with_capacity(paths.count());
+            for id in 0..paths.count() {
+                counts.push(decode_line_count_path_record(paths.record(id)?, id)?.1);
+            }
+            counts
+        } else {
+            Vec::new()
+        };
         Ok(Some(InterningTablesReader {
             paths,
             funcs,
             types,
             varnames,
             layout,
+            line_counts,
         }))
     }
 
@@ -267,12 +346,36 @@ impl InterningTablesReader {
 
     /// Resolve a path id to its file path (raw bytes; UTF-8 for the recorders).
     pub fn path(&self, path_id: u64) -> Result<Vec<u8>, String> {
-        Ok(self.paths.record(path_id as usize)?.to_vec())
+        let raw = self.paths.record(path_id as usize)?;
+        if self.line_counts.is_empty() {
+            return Ok(raw.to_vec());
+        }
+        // Bit 14: the record is `payload_len + payload + line_count`, so the
+        // path is the framed payload and not the whole record.
+        Ok(decode_line_count_path_record(raw, path_id as usize)?.0.to_vec())
     }
 
     /// Resolve a path id to its file path as a `String` (lossy UTF-8).
     pub fn path_str(&self, path_id: u64) -> Result<String, String> {
-        Ok(String::from_utf8_lossy(self.paths.record(path_id as usize)?).into_owned())
+        Ok(String::from_utf8_lossy(&self.path(path_id)?).into_owned())
+    }
+
+    /// The line count this container RECORDS for `path_id`, or `None` when it
+    /// records none.
+    ///
+    /// `None` means the container states no size for the file — every trace
+    /// without `meta.dat` bit 14 — and never "the file has no lines": a zero
+    /// count fails the open, because a file sized zero shares its base with the
+    /// next file and the two are indistinguishable at decode.
+    pub fn line_count(&self, path_id: u64) -> Option<u64> {
+        self.line_counts.get(path_id as usize).copied()
+    }
+
+    /// The per-file line counts this container records, in path-id order.
+    /// Empty when it records none — feed [`LinePositionSpace::from_line_counts`]
+    /// with these and [`LinePositionSpace::uniform`] without them.
+    pub fn line_counts(&self) -> &[u64] {
+        &self.line_counts
     }
 
     /// Resolve a function id to its decoded record (`global_line_index` + name).

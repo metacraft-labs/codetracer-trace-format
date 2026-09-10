@@ -52,12 +52,23 @@
 //!
 //! # `funcs.dat` `global_line_index`
 //!
-//! Each function record stores a `global_line_index` derived from the
-//! function's `(path_id, line)` via the same reversible packing the M23a
-//! `steps.dat` execution stream uses ([`crate::step_stream::pack_global_line_index`]),
-//! so a reader recovers the exact `(path_id, line)` the `Function` event
-//! carried. When the canonical per-file `global_line_index` interning lands,
-//! this packing is the single place to change.
+//! Each function record stores the address of its declaration site in the
+//! trace's global position space — the same address the `steps.dat` execution
+//! stream would carry for a step at that `(path_id, line)`, computed through
+//! the same [`crate::line_position::LinePositionSpace`]. A reader rebuilds the
+//! space from `paths.dat` and resolves the address back to `(path_id, line)`.
+//!
+//! ## The canonical Nim writer does not write this field
+//!
+//! `codetracer-trace-format-nim`'s `ensureFunctionId` appends the function name
+//! and nothing else, so its `funcs.dat` record is bare UTF-8 bytes with no
+//! address at all — the same record shape as its line-only `paths.dat`.
+//! Neither writer matches the spec's `global_line_index (varint) + name (bytes)`
+//! for both writers at once, and reconciling them is a change to the Nim writer
+//! and to both readers in one step. What is settled here is the *address*: when
+//! a `funcs.dat` record carries one, it is the prefix sum and not a bit-field
+//! packing. The record *shape* is deliberately left to the follow-on that can
+//! change both writers together.
 //!
 //! # Consistency with `events.log` / `paths.json`
 //!
@@ -69,7 +80,7 @@
 
 use codetracer_trace_types::{FunctionRecord, TraceLowLevelEvent, TypeRecord};
 
-use crate::step_stream::pack_global_line_index;
+use crate::line_position::LinePositionSpace;
 
 // --- varint helper (unsigned LEB128) ---
 
@@ -150,6 +161,10 @@ pub struct InterningTablesBuilder {
     column_aware: bool,
     /// Functions, in interning order. Record = `(global_line_index, name)`.
     funcs: Vec<(u64, Vec<u8>)>,
+    /// The trace's address space, grown as `Path` events intern files, so a
+    /// function's declaration site is addressed exactly as a step there would
+    /// be.
+    space: LinePositionSpace,
     /// Types, in interning order. Record = `(kind, lang_type, specific_info)`.
     types: Vec<(u8, Vec<u8>, Vec<u8>)>,
     /// Variable names, in interning order. Record = raw UTF-8 name bytes.
@@ -203,9 +218,10 @@ impl InterningTablesBuilder {
         match event {
             TraceLowLevelEvent::Path(path) => {
                 self.paths.push(path.to_string_lossy().into_owned().into_bytes());
+                self.space.ensure_file(self.paths.len() - 1);
             }
             TraceLowLevelEvent::Function(FunctionRecord { path_id, line, name }) => {
-                let gli = pack_global_line_index(path_id.0, line.0);
+                let gli = self.space.global_index(path_id.0, line.0);
                 self.funcs.push((gli, name.clone().into_bytes()));
             }
             TraceLowLevelEvent::Type(TypeRecord {
@@ -382,9 +398,12 @@ mod tests {
         assert_eq!(read_record(&tables.varnames_dat, &tables.varnames_off, 0), b"x");
         assert_eq!(read_record(&tables.varnames_dat, &tables.varnames_off, 2), b"z");
 
-        // funcs: decode the single record back to (global_line_index, name).
+        // funcs: the record carries the declaration site's address in the
+        // trace's own space, and that address resolves back to (path 1, line 42).
         let func_rec = read_record(&tables.funcs_dat, &tables.funcs_off, 0);
-        let expected_gli = pack_global_line_index(1, 42);
+        let mut space = LinePositionSpace::uniform(2);
+        let expected_gli = space.global_index(1, 42);
+        assert_eq!(space.resolve(expected_gli), Ok((1, 42)));
         let mut buf = Vec::new();
         encode_func_record(expected_gli, b"main", &mut buf);
         assert_eq!(func_rec, &buf[..]);

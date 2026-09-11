@@ -92,6 +92,20 @@ extern "C" {
 
     fn trace_writer_register_return_cbor(handle: *mut std::ffi::c_void, cbor_data: *const u8, cbor_len: usize);
 
+    /// Record `target_name = <rvalue>` on the step currently being buffered.
+    ///
+    /// `rvalue_cbor` is the serde-CBOR encoding of [`RValue`]; `pass_by` is the
+    /// [`PassBy`] discriminant in declaration order (0 = Value, 1 = Reference).
+    /// The record reaches the trace as a tag-9 `Assignment` value-stream event
+    /// (`trace-events.md` §"Value Stream Events"). Returns 0 on success.
+    fn trace_writer_register_assignment(
+        handle: *mut std::ffi::c_void,
+        target_name: *const std::os::raw::c_char,
+        pass_by: u8,
+        rvalue_cbor: *const u8,
+        rvalue_cbor_len: usize,
+    ) -> i32;
+
     // ----- Streaming value encoder -----
 
     fn ct_value_encoder_new() -> *mut std::ffi::c_void;
@@ -1394,10 +1408,20 @@ impl NimTraceWriter {
     /// complete one, both to the user and to any test asserting on the
     /// trace's contents.
     fn discard_unsupported(&mut self, op: &'static str) {
+        self.discard_with_reason(op, "the Nim trace-writer backend has no entry point for it")
+    }
+
+    /// Record that one `op` record was lost, naming `reason`.
+    ///
+    /// Split out of [`discard_unsupported`] because not every loss is "there
+    /// is no entry point": an operation that HAS one can still fail at the
+    /// boundary, and reporting that as a missing entry point would send the
+    /// next reader of the warning to the wrong layer.
+    fn discard_with_reason(&mut self, op: &'static str, reason: &str) {
         if self.strict {
             panic!(
-                "the Nim trace-writer backend cannot persist a `{op}` record, and \
-                 {STRICT_ENV} is set.  This record would otherwise be dropped and \
+                "the Nim trace-writer backend cannot persist a `{op}` record ({reason}), \
+                 and {STRICT_ENV} is set.  This record would otherwise be dropped and \
                  the resulting trace would be silently incomplete.  Either use the \
                  pure-Rust writer (`codetracer_trace_writer`), stop emitting this \
                  record kind, or extend the Nim C API to carry it."
@@ -1407,10 +1431,10 @@ impl NimTraceWriter {
         *count += 1;
         if *count == 1 {
             eprintln!(
-                "WARNING: the Nim trace-writer backend has no `{op}` entry point; \
-                 records of this kind are being DISCARDED and will be absent from \
-                 the trace.  Set {STRICT_ENV}=1 to make this a hard error.  A \
-                 count is reported when the writer is closed."
+                "WARNING: a `{op}` record was NOT persisted ({reason}); records of this \
+                 kind are being DISCARDED and will be absent from the trace.  Set \
+                 {STRICT_ENV}=1 to make this a hard error.  A count is reported when \
+                 the writer is closed."
             );
         }
     }
@@ -1477,7 +1501,7 @@ impl NimTraceWriter {
         let detail: Vec<String> = self.discarded_records.iter().map(|(op, n)| format!("{op}={n}")).collect();
         eprintln!(
             "WARNING: this trace is INCOMPLETE.  {total} record(s) were discarded \
-             because the Nim trace-writer backend has no entry point for them: {}.  \
+             because the Nim trace-writer backend did not persist them: {}.  \
              Set {STRICT_ENV}=1 to make such a discard a hard error instead.",
             detail.join(", ")
         );
@@ -2380,8 +2404,40 @@ impl NimTraceWriter {
         self.discard_unsupported("drop_variable");
     }
 
-    pub fn assign(&mut self, _variable_name: &str, _rvalue: RValue, _pass_by: PassBy) {
-        self.discard_unsupported("assign");
+    /// Record `variable_name = <rvalue>`.
+    ///
+    /// This used to be one of the `discard_unsupported` operations: the Nim C
+    /// API had no assignment entry point, so every `Assignment` record a
+    /// recorder produced was counted and thrown away. On the JavaScript HCR
+    /// fixture that was 258 records per recording, and every JS trace closed
+    /// with `WARNING: this trace is INCOMPLETE … assign=N`.
+    ///
+    /// The Nim library could always *encode* an assignment — `writeAssignment*`
+    /// on the legacy single-stream writer, `encodeCborAssignmentRecord` /
+    /// `decodeCborAssignmentRecord` in `cbor.nim` — and the CTFS wire format
+    /// has carried a slot for it since the format was specified
+    /// (`trace-events.md` §"Value Stream Events", tag 9), with the canonical
+    /// Rust `ValueStreamEvent::Assignment` encoder/decoder already implemented.
+    /// What was missing was purely the plumbing between them: an FFI export, a
+    /// header declaration, and this binding.
+    ///
+    /// The `RValue` is encoded here, with the same `cbor4ii` serde encoder the
+    /// canonical Rust writer uses, and stored verbatim by the Nim side, so the
+    /// two producers' `values.dat` payloads for this event are byte-identical.
+    pub fn assign(&mut self, variable_name: &str, rvalue: RValue, pass_by: PassBy) {
+        let c_name = str_to_cstring(variable_name);
+        let rvalue_cbor: Vec<u8> = cbor4ii::serde::to_vec(Vec::new(), &rvalue).expect("CBOR encode of RValue failed");
+        let pass_by_byte: u8 = match pass_by {
+            PassBy::Value => 0,
+            PassBy::Reference => 1,
+        };
+        let rc = unsafe { trace_writer_register_assignment(self.handle, c_name.as_ptr(), pass_by_byte, rvalue_cbor.as_ptr(), rvalue_cbor.len()) };
+        if rc != 0 {
+            // The record did not reach the trace. Do NOT stay silent about it:
+            // the counter is the only thing standing between a partial
+            // recording and one that looks complete.
+            self.discard_with_reason("assign", "trace_writer_register_assignment reported a failure");
+        }
     }
 
     pub fn bind_variable(&mut self, _variable_name: &str, _place: Place) {

@@ -453,6 +453,7 @@ dependencies = [
 name = "codetracer_trace_writer_nim"
 version = "0.1.0"
 dependencies = [
+ "cbor4ii",
  "ciborium",
  "codetracer_ctfs",
  "codetracer_trace_reader",

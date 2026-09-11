@@ -7,7 +7,8 @@
 //! [`NimTraceWriter`] operations have no counterpart in the Nim C API —
 //! `drop_variables`, `drop_variable`, `register_compound_value`,
 //! `register_cell_value`, `assign_compound_item`, `assign_cell`,
-//! `register_variable`, `bind_variable`, `assign`, `register_asm`,
+//! `register_variable`, `bind_variable`, `assign` (since fixed, see below),
+//! `register_asm`,
 //! `drop_last_step`.  Each was a bare no-op carrying the comment
 //! `// Not exposed in the Nim C API — no-op`.
 //!
@@ -36,12 +37,18 @@
 //!
 //! # What this test does NOT claim
 //!
-//! It does not claim the records are persisted — they are not.  Persisting
-//! them needs new entry points in `codetracer-trace-format-nim`'s C API and
-//! matching encoder support on the Nim side; that is a format-surface change
-//! and is deliberately out of scope here.  What changed is that the loss is
-//! now stated instead of hidden.  If those entry points are added later, the
-//! assertions below are what will show the counters going to zero.
+//! It does not claim the records it exercises are persisted — they are not.
+//! Persisting one needs a new entry point in `codetracer-trace-format-nim`'s
+//! C API and matching encoder support on the Nim side.  What changed here is
+//! that the loss is stated instead of hidden.
+//!
+//! **`assign` is no longer one of them.**  Its entry point
+//! (`trace_writer_register_assignment`) landed on 2026-09-11 and assignments
+//! now reach the container as tag-9 value-stream events; that is asserted,
+//! end to end, by `tests/assignments_reach_the_trace.rs`.  The tests below
+//! deliberately use `drop_variables` — still genuinely unsupported — as the
+//! representative discard, so they keep testing the discard MECHANISM rather
+//! than any particular operation's state of repair.
 //!
 //! # Mocking policy justification (workspace AGENTS.md)
 //!

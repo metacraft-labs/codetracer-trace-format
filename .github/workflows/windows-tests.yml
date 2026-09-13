@@ -9,7 +9,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        runner: [eph-win-x64, eph-win-arm64]
+        runner: [[self-hosted, windows, x64], [self-hosted, windows, arm64]]
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v5

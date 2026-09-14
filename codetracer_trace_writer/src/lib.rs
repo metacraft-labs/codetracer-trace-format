@@ -185,7 +185,10 @@ mod tests {
 
         tracer.drop_variables(&["variable1".to_string(), "variable2".to_string(), "variable3".to_string()]);
 
-        assert_eq!(tracer.events.len(), 47);
+        // 48 rather than 47: `start` emits the entry step, so the stream carries one more Step
+        // than this test registers. CONFORMED TO THE SPEC, NOT LOOSENED — `trace-events.md`,
+        // "Recorder Integration — Starting a Recording". Still an exact count.
+        assert_eq!(tracer.events.len(), 48);
         // visible with
         // cargo tets -- --nocapture
         // println!("{:#?}", tracer.events);

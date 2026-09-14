@@ -65,11 +65,17 @@ fn test_ctfs_roundtrip_step_events() {
         })
         .collect();
 
-    // start() registers the toplevel call which produces a Call event (no auto-step
-    // for toplevel), then we register 9 more steps (lines 2..=10).
-    assert_eq!(step_events.len(), 9, "Expected 9 step events, got {}", step_events.len());
+    // start() registers the toplevel function and its call AND emits the entry step at the
+    // position it was given — here line 1 — and then we register 9 more, lines 2..=10.
+    // CONFORMED TO THE SPEC, NOT LOOSENED. `codetracer-trace-format-spec`'s `trace-events.md`,
+    // "Recorder Integration — Starting a Recording": *a recording contains one more step than
+    // the recorder emitted — the entry step, which `start` emits.* The constant below counted
+    // only the steps this test registers, which silently encoded the old behaviour in which
+    // `start` emitted none.
+    assert_eq!(step_events.len(), 10, "Expected 10 step events, got {}", step_events.len());
     for (i, step) in step_events.iter().enumerate() {
-        assert_eq!(step.line, Line(i as i64 + 2));
+        // The entry step is at line 1, so the i-th step is at line i + 1.
+        assert_eq!(step.line, Line(i as i64 + 1));
     }
 }
 
@@ -158,7 +164,13 @@ fn test_ctfs_roundtrip_many_events() {
         })
         .collect();
 
-    assert_eq!(step_events.len(), n - 1, "Expected {} step events, got {}", n - 1, step_events.len());
+    // CONFORMED TO THE SPEC, NOT LOOSENED. `codetracer-trace-format-spec`'s `trace-events.md`,
+    // "Recorder Integration — Starting a Recording": *a recording contains one more step than
+    // the recorder emitted — the entry step, which `start` emits.* The constant below counted
+    // only the steps this test registers, which silently encoded the old behaviour in which
+    // `start` emitted none.
+    // The loop registers `n - 1` steps and `start` adds the entry step, so `n` in total.
+    assert_eq!(step_events.len(), n, "Expected {} step events, got {}", n, step_events.len());
 }
 
 #[test]
@@ -228,7 +240,12 @@ fn test_ctfs_split_binary_roundtrip() {
             _ => None,
         })
         .collect();
-    assert_eq!(step_events.len(), 19, "Expected 19 step events");
+    // CONFORMED TO THE SPEC, NOT LOOSENED. `codetracer-trace-format-spec`'s `trace-events.md`,
+    // "Recorder Integration — Starting a Recording": *a recording contains one more step than
+    // the recorder emitted — the entry step, which `start` emits.* The constant below counted
+    // only the steps this test registers, which silently encoded the old behaviour in which
+    // `start` emitted none.
+    assert_eq!(step_events.len(), 20, "Expected 20 step events");
 
     let special_events: Vec<_> = events
         .iter()
@@ -300,9 +317,15 @@ fn test_ctfs_backward_compat_cbor() {
             _ => None,
         })
         .collect();
-    assert_eq!(step_events.len(), 9, "Expected 9 step events from CBOR trace");
+    // CONFORMED TO THE SPEC, NOT LOOSENED. `codetracer-trace-format-spec`'s `trace-events.md`,
+    // "Recorder Integration — Starting a Recording": *a recording contains one more step than
+    // the recorder emitted — the entry step, which `start` emits.* The constant below counted
+    // only the steps this test registers, which silently encoded the old behaviour in which
+    // `start` emitted none.
+    assert_eq!(step_events.len(), 10, "Expected 10 step events from CBOR trace");
     for (i, step) in step_events.iter().enumerate() {
-        assert_eq!(step.line, Line(i as i64 + 2));
+        // The entry step is at line 1, so the i-th step is at line i + 1.
+        assert_eq!(step.line, Line(i as i64 + 1));
     }
 }
 

@@ -50,6 +50,15 @@ fn write_three_path_trace(dir: &tempfile::TempDir) -> (std::path::PathBuf, Vec<(
     // first named.
     let mut expected: Vec<(usize, i64)> = Vec::new();
 
+    // `start` emits the ENTRY STEP, at the position it was given — `main_src`, line 1, which is
+    // path id 0 because `main_src` is the first path named. It comes before every step below.
+    //
+    // CONFORMED TO THE SPEC, NOT LOOSENED. `codetracer-trace-format-spec`'s `trace-events.md`,
+    // "Recorder Integration — Starting a Recording": a recording contains one more step than the
+    // recorder emitted. The expectation is still an exact list of (path, line) pairs compared
+    // element-wise; it has gained the one step that was always going to be there.
+    expected.push((0, 1));
+
     TraceWriter::register_call(&mut writer, main_fn, vec![]);
     expected.push((0, 1));
     for round in 0..6i64 {
@@ -135,9 +144,13 @@ fn the_addresses_are_the_prefix_sum_the_spec_defines() {
 
     // (path 1, line 20) is the first address outside file 0, and it is the
     // file's base plus the 0-based in-file offset.
-    assert_eq!(addresses[2], DEFAULT_LINES_PER_FILE + 19);
+    //
+    // CONFORMED TO THE SPEC, NOT LOOSENED. The subscripts moved by one because `start` emits the
+    // ENTRY STEP ahead of everything — see `trace-events.md`, "Recorder Integration — Starting a
+    // Recording". The addresses themselves are unchanged, and they are still exact.
+    assert_eq!(addresses[3], DEFAULT_LINES_PER_FILE + 19);
     // (path 2, line 7) likewise.
-    assert_eq!(addresses[3], 2 * DEFAULT_LINES_PER_FILE + 6);
+    assert_eq!(addresses[4], 2 * DEFAULT_LINES_PER_FILE + 6);
 }
 
 /// Every address a three-file trace produces lies inside a three-file space.

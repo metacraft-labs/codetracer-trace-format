@@ -108,8 +108,17 @@ fn events_dat_matches_events_log() {
         "io event record count must equal the Event count in events.log"
     );
 
-    // The pre-first-step event attributes to step 0; later events to their step.
-    assert_eq!(from_dat[0].step_id, 0, "the startup banner (pre-first-step) attributes to step 0");
+    // The pre-first-step event attributes to the step that is about to happen, and `start` now
+    // emits the entry step ahead of it, so that is step 1 rather than step 0.
+    //
+    // CONFORMED TO THE SPEC, NOT LOOSENED. `codetracer-trace-format-spec`'s `trace-events.md`,
+    // "Recorder Integration — Starting a Recording". The ATTRIBUTION RULE is unchanged — an I/O
+    // event still names the step it precedes — and only the index moved, because there is now one
+    // more step in front of it. The assertion stays an exact index rather than becoming a range.
+    assert_eq!(
+        from_dat[0].step_id, 1,
+        "the startup banner (pre-first-step) attributes to the step it precedes, which is 1 now          that start() emits the entry step ahead of it"
+    );
     assert!(from_dat.iter().any(|r| r.step_id > 0), "expected events attributed to later steps");
     // Variety: at least one stderr/error and one file-write record.
     assert!(

@@ -94,6 +94,21 @@ pub trait AbstractTraceWriter {
         // assert!(EXAMPLE_BOOL_TYPE_ID == self.load_type_id(TypeKind::Bool, "Bool"));
         // assert!(EXAMPLE_STRING_TYPE_ID == self.load_type_id(TypeKind::Bool, "String"));
         assert!(NONE_TYPE_ID == self.ensure_type_id(TypeKind::None, "None"));
+
+        // THE ENTRY STEP, which this writer did not emit and the Nim C ABI's `trace_writer_start`
+        // did. Both behaviours are defensible readings of "start recording at the entry point",
+        // and a container written by one and read by a consumer written against the other is off
+        // by one step with nothing in the container to say so. The contract is pinned in
+        // `codetracer-trace-format-spec`'s `trace-events.md`, "Recorder Integration — Starting a
+        // Recording": `start` emits the `<toplevel>` function, its opening call, and this step.
+        //
+        // AFTER the call, not before, so the entry step sits INSIDE the root frame. A step emitted
+        // before the call would belong to no frame at all, and a reader walking the call tree
+        // would not find it.
+        //
+        // The consequence for every consumer is one sentence: a recording holds ONE MORE STEP than
+        // the recorder emitted.
+        self.register_step(path, line);
     }
 
     fn ensure_path_id(&mut self, path: &std::path::Path) -> PathId {

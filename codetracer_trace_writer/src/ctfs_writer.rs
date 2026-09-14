@@ -4,7 +4,83 @@ use std::sync::{Arc, Mutex};
 
 use codetracer_ctfs::{ChunkedWriter, CompressionMethod, CtfsWriter};
 use codetracer_trace_format_cbor_zstd::HEADERV1;
+
+// The legacy `Cbor` serialization mode streams through zeekstd, which is
+// libzstd-backed (C) and needs a libc.  `wasm32-wasip1` has one (wasi-libc)
+// and links it; `wasm32-unknown-unknown` does not, and is the only target
+// where the encoder is replaced by a stub with the same shape whose only job
+// is to keep the `Cbor` code paths compiling.  The DEFAULT `SplitBinary` mode
+// does not use zeekstd at all -- it compresses whole chunks through
+// `codetracer_ctfs::zstd_compat` -- and `begin_writing_trace_events` refuses
+// `Cbor` on that one target before any stub method can be reached.
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 use zeekstd::{EncodeOptions, Encoder, FrameSizePolicy};
+
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+use wasm_cbor_mode_stub::{EncodeOptions, Encoder, FrameSizePolicy};
+
+/// Stand-in for the zeekstd streaming encoder on `wasm32-unknown-unknown`.
+///
+/// Mirrors only the surface [`CtfsTraceWriter`]'s `Cbor` mode uses. Every
+/// method fails; nothing constructs one, because `begin_writing_trace_events`
+/// rejects `EventSerializationFormat::Cbor` on that target up front. Keeping
+/// the shape means the `Cbor` arms need no `cfg` of their own.
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+mod wasm_cbor_mode_stub {
+    use std::io::{Error, Result, Write};
+    use std::marker::PhantomData;
+
+    fn unsupported() -> Error {
+        Error::other(
+            "the CTFS `Cbor` serialization mode is not available on wasm32-unknown-unknown, which has no libc for zeekstd \
+             to link against; use `SplitBinary` (the default), or build for wasm32-wasip1, where zeekstd does link",
+        )
+    }
+
+    pub enum FrameSizePolicy {
+        Uncompressed(#[allow(dead_code)] u32),
+    }
+
+    pub struct EncodeOptions;
+
+    impl EncodeOptions {
+        #[allow(clippy::new_without_default)]
+        pub fn new() -> Self {
+            EncodeOptions
+        }
+        pub fn frame_size_policy(self, _policy: FrameSizePolicy) -> Self {
+            self
+        }
+        pub fn compression_level(self, _level: i32) -> Self {
+            self
+        }
+        pub fn into_encoder<W: Write>(self, _sink: W) -> Result<Encoder<'static, W>> {
+            Err(unsupported())
+        }
+    }
+
+    pub struct Encoder<'a, W> {
+        _marker: PhantomData<(&'a (), W)>,
+    }
+
+    impl<W: Write> Encoder<'_, W> {
+        pub fn end_frame(&mut self) -> Result<u64> {
+            Err(unsupported())
+        }
+        pub fn finish(self) -> Result<u64> {
+            Err(unsupported())
+        }
+    }
+
+    impl<W: Write> Write for Encoder<'_, W> {
+        fn write(&mut self, _buf: &[u8]) -> Result<usize> {
+            Err(unsupported())
+        }
+        fn flush(&mut self) -> Result<()> {
+            Err(unsupported())
+        }
+    }
+}
 
 use crate::{
     abstract_trace_writer::{AbstractTraceWriter, AbstractTraceWriterData},
@@ -69,6 +145,21 @@ impl Write for SharedBuffer {
     }
 }
 
+/// Where a [`CtfsTraceWriter`] lays its container out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CtfsOutput {
+    /// A `.ct` file on disk, at the path handed to
+    /// `begin_writing_trace_events` (with the extension replaced). The
+    /// default, and the only behaviour that existed before in-memory output.
+    File,
+    /// A `Vec<u8>` held by the writer, collected after
+    /// `finish_writing_trace_events` with
+    /// [`take_container_bytes`](CtfsTraceWriter::take_container_bytes).
+    /// The only mode available on `wasm32-unknown-unknown`, which has no
+    /// filesystem.
+    Memory,
+}
+
 /// A trace writer that outputs a single `.ct` CTFS container file.
 ///
 /// The container holds:
@@ -100,6 +191,14 @@ pub struct CtfsTraceWriter {
     ctfs_writer: Option<CtfsWriter>,
     events_handle: Option<codetracer_ctfs::FileHandle>,
 
+    /// File or memory. See [`CtfsOutput`].
+    output: CtfsOutput,
+    /// The finished container, when `output` is [`CtfsOutput::Memory`].
+    container_bytes: Option<Vec<u8>>,
+    /// Overrides the `recording_id` that would otherwise be minted at
+    /// `finish_writing_trace_events`. See
+    /// [`set_recording_id`](CtfsTraceWriter::set_recording_id).
+    recording_id: Option<String>,
     /// The serialization format to use.
     serialization_format: EventSerializationFormat,
 
@@ -278,6 +377,9 @@ impl CtfsTraceWriter {
             base: AbstractTraceWriterData::new(program, args),
             ctfs_writer: None,
             events_handle: None,
+            output: CtfsOutput::File,
+            container_bytes: None,
+            recording_id: None,
             serialization_format: format,
             encoder: None,
             compressed_sink: None,
@@ -632,6 +734,79 @@ impl CtfsTraceWriter {
         self.emit_interning_tables
     }
 
+    /// Create a CTFS trace writer that builds the container **in memory**
+    /// instead of on disk.
+    ///
+    /// This is the constructor to use from WebAssembly, where there is no
+    /// filesystem — but nothing about it is wasm-specific, and on a host it
+    /// produces the same container the file-backed writer would.
+    ///
+    /// Usage is otherwise identical to [`new`](Self::new). The `path` handed
+    /// to `begin_writing_trace_events` is ignored (pass anything, e.g.
+    /// `Path::new("trace")`); after `finish_writing_trace_events` the bytes
+    /// come out of [`take_container_bytes`](Self::take_container_bytes):
+    ///
+    /// ```no_run
+    /// use codetracer_trace_writer::{ctfs_writer::CtfsTraceWriter, trace_writer::TraceWriter};
+    /// use std::path::Path;
+    ///
+    /// let mut writer = CtfsTraceWriter::new_in_memory("program", &[]);
+    /// writer.begin_writing_trace_events(Path::new("trace"))?;
+    /// // ... register steps/calls/values ...
+    /// writer.finish_writing_trace_events()?;
+    /// let ct_bytes: Vec<u8> = writer.take_container_bytes().expect("in-memory writer");
+    /// # Ok::<(), Box<dyn std::error::Error>>(())
+    /// ```
+    ///
+    /// `ct_bytes` is a complete `.ct` container — write it to a file, hand it
+    /// to a `Blob`, upload it. On `wasm32-unknown-unknown` you will usually
+    /// also want [`set_recording_id`](Self::set_recording_id), since the
+    /// module cannot mint a real UUIDv7 without a clock or a CSPRNG.
+    pub fn new_in_memory(program: &str, args: &[String]) -> Self {
+        let mut writer = Self::new(program, args);
+        writer.output = CtfsOutput::Memory;
+        writer
+    }
+
+    /// Choose file-backed or in-memory output. Must be set before
+    /// `begin_writing_trace_events`.
+    pub fn with_output(mut self, output: CtfsOutput) -> Self {
+        self.output = output;
+        self
+    }
+
+    /// Where this writer lays the container out.
+    pub fn output(&self) -> CtfsOutput {
+        self.output
+    }
+
+    /// Take the finished container bytes.
+    ///
+    /// Returns `Some` only for an in-memory writer whose
+    /// `finish_writing_trace_events` has completed; `None` for a file-backed
+    /// writer (whose bytes are on disk) or before the trace is finished. The
+    /// bytes are moved out, so a second call returns `None`.
+    pub fn take_container_bytes(&mut self) -> Option<Vec<u8>> {
+        self.container_bytes.take()
+    }
+
+    /// Borrow the finished container bytes without consuming them.
+    pub fn container_bytes(&self) -> Option<&[u8]> {
+        self.container_bytes.as_deref()
+    }
+
+    /// Pin the `recording_id` stamped into `meta.json` and `meta.dat`.
+    ///
+    /// By default the writer mints a fresh UUIDv7 at
+    /// `finish_writing_trace_events`. Set it explicitly when the identity is
+    /// decided elsewhere — an import pinning a pre-existing id, a test that
+    /// wants a reproducible container, or a browser host minting the id in
+    /// JavaScript because `wasm32-unknown-unknown` has neither a wall clock
+    /// nor an entropy source.
+    pub fn set_recording_id(&mut self, recording_id: impl Into<String>) {
+        self.recording_id = Some(recording_id.into());
+    }
+
     /// Create a new CTFS trace writer using the legacy CBOR format.
     pub fn new_cbor(program: &str, args: &[String]) -> Self {
         Self::with_options(program, args, EventSerializationFormat::Cbor, DEFAULT_FLUSH_THRESHOLD, DEFAULT_CHUNK_SIZE)
@@ -881,11 +1056,69 @@ impl AbstractTraceWriter for CtfsTraceWriter {
 }
 
 impl TraceWriter for CtfsTraceWriter {
+    // ---------------------------------------------------------------------
+    // THE COLUMN-AWARE FAMILY IS HONOURED NOW, AND THESE OVERRIDES ARE WHAT
+    // DELIVERS THAT TO A CALLER HOLDING THE TRAIT.
+    //
+    // They used to set a `column_aware_requested` flag and nothing else,
+    // because this writer had no column-bearing step encoder. It has one.
+    // Each override therefore FORWARDS to the inherent method of the same
+    // name, which arms the position space, the step policy and the `meta.dat`
+    // capability bits.
+    //
+    // DELETING THEM WOULD NOT BE A SIMPLIFICATION, IT WOULD BE A SILENT
+    // NO-OP. `TraceWriter`'s defaults for this family are empty bodies, so a
+    // caller that reaches the writer through the trait — `ct_writer_open` in
+    // `aztec-avm-runtime/ct-writer` does exactly that — would get columns
+    // accepted, ignored, and `dropped_column_awareness()` answering `false`
+    // because nobody recorded that anybody asked. That is the campaign's
+    // silent-wrong-answer shape, so the forwarding is deliberate and is
+    // covered by `the_trait_column_family_reaches_the_real_implementation`.
+    // ---------------------------------------------------------------------
+    fn enable_column_aware_steps(&mut self) {
+        CtfsTraceWriter::enable_column_aware_steps(self);
+    }
+
+    fn enable_column_breakpoints_support(&mut self) {
+        CtfsTraceWriter::enable_column_breakpoints_support(self);
+    }
+
+    fn enable_column_motions_support(&mut self) {
+        CtfsTraceWriter::enable_column_motions_support(self);
+    }
+
+    fn write_delta_column(&mut self, column_delta: i64) {
+        let _ = CtfsTraceWriter::register_column_step(self, column_delta);
+    }
+
+    fn register_path_with_line_lengths(
+        &mut self,
+        path: &Path,
+        line_lengths: &[u32],
+    ) -> Result<codetracer_trace_types::PathId, Box<dyn std::error::Error>> {
+        Ok(CtfsTraceWriter::register_path_with_line_lengths(self, path, line_lengths))
+    }
+
     fn begin_writing_trace_events(&mut self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-        // Create .ct file at path (replace any existing extension)
-        let ct_path = path.with_extension("ct");
-        let mut writer = CtfsWriter::create(&ct_path, 4096, 31)?;
+        // The legacy CBOR mode streams through zeekstd (libzstd, C), which
+        // needs a libc and so does not exist on `wasm32-unknown-unknown`.
+        // Refuse it up front rather than letting the stub encoder fail deeper
+        // in. `wasm32-wasip1` has wasi-libc and is not gated here.
+        #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
+        if self.serialization_format == EventSerializationFormat::Cbor {
+            return Err("the CTFS `Cbor` serialization mode is not available on wasm32-unknown-unknown, which has no libc \
+                        for zeekstd to link against; use `SplitBinary` (the default), or build for wasm32-wasip1, where \
+                        zeekstd does link"
+                .into());
+        }
+
+        let mut writer = match self.output {
+            // Create .ct file at path (replace any existing extension)
+            CtfsOutput::File => CtfsWriter::create(&path.with_extension("ct"), 4096, 31)?,
+            CtfsOutput::Memory => CtfsWriter::create_in_memory(4096, 31, codetracer_ctfs::CompressionMethod::None)?,
+        };
         let events_handle = writer.add_file("events.log")?;
+        self.container_bytes = None;
         self.ctfs_writer = Some(writer);
         self.events_handle = Some(events_handle);
 
@@ -1002,8 +1235,22 @@ impl TraceWriter for CtfsTraceWriter {
             //
             // The metadata itself is written as `meta.dat` below; the legacy
             // `meta.json` + `paths.json` JSON sidecars are retired.
-            let trace_metadata =
-                codetracer_trace_types::TraceMetadata::new(self.base.program.clone(), self.base.args.clone(), self.base.workdir.clone());
+            //
+            // BOTH SIDES OF THIS MERGE HAD TO SURVIVE, and they are independent concerns that
+            // happened to touch adjacent lines. `dev` retired the two JSON sidecars; the wasm
+            // branch added the recording-id selection, so an importer can pin an existing id
+            // rather than having one minted. Taking either side whole would have silently undone
+            // the other — the sidecars would come back, or `with_recording_id` would be dropped and
+            // every imported trace would get a fresh identity.
+            let trace_metadata = match &self.recording_id {
+                Some(id) => codetracer_trace_types::TraceMetadata::with_recording_id(
+                    id.clone(),
+                    self.base.program.clone(),
+                    self.base.args.clone(),
+                    self.base.workdir.clone(),
+                ),
+                None => codetracer_trace_types::TraceMetadata::new(self.base.program.clone(), self.base.args.clone(), self.base.workdir.clone()),
+            };
 
             // M17a/M23a: emit the dedicated call stream and/or the dedicated
             // execution (step) stream, each with its companion seekable index,
@@ -1160,7 +1407,10 @@ impl TraceWriter for CtfsTraceWriter {
 
         // Close the CTFS container (takes ownership)
         if let Some(writer) = self.ctfs_writer.take() {
-            writer.close()?;
+            match self.output {
+                CtfsOutput::File => writer.close()?,
+                CtfsOutput::Memory => self.container_bytes = Some(writer.finish_to_bytes()?),
+            }
         }
 
         Ok(())

@@ -263,7 +263,6 @@ fn event_log_kind_ord(kind: EventLogKind) -> u8 {
 }
 
 /// The encoded `events.dat` stream plus its companion `events.idx`.
-#[cfg(not(target_arch = "wasm32"))]
 pub struct EncodedIoEventStream {
     /// Concatenated Zstd-compressed chunks, no inline headers.
     pub dat: Vec<u8>,
@@ -279,7 +278,6 @@ pub struct EncodedIoEventStream {
 /// Each record is length-prefixed within its chunk so the reader can walk to the
 /// `N % chunk_size`-th record without re-deriving sizes (records are variable
 /// length). Each chunk is independently Zstd-compressed.
-#[cfg(not(target_arch = "wasm32"))]
 pub fn encode_io_event_stream(records: &[IoEventRecord], chunk_size: usize, zstd_level: i32) -> Result<EncodedIoEventStream, String> {
     let chunk_size = chunk_size.max(1);
     let mut dat: Vec<u8> = Vec::new();

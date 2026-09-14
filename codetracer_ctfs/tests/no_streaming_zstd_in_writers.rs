@@ -29,10 +29,18 @@ const WRITER_ROOTS: [&str; 2] = ["codetracer_ctfs/src", "codetracer_trace_writer
 
 /// Files allowed to name the streaming API, and why. Each is a place that
 /// *documents* or *tests* the difference rather than writing a stream with it.
-const ALLOWED: [(&str, &str); 4] = [
+const ALLOWED: [(&str, &str); 5] = [
     (
         "codetracer_ctfs/src/zstd_frame.rs",
         "defines the replacement and uses encode_all as its negative control",
+    ),
+    (
+        "codetracer_ctfs/src/zstd_compat.rs",
+        "the per-target codec `compress_pledged` is BUILT ON, not a stream writer. It is the one \
+         place the wasm32 build's pure-Rust encoder is reached, and on wasm the pledge is added to \
+         its output afterwards by `zstd_frame::pledge_frame_content_size`. Adding it here was \
+         forced by this census going red on the merge that brought the two branches together, \
+         which is the behaviour it was written for.",
     ),
     (
         "codetracer_trace_writer/src/column_aware.rs",

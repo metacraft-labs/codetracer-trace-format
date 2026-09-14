@@ -370,7 +370,6 @@ impl CallStreamBuilder {
 }
 
 /// The encoded `calls.dat` stream plus its companion `calls.idx`.
-#[cfg(not(target_arch = "wasm32"))]
 pub struct EncodedCallStream {
     /// Concatenated Zstd-compressed chunks, no inline headers.
     pub dat: Vec<u8>,
@@ -382,7 +381,6 @@ pub struct EncodedCallStream {
 
 /// Encode call records into `calls.dat` (chunked Zstd) + `calls.idx`
 /// (companion offset index), per seekable-zstd.md.
-#[cfg(not(target_arch = "wasm32"))]
 pub fn encode_call_stream(records: &[CallStreamRecord], chunk_size: usize, zstd_level: i32) -> Result<EncodedCallStream, String> {
     let chunk_size = chunk_size.max(1);
     let mut dat: Vec<u8> = Vec::new();

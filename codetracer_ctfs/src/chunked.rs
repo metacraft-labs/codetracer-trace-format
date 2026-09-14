@@ -1,5 +1,3 @@
-use std::io::Cursor;
-
 use crate::header::{ChunkIndexEntry, CompressionMethod, CHUNK_INDEX_ENTRY_SIZE};
 use crate::CtfsError;
 
@@ -128,7 +126,7 @@ impl ChunkedReader {
             }
 
             let compressed = &data[offset..end];
-            let decompressed = zstd::decode_all(Cursor::new(compressed)).map_err(CtfsError::Io)?;
+            let decompressed = crate::zstd_compat::decode_all(compressed).map_err(CtfsError::Io)?;
             output.extend_from_slice(&decompressed);
 
             offset = end;
@@ -178,7 +176,7 @@ impl ChunkedReader {
         }
 
         let compressed = &data[data_offset..end];
-        let decompressed = zstd::decode_all(Cursor::new(compressed)).map_err(CtfsError::Io)?;
+        let decompressed = crate::zstd_compat::decode_all(compressed).map_err(CtfsError::Io)?;
 
         Ok((decompressed, header))
     }

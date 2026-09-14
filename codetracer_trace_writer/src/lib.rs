@@ -2,14 +2,13 @@ pub mod abstract_trace_writer;
 pub mod non_streaming_trace_writer;
 pub mod trace_writer;
 
-#[cfg(target_arch = "wasm32")]
+#[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
 #[path = "./cbor_zstd_writer_wasm.rs"]
 mod cbor_zstd_writer;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 mod cbor_zstd_writer;
 
-#[cfg(not(target_arch = "wasm32"))]
 pub mod ctfs_writer;
 
 pub mod call_stream;
@@ -35,7 +34,7 @@ pub mod meta_dat;
 
 pub mod split_binary;
 
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 pub mod streaming_writer;
 
 #[derive(Debug, Clone, Copy)]
@@ -59,10 +58,7 @@ pub fn create_trace_writer(program: &str, args: &[String], format: TraceEventsFi
             result
         }
         TraceEventsFileFormat::Binary => Box::new(crate::cbor_zstd_writer::CborZstdTraceWriter::new(program, args)),
-        #[cfg(not(target_arch = "wasm32"))]
         TraceEventsFileFormat::Ctfs => Box::new(crate::ctfs_writer::CtfsTraceWriter::new(program, args)),
-        #[cfg(target_arch = "wasm32")]
-        TraceEventsFileFormat::Ctfs => panic!("CTFS format is not supported on wasm32"),
     }
 }
 

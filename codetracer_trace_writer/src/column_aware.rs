@@ -499,7 +499,6 @@ pub struct ExecStreamEncoder {
 /// stream families the reference reader refuses without a pledged content
 /// size, and fixing them one at a time is how the other four stayed broken
 /// after this one was fixed. See [`ExecStreamEncoder`] for the consequence.
-#[cfg(not(target_arch = "wasm32"))]
 pub fn compress_chunk(raw: &[u8], zstd_level: i32) -> Result<Vec<u8>, String> {
     codetracer_ctfs::compress_pledged(raw, zstd_level, "steps.dat")
 }
@@ -536,7 +535,6 @@ impl ExecStreamEncoder {
     }
 
     /// Write one event. Port of Nim `writeEvent`.
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn write_event(&mut self, event: StepEvent) -> Result<(), String> {
         let mut ev = event;
 
@@ -571,7 +569,6 @@ impl ExecStreamEncoder {
     }
 
     /// Compress and emit the buffered chunk. Port of Nim `flushChunk`.
-    #[cfg(not(target_arch = "wasm32"))]
     fn flush_chunk(&mut self) -> Result<(), String> {
         if self.event_count == 0 {
             return Ok(());
@@ -587,7 +584,6 @@ impl ExecStreamEncoder {
 
     /// Flush the trailing partial chunk and return the two files.
     /// Port of Nim `flush`.
-    #[cfg(not(target_arch = "wasm32"))]
     pub fn finish(mut self) -> Result<EncodedExecStream, String> {
         self.flush_chunk()?;
         Ok(EncodedExecStream {
@@ -864,7 +860,7 @@ mod tests {
         assert!(err.contains("cannot be the first step"), "{err}");
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
     #[test]
     fn chunk_boundary_promotes_a_delta_to_an_absolute() {
         // Two events per chunk. The third event opens chunk 1 and must be
@@ -895,7 +891,7 @@ mod tests {
         assert_eq!(decode_step_event(&raw1, &mut pos).unwrap(), StepEvent::DeltaColumn { column_delta: 1 });
     }
 
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
     #[test]
     fn chunks_pledge_their_content_size() {
         // The Nim reader's `decodeSpecChunkRecordCount` and `chunkSlot` both

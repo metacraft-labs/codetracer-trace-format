@@ -2,9 +2,32 @@ use crate::CtfsError;
 use std::io::{Read, Write};
 
 pub const MAGIC: [u8; 5] = [0xC0, 0xDE, 0x72, 0xAC, 0xE2];
-pub const VERSION: u8 = 3;
+
+/// The version this implementation WRITES. `ctfs-container.md` §1 states that
+/// header byte 5 is `4`.
+///
+/// Version 4 RE-DEFINES bytes 6 and 7, which is why bumping this alone would
+/// not have been enough:
+///
+/// * v2/v3: byte 6 = compression method, byte 7 = encryption method.
+/// * v4:    byte 6 = encryption method,  byte 7 = max shard count.
+///
+/// The v4 header carries NO compression field, and that is deliberate rather
+/// than an omission: compression in this format is a per-stream property of the
+/// chunked writer, not a property of the container. `write_to` therefore
+/// serialises according to the version rather than to a fixed layout, so a
+/// caller that asks for Zstd cannot end up with `1` sitting in the byte a v4
+/// reader interprets as AES-256-GCM.
+pub const VERSION: u8 = 4;
 pub const VERSION_V2: u8 = 2;
+pub const VERSION_V3: u8 = 3;
 pub const VERSION_V4: u8 = 4;
+
+/// The versions this implementation READS. Writing v4 does not retire the
+/// ability to open what earlier versions produced, and the two are separate
+/// decisions — dropping v3 from this list is a deliberate act, not a side
+/// effect of moving the writer forward.
+pub const SUPPORTED_VERSIONS: [u8; 3] = [VERSION_V2, VERSION_V3, VERSION_V4];
 pub const HEADER_SIZE: usize = 8;
 pub const EXTENDED_HEADER_SIZE: usize = 8;
 
@@ -70,8 +93,14 @@ pub const DEFAULT_CHUNK_SIZE: usize = 4096;
 pub struct Header {
     pub id: [u8; 5],
     pub version: u8,
+    /// Byte 6 under v2/v3 only. A v4 header has no compression field —
+    /// compression is a per-stream property of the chunked writer — so this is
+    /// carried for reading older containers and is not serialised under v4.
     pub compression: CompressionMethod,
     pub encryption: EncryptionMethod,
+    /// Byte 7 under v4. `0` means the container is not sharded, which is what
+    /// this implementation produces.
+    pub max_shards: u8,
 }
 
 impl Header {
@@ -81,6 +110,7 @@ impl Header {
             version: VERSION,
             compression: CompressionMethod::None,
             encryption: EncryptionMethod::None,
+            max_shards: 0,
         }
     }
 
@@ -91,14 +121,23 @@ impl Header {
             version: VERSION,
             compression,
             encryption: EncryptionMethod::None,
+            max_shards: 0,
         }
     }
 
     pub fn write_to<W: Write>(&self, w: &mut W) -> Result<(), CtfsError> {
         w.write_all(&self.id)?;
         w.write_all(&[self.version])?;
-        w.write_all(&[self.compression as u8])?;
-        w.write_all(&[self.encryption as u8])?;
+        // BYTES 6 AND 7 MEAN DIFFERENT THINGS PER VERSION — see `VERSION`.
+        // Reading already branched here; writing did not, which is the whole
+        // of why the version could not simply be bumped.
+        if self.version >= VERSION_V4 {
+            w.write_all(&[self.encryption as u8])?;
+            w.write_all(&[self.max_shards])?;
+        } else {
+            w.write_all(&[self.compression as u8])?;
+            w.write_all(&[self.encryption as u8])?;
+        }
         Ok(())
     }
 
@@ -110,8 +149,14 @@ impl Header {
         }
         let mut ver = [0u8; 1];
         r.read_exact(&mut ver)?;
-        // Accept v2, v3, and v4.
-        if ver[0] != VERSION && ver[0] != VERSION_V2 && ver[0] != VERSION_V4 {
+        // Accept every version in `SUPPORTED_VERSIONS`, and note that this must
+        // NOT be spelled in terms of `VERSION`: that names the version written,
+        // and once it moved to 4 the old `!= VERSION && != VERSION_V2 &&
+        // != VERSION_V4` quietly stopped accepting v3 — a reader losing the
+        // ability to open existing containers as a side effect of the writer
+        // moving forward, which is a decision nobody would have taken on
+        // purpose in that line.
+        if !SUPPORTED_VERSIONS.contains(&ver[0]) {
             return Err(CtfsError::InvalidVersion(ver[0]));
         }
         let mut tag_bytes = [0u8; 2];
@@ -121,17 +166,18 @@ impl Header {
         //   v4:    byte 6 = encryption,  byte 7 = max_shards
         // V4 files produced by the Nim writer currently use no compression,
         // so we default to None.
-        let (compression, encryption) = if ver[0] >= VERSION_V4 {
-            (CompressionMethod::None, EncryptionMethod::from_byte(tag_bytes[0]))
+        let (compression, encryption, max_shards) = if ver[0] >= VERSION_V4 {
+            (CompressionMethod::None, EncryptionMethod::from_byte(tag_bytes[0]), tag_bytes[1])
         } else {
             // For v2 files, bytes 6-7 were reserved (0x00), which maps to None/None
-            (CompressionMethod::from_byte(tag_bytes[0]), EncryptionMethod::from_byte(tag_bytes[1]))
+            (CompressionMethod::from_byte(tag_bytes[0]), EncryptionMethod::from_byte(tag_bytes[1]), 0)
         };
         Ok(Header {
             id,
             version: ver[0],
             compression,
             encryption,
+            max_shards,
         })
     }
 }

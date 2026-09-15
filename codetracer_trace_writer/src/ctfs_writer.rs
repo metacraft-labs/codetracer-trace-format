@@ -1106,10 +1106,12 @@ impl TraceWriter for CtfsTraceWriter {
         // in. `wasm32-wasip1` has wasi-libc and is not gated here.
         #[cfg(all(target_arch = "wasm32", target_os = "unknown"))]
         if self.serialization_format == EventSerializationFormat::Cbor {
-            return Err("the CTFS `Cbor` serialization mode is not available on wasm32-unknown-unknown, which has no libc \
+            return Err(
+                "the CTFS `Cbor` serialization mode is not available on wasm32-unknown-unknown, which has no libc \
                         for zeekstd to link against; use `SplitBinary` (the default), or build for wasm32-wasip1, where \
                         zeekstd does link"
-                .into());
+                    .into(),
+            );
         }
 
         let mut writer = match self.output {

@@ -348,9 +348,9 @@ mod tests {
 
         // Magic bytes
         assert_eq!(&buf[0..5], &[0xC0, 0xDE, 0x72, 0xAC, 0xE2]);
-        // Version (v3)
-        assert_eq!(buf[5], 3);
-        // Compression = None, Encryption = None
+        // Version 4, which is the value `ctfs-container.md` section 1 states.
+        assert_eq!(buf[5], 4);
+        // Under v4: byte 6 = Encryption (none), byte 7 = MaxShards (0 = not sharded).
         assert_eq!(&buf[6..8], &[0, 0]);
     }
 
@@ -563,8 +563,16 @@ mod tests {
         }
     }
 
+    /// A v4 header has NO compression field, so asking the writer for Zstd must
+    /// not put a compression tag into byte 6 — which under v4 is Encryption.
+    ///
+    /// This is the hazard that made the version bump more than a constant: the
+    /// old `write_to` serialised `[compression, encryption]` unconditionally, so
+    /// a v4 container built this way would have declared itself AES-256-GCM
+    /// encrypted. Compression in this format is a per-stream property of the
+    /// chunked writer; the container header does not carry it.
     #[test]
-    fn test_ctfs_v3_header_with_compression() {
+    fn test_ctfs_v4_header_does_not_put_compression_in_the_encryption_byte() {
         let tmp = NamedTempFile::new().unwrap();
         let path = tmp.path().to_path_buf();
 
@@ -573,22 +581,41 @@ mod tests {
             w.close().unwrap();
         }
 
-        // Read raw bytes to verify v3 header
         let mut f = std::fs::File::open(&path).unwrap();
         let mut buf = [0u8; 8];
         f.read_exact(&mut buf).unwrap();
 
-        // Magic bytes
         assert_eq!(&buf[0..5], &[0xC0, 0xDE, 0x72, 0xAC, 0xE2]);
-        // Version = 3
-        assert_eq!(buf[5], 3);
-        // Compression = 1 (Zstd)
-        assert_eq!(buf[6], 1);
-        // Encryption = 0 (None)
-        assert_eq!(buf[7], 0);
+        assert_eq!(buf[5], 4, "ctfs-container.md section 1: header byte 5 is 4");
+        assert_eq!(buf[6], 0, "byte 6 under v4 is Encryption; a compression tag here would read as AES-256-GCM");
+        assert_eq!(buf[7], 0, "byte 7 under v4 is MaxShards; this container is not sharded");
 
-        // Verify reader can open it and reports correct compression
         let r = CtfsReader::open(&path).unwrap();
+        assert_eq!(r.encryption(), crate::header::EncryptionMethod::None);
+    }
+
+    /// Writing v4 must not cost the ability to READ what earlier versions
+    /// produced. The two are separate decisions, and the acceptance list used to
+    /// be spelled in terms of the version written — so moving the writer forward
+    /// silently dropped v3 from it until that was untangled.
+    #[test]
+    fn test_ctfs_reader_still_accepts_a_v3_container() {
+        let tmp = NamedTempFile::new().unwrap();
+        let path = tmp.path().to_path_buf();
+
+        // Build a v3 container by hand: the writer no longer emits one, so the
+        // only honest way to test v3 reading is to write the v3 bytes.
+        {
+            let w = CtfsWriter::create(&path, 4096, 31).unwrap();
+            w.close().unwrap();
+        }
+        let mut bytes = std::fs::read(&path).unwrap();
+        bytes[5] = 3;
+        bytes[6] = crate::header::CompressionMethod::Zstd as u8; // v3 byte 6 is compression
+        bytes[7] = 0; // v3 byte 7 is encryption
+        std::fs::write(&path, &bytes).unwrap();
+
+        let r = CtfsReader::open(&path).expect("a v3 container must still open");
         assert_eq!(r.compression(), crate::header::CompressionMethod::Zstd);
         assert_eq!(r.encryption(), crate::header::EncryptionMethod::None);
     }

@@ -2,12 +2,12 @@ use std::fs::{File, OpenOptions};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
+use crate::CtfsError;
 use crate::base40::base40_encode;
 use crate::block_alloc::AtomicBlockAllocator;
 use crate::file_entry::FILE_ENTRY_SIZE;
-use crate::header::{ExtendedHeader, Header, EXTENDED_HEADER_SIZE, HEADER_SIZE};
+use crate::header::{EXTENDED_HEADER_SIZE, ExtendedHeader, HEADER_SIZE, Header};
 use crate::pread_compat::{pread_exact, pwrite_all};
-use crate::CtfsError;
 
 /// State for a file entry tracked in the root table.
 #[derive(Debug)]
@@ -125,12 +125,15 @@ impl ConcurrentCtfsWriter {
         // Build the entire root block in memory and write with pwrite
         let mut root_block = vec![0u8; block_size as usize];
 
-        // Header: magic + version + compression + encryption
+        // THROUGH `Header::write_to`, NOT BY HAND. Bytes 6 and 7 mean different
+        // things per version — compression/encryption under v2/v3, encryption/
+        // max_shards under v4 — so a second open-coded copy of the layout is a
+        // second thing to keep correct, and this one would have gone on writing
+        // the v3 meaning under a v4 version byte.
         let header = Header::new();
-        root_block[0..5].copy_from_slice(&header.id);
-        root_block[5] = header.version;
-        root_block[6] = header.compression as u8;
-        root_block[7] = header.encryption as u8;
+        let mut header_bytes = Vec::with_capacity(crate::header::HEADER_SIZE);
+        header.write_to(&mut header_bytes)?;
+        root_block[0..header_bytes.len()].copy_from_slice(&header_bytes);
 
         // Extended header: block_size + max_root_entries
         root_block[8..12].copy_from_slice(&block_size.to_le_bytes());

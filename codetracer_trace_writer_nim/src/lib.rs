@@ -57,6 +57,18 @@ extern "C" {
     fn trace_writer_register_return(handle: *mut std::ffi::c_void);
 
     fn trace_writer_register_return_int(handle: *mut std::ffi::c_void, value: i64, type_kind: i32, type_name: *const std::os::raw::c_char);
+    // THE `_by_type_id` FORMS EXIST SO THIS WRAPPER DOES NOT HAVE TO INVENT A
+    // TYPE NAME. A `ValueRecord::{Int,Float,Bool}` carries a TypeId and no name;
+    // every name-taking entry interns whatever it is given, so passing a
+    // synthesised `type_{id}` interned a type the recorder never declared. A
+    // dangling id is refused and named through `trace_writer_last_error`.
+    fn trace_writer_register_return_int_by_type_id(handle: *mut std::ffi::c_void, value: i64, type_id: usize);
+    fn trace_writer_register_variable_int_by_type_id(
+        handle: *mut std::ffi::c_void,
+        name: *const std::os::raw::c_char,
+        value: i64,
+        type_id: usize,
+    );
     // Kept for ABI compatibility — the wrapper now routes every non-Int /
     // non-None return value through the streaming-encoder CBOR path so
     // typed variants (Bool, String, Float, Char, Struct, ...) survive
@@ -1263,7 +1275,7 @@ impl StreamingValueEncoder {
             // intermediates, never in recorder output. Fall back to a raw
             // string so the data is at least preserved for inspection.
             ValueRecord::Cell { .. } => {
-                let (repr, _kind, _type_name) = value_record_to_raw(value);
+                let (repr, _kind) = value_record_to_raw(value);
                 unsafe { ct_value_write_raw(self.handle, repr.as_ptr(), repr.len(), 0) };
             }
         }
@@ -1694,10 +1706,9 @@ impl NimTraceWriter {
     pub fn register_return(&mut self, return_value: ValueRecord) {
         match &return_value {
             // Fast paths that bypass CBOR encoding for the most common shapes.
-            ValueRecord::Int { i, type_id } => {
-                let type_name = str_to_cstring(&format!("type_{}", type_id.0));
-                unsafe { trace_writer_register_return_int(self.handle, *i, TypeKind::Int as i32, type_name.as_ptr()) }
-            }
+            ValueRecord::Int { i, type_id } => unsafe {
+                trace_writer_register_return_int_by_type_id(self.handle, *i, type_id.0)
+            },
             ValueRecord::None { .. } => unsafe {
                 trace_writer_register_return(self.handle);
             },
@@ -1719,10 +1730,9 @@ impl NimTraceWriter {
         let c_name = str_to_cstring(name);
         match &value {
             // Fast paths that bypass CBOR encoding for the most common shapes.
-            ValueRecord::Int { i, type_id } => {
-                let type_name = str_to_cstring(&format!("type_{}", type_id.0));
-                unsafe { trace_writer_register_variable_int(self.handle, c_name.as_ptr(), *i, TypeKind::Int as i32, type_name.as_ptr()) }
-            }
+            ValueRecord::Int { i, type_id } => unsafe {
+                trace_writer_register_variable_int_by_type_id(self.handle, c_name.as_ptr(), *i, type_id.0)
+            },
             // Every other variant — Bool, String, Float, Char, Sequence,
             // Tuple, Struct, Variant, Reference, BigInt, None, Raw, Error,
             // Cell — is routed through the streaming encoder so the reader
@@ -3887,27 +3897,33 @@ pub fn create_trace_writer(program: &str, args: &[String], format: TraceEventsFi
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Convert a `ValueRecord` to a raw string representation + TypeKind + type name
-/// for use with the `_raw` C API variants.
-fn value_record_to_raw(value: &ValueRecord) -> (String, TypeKind, String) {
+/// Convert a `ValueRecord` to a raw string representation + TypeKind.
+///
+/// IT NO LONGER RETURNS A TYPE NAME, and it never needed to. Every arm used to
+/// build `format!("type_{}", type_id.0)` — twelve synthesised names — and the
+/// one caller discarded all of them (`let (repr, _kind, _type_name) = ...`).
+/// They were dead the whole time, which is worth saying plainly: the invention
+/// that interned a type the recorder never declared was reachable from exactly
+/// two places, and this was not one of them.
+fn value_record_to_raw(value: &ValueRecord) -> (String, TypeKind) {
     match value {
-        ValueRecord::Int { i, type_id } => (i.to_string(), TypeKind::Int, format!("type_{}", type_id.0)),
-        ValueRecord::Float { f, type_id } => (f.to_string(), TypeKind::Float, format!("type_{}", type_id.0)),
-        ValueRecord::Bool { b, type_id } => (b.to_string(), TypeKind::Bool, format!("type_{}", type_id.0)),
-        ValueRecord::String { text, type_id } => (text.clone(), TypeKind::String, format!("type_{}", type_id.0)),
-        ValueRecord::Raw { r, type_id } => (r.clone(), TypeKind::Raw, format!("type_{}", type_id.0)),
-        ValueRecord::Error { msg, type_id } => (msg.clone(), TypeKind::Error, format!("type_{}", type_id.0)),
-        ValueRecord::None { type_id } => ("None".to_string(), TypeKind::None, format!("type_{}", type_id.0)),
-        ValueRecord::Char { c, type_id } => (c.to_string(), TypeKind::Char, format!("type_{}", type_id.0)),
-        ValueRecord::Sequence { type_id, .. } => ("[...]".to_string(), TypeKind::Seq, format!("type_{}", type_id.0)),
-        ValueRecord::Tuple { type_id, .. } => ("(...)".to_string(), TypeKind::Tuple, format!("type_{}", type_id.0)),
-        ValueRecord::Struct { type_id, .. } => ("{...}".to_string(), TypeKind::Struct, format!("type_{}", type_id.0)),
-        ValueRecord::Variant { discriminator, type_id, .. } => (discriminator.clone(), TypeKind::Variant, format!("type_{}", type_id.0)),
-        ValueRecord::Reference { address, type_id, .. } => (format!("0x{:x}", address), TypeKind::Pointer, format!("type_{}", type_id.0)),
-        ValueRecord::Cell { place } => (format!("place_{}", place.0), TypeKind::Raw, "Cell".to_string()),
-        ValueRecord::BigInt { negative, type_id, .. } => {
+        ValueRecord::Int { i, .. } => (i.to_string(), TypeKind::Int),
+        ValueRecord::Float { f, .. } => (f.to_string(), TypeKind::Float),
+        ValueRecord::Bool { b, .. } => (b.to_string(), TypeKind::Bool),
+        ValueRecord::String { text, .. } => (text.clone(), TypeKind::String),
+        ValueRecord::Raw { r, .. } => (r.clone(), TypeKind::Raw),
+        ValueRecord::Error { msg, .. } => (msg.clone(), TypeKind::Error),
+        ValueRecord::None { .. } => ("None".to_string(), TypeKind::None),
+        ValueRecord::Char { c, .. } => (c.to_string(), TypeKind::Char),
+        ValueRecord::Sequence { .. } => ("[...]".to_string(), TypeKind::Seq),
+        ValueRecord::Tuple { .. } => ("(...)".to_string(), TypeKind::Tuple),
+        ValueRecord::Struct { .. } => ("{...}".to_string(), TypeKind::Struct),
+        ValueRecord::Variant { discriminator, .. } => (discriminator.clone(), TypeKind::Variant),
+        ValueRecord::Reference { address, .. } => (format!("0x{:x}", address), TypeKind::Pointer),
+        ValueRecord::Cell { place } => (format!("place_{}", place.0), TypeKind::Raw),
+        ValueRecord::BigInt { negative, .. } => {
             let sign = if *negative { "-" } else { "" };
-            (format!("{}(bigint)", sign), TypeKind::Int, format!("type_{}", type_id.0))
+            (format!("{}(bigint)", sign), TypeKind::Int)
         }
     }
 }

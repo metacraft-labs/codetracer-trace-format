@@ -617,7 +617,7 @@ const NIM_ONLY: [&str; 0] = [];
 /// directions: a file here that stops differing fails the test (so a fix cannot
 /// leave a stale exclusion behind), and a file that differs without being here
 /// fails it too.
-const KNOWN_DIVERGENCES: [(&str, &str); 3] = [
+const KNOWN_DIVERGENCES: [(&str, &str); 1] = [
     (
         "meta.dat",
         "three measured causes, none of them the field set: (1) recording_id is a freshly minted \
@@ -627,30 +627,24 @@ const KNOWN_DIVERGENCES: [(&str, &str); 3] = [
          `the_two_writers_meta_dat_agrees_on_every_field_except_the_minted_recording_id`, which \
          pins (2) and (3) individually.",
     ),
-    (
-        "types.dat",
-        "ONE defect now, not two, and the shape is no longer it. The record shape was reconciled: \
-         codetracer-trace-format-nim writes `kind: u8, lang_type_len: varint, lang_type, \
-         specific_info` and both writers agree on the CBOR of `TypeSpecificInfo::None`. What is \
-         left is an INVENTION, and it is on the Rust side of the Nim binding rather than in Nim: \
-         `codetracer_trace_writer_nim/src/lib.rs` synthesises `format!(\"type_{}\", type_id.0)` \
-         for a `ValueRecord` that carries only a TypeId, because the C ABI wants a type NAME. So a \
-         fixture whose `ValueRecord::Int` references an unregistered `TypeId(0)` makes the Nim \
-         container intern `type_0` while the Rust one leaves types.dat empty. The spec has NO \
-         auto-registration rule, no reserved type ids, and no defined behaviour for a dangling \
-         type_id; trace-events.md:383 shows the RECORDER calling ensure_type_id explicitly. \
-         Neither writer should invent a type.",
-    ),
-    ("types.off", "follows types.dat."),
 ];
 
 /// Drive a fixture that populates EVERY stream through both writers.
 fn write_populated(dir: &Path, program: &str, nim: bool) -> PathBuf {
     let lls = fixture_line_lengths();
     let ps = fixture_paths();
-    let value = |i: u32| codetracer_trace_types::ValueRecord::Int {
+    // THE TYPE IS REGISTERED RATHER THAN ASSUMED. This used a bare `TypeId(0)`
+    // with no `ensure_type_id` behind it, which is a dangling reference: the
+    // spec has no auto-registration rule, no reserved ids and no defined
+    // behaviour for one. The fixture was therefore exercising the undefined
+    // case and comparing the two writers' guesses about it — one interned a
+    // synthesised `type_0`, the other left `types.dat` empty, and the
+    // divergence that recorded the difference was really recording the fixture.
+    //
+    // Both arms below now call `ensure_type_id` first and use what it returns.
+    let value = |tid: codetracer_trace_types::TypeId, i: u32| codetracer_trace_types::ValueRecord::Int {
         i: i64::from(i),
-        type_id: codetracer_trace_types::TypeId(0),
+        type_id: tid,
     };
 
     if nim {
@@ -663,9 +657,10 @@ fn write_populated(dir: &Path, program: &str, nim: bool) -> PathBuf {
             w.register_path_with_line_lengths(p, &lls[i]).expect("nim register path");
         }
         w.register_function("f", &ps[1], Line(1));
+        let tid = w.ensure_type_id(codetracer_trace_types::TypeKind::Int, "Int");
         for i in 0..12u32 {
             w.register_step_with_column(&ps[1], Line(1), Some(Line(i64::from(i % 60 + 1))));
-            w.register_variable_with_full_value("v", value(i));
+            w.register_variable_with_full_value("v", value(tid, i));
             if i == 2 {
                 w.register_call(codetracer_trace_types::FunctionId(0), vec![]);
             }
@@ -688,9 +683,10 @@ fn write_populated(dir: &Path, program: &str, nim: bool) -> PathBuf {
             w.register_path_with_line_lengths(p, &lls[i]);
         }
         AbstractTraceWriter::register_function(&mut w, "f", &ps[1], Line(1));
+        let tid = AbstractTraceWriter::ensure_type_id(&mut w, codetracer_trace_types::TypeKind::Int, "Int");
         for i in 0..12u32 {
             AbstractTraceWriter::register_step_with_column(&mut w, &ps[1], Line(1), Some(Line(i64::from(i % 60 + 1))));
-            AbstractTraceWriter::register_variable_with_full_value(&mut w, "v", value(i));
+            AbstractTraceWriter::register_variable_with_full_value(&mut w, "v", value(tid, i));
             if i == 2 {
                 AbstractTraceWriter::register_call(&mut w, codetracer_trace_types::FunctionId(0), vec![]);
             }

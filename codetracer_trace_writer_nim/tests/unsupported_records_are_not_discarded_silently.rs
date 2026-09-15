@@ -155,7 +155,13 @@ fn discard_is_counted_and_named() {
 
     writer.drop_variables(&["a".to_string(), "b".to_string()]);
     writer.drop_variable("c");
-    writer.register_compound_value(Place(0), ValueRecord::Int { i: 1, type_id: TypeId(0) });
+    // THE TYPE IS REGISTERED, because a bare `TypeId(0)` is a DANGLING id and
+    // the writer now refuses one by name. There is no auto-registration rule in
+    // the spec, no reserved ids, and no defined behaviour for an id nobody
+    // interned — so this used to work only because the binding invented a
+    // `type_0` name to satisfy a C ABI that had no way to accept an id.
+    let tid = writer.ensure_type_id(codetracer_trace_types::TypeKind::Int, "Int");
+    writer.register_compound_value(Place(0), ValueRecord::Int { i: 1, type_id: tid });
 
     let counts = writer.discarded_record_counts();
     assert_eq!(
@@ -229,10 +235,16 @@ fn register_variable_name_is_uncounted_because_the_name_really_survives() {
 
     // The dispatch a recorder actually drives.
     writer.add_event(TraceLowLevelEvent::VariableName("interesting_name".to_string()));
+    // THE TYPE IS REGISTERED, because a bare `TypeId(0)` is a DANGLING id and
+    // the writer now refuses one by name. There is no auto-registration rule in
+    // the spec, no reserved ids, and no defined behaviour for an id nobody
+    // interned — so this used to work only because the binding invented a
+    // `type_0` name to satisfy a C ABI that had no way to accept an id.
+    let tid = writer.ensure_type_id(codetracer_trace_types::TypeKind::Int, "Int");
     writer.add_event(TraceLowLevelEvent::Value(
         codetracer_trace_types::FullValueRecord {
             variable_id: VariableId(0),
-            value: ValueRecord::Int { i: 7, type_id: TypeId(0) },
+            value: ValueRecord::Int { i: 7, type_id: tid },
         },
     ));
 
@@ -272,11 +284,14 @@ fn register_full_value_persists_rather_than_silently_dropping() {
     writer.register_step(&program, Line(2));
     writer.add_event(TraceLowLevelEvent::VariableName("direct_call_name".to_string()));
 
+    // THE TYPE IS REGISTERED, because a bare `TypeId(0)` is a DANGLING id and
+    // the writer now refuses one by name. There is no auto-registration rule in
+    // the spec, no reserved ids, and no defined behaviour for an id nobody
+    // interned — so this used to work only because the binding invented a
+    // `type_0` name to satisfy a C ABI that had no way to accept an id.
     // The direct call, NOT via add_event.
-    writer.register_full_value(
-        VariableId(0),
-        ValueRecord::Int { i: 1234, type_id: TypeId(0) },
-    );
+    let tid = writer.ensure_type_id(codetracer_trace_types::TypeKind::Int, "Int");
+    writer.register_full_value(VariableId(0), ValueRecord::Int { i: 1234, type_id: tid });
 
     assert!(
         writer.discarded_record_counts().is_empty(),

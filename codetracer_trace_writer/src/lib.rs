@@ -185,10 +185,13 @@ mod tests {
 
         tracer.drop_variables(&["variable1".to_string(), "variable2".to_string(), "variable3".to_string()]);
 
-        // 48 rather than 47: `start` emits the entry step, so the stream carries one more Step
-        // than this test registers. CONFORMED TO THE SPEC, NOT LOOSENED — `trace-events.md`,
-        // "Recorder Integration — Starting a Recording". Still an exact count.
-        assert_eq!(tracer.events.len(), 48);
+        // 47, and both adjustments are the spec's. `start` emits the entry step, so the stream
+        // carries one more Step than this test registers (`trace-events.md`, "Recorder
+        // Integration — Starting a Recording"); and `register_asm` records NOTHING, so the one
+        // this test calls contributes none (the same file's event disposition table:
+        // `| 10 | Asm | Removed (unused by current recorders) |`). CONFORMED TO THE SPEC, NOT
+        // LOOSENED — still an exact count, arrived at as 48 − 1.
+        assert_eq!(tracer.events.len(), 47);
         // visible with
         // cargo tets -- --nocapture
         // println!("{:#?}", tracer.events);

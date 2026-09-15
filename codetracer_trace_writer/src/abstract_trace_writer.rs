@@ -239,9 +239,27 @@ pub trait AbstractTraceWriter {
         self.add_event(TraceLowLevelEvent::Type(typ));
     }
 
-    fn register_asm(&mut self, instructions: &[String]) {
-        self.add_event(TraceLowLevelEvent::Asm(instructions.to_vec()));
-    }
+    /// Records nothing. `Asm` IS RETIRED, and this says so rather than
+    /// pretending.
+    ///
+    /// `trace-events.md`'s event disposition table reads
+    /// `| 10 | Asm | Removed (unused by current recorders) |`, and no split
+    /// stream carries it — it existed only inside the combined `events.log`,
+    /// which is itself no longer written. So the instructions handed here have
+    /// nowhere to go.
+    ///
+    /// It is kept as an explicit no-op rather than deleted because the method is
+    /// part of a trait implemented in two crates, and removing it would be a
+    /// compile break for a call that no recorder makes: checked across the beam,
+    /// evm, python and ruby recorders, none of them calls it. The Nim-backed
+    /// writer already answers it with `discard_unsupported("register_asm")`, and
+    /// this is the same stance on the Rust side — previously it pushed the event
+    /// into a stream that nothing assembles, which is the silent kind of
+    /// nothing rather than the stated kind.
+    ///
+    /// `the_container_carries_no_events_log`'s sibling round-trip test asserts
+    /// the absence, so this cannot quietly start working again either.
+    fn register_asm(&mut self, _instructions: &[String]) {}
 
     fn register_variable_with_full_value(&mut self, name: &str, value: ValueRecord) {
         let variable_id = self.ensure_variable_id(name);

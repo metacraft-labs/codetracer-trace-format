@@ -617,7 +617,7 @@ const NIM_ONLY: [&str; 0] = [];
 /// directions: a file here that stops differing fails the test (so a fix cannot
 /// leave a stale exclusion behind), and a file that differs without being here
 /// fails it too.
-const KNOWN_DIVERGENCES: [(&str, &str); 5] = [
+const KNOWN_DIVERGENCES: [(&str, &str); 3] = [
     (
         "meta.dat",
         "three measured causes, none of them the field set: (1) recording_id is a freshly minted \
@@ -628,27 +628,18 @@ const KNOWN_DIVERGENCES: [(&str, &str); 5] = [
          pins (2) and (3) individually.",
     ),
     (
-        "funcs.dat",
-        "record shape, and the spec settles it AGAINST the Nim writer. internal-files.md:46 at \
-         spec ff95fe4 gives the funcs.dat record as `global_line_index: varint, name_len: varint, \
-         name: bytes`, which is what the Rust writer emits; the Nim writer emits the bare name \
-         bytes and no global_line_index at all. Root cause: Nim uses ONE generic bare-bytes \
-         InterningTableWriter for paths/funcs/types/varnames alike. The data is not lost at the \
-         boundary — trace_writer_ensure_function_id receives (name, path, line) and stores them — \
-         it is dropped at the interning call. Fix belongs in codetracer-trace-format-nim.",
-    ),
-    ("funcs.off", "follows funcs.dat's record lengths."),
-    (
         "types.dat",
-        "two independent defects. (a) Record shape: internal-files.md:45 gives `kind: u8, \
-         lang_type_len: varint, lang_type: bytes, specific_info: binary`, which the Rust writer \
-         emits; Nim writes bare bytes through the same generic table as funcs.dat. (b) An \
-         invention: codetracer_trace_writer_nim/src/lib.rs synthesises `format!(\"type_{}\", \
-         type_id.0)` for a value that carries only a TypeId, so a fixture whose ValueRecord::Int \
-         references an unregistered TypeId(0) makes the Nim container intern `type_0` while the \
-         Rust one leaves types.dat empty. The spec has NO auto-registration rule, no reserved \
-         type ids, and no defined behaviour for a dangling type_id; trace-events.md:383 shows the \
-         RECORDER calling ensure_type_id explicitly. Neither writer should invent a type.",
+        "ONE defect now, not two, and the shape is no longer it. The record shape was reconciled: \
+         codetracer-trace-format-nim writes `kind: u8, lang_type_len: varint, lang_type, \
+         specific_info` and both writers agree on the CBOR of `TypeSpecificInfo::None`. What is \
+         left is an INVENTION, and it is on the Rust side of the Nim binding rather than in Nim: \
+         `codetracer_trace_writer_nim/src/lib.rs` synthesises `format!(\"type_{}\", type_id.0)` \
+         for a `ValueRecord` that carries only a TypeId, because the C ABI wants a type NAME. So a \
+         fixture whose `ValueRecord::Int` references an unregistered `TypeId(0)` makes the Nim \
+         container intern `type_0` while the Rust one leaves types.dat empty. The spec has NO \
+         auto-registration rule, no reserved type ids, and no defined behaviour for a dangling \
+         type_id; trace-events.md:383 shows the RECORDER calling ensure_type_id explicitly. \
+         Neither writer should invent a type.",
     ),
     ("types.off", "follows types.dat."),
 ];
@@ -917,27 +908,22 @@ fn the_two_writers_meta_dat_agrees_on_every_field_except_the_minted_recording_id
             );
         }
     }
-    assert_ne!(
-        r.flags & FLAG_HAS_INTERNING_TABLES,
-        0,
-        "the Rust writer stamps bit 12 on a container that has the interning tables"
-    );
+    // BOTH writers stamp bit 12 now, so the exclusion this block used to carry is
+    // retired rather than reworded. The assertion it was written around said so
+    // itself: *"When it is fixed this assertion fails and the whole flags word
+    // joins the compared set."* It was fixed, it did fail, and the whole word is
+    // compared below.
+    for (label, flags) in [("nim", n.flags), ("rust", r.flags)] {
+        assert_ne!(
+            flags & FLAG_HAS_INTERNING_TABLES,
+            0,
+            "{label}: the container carries all four interning tables, so bit 12 must be stamped"
+        );
+    }
     assert_eq!(
-        n.flags & FLAG_HAS_INTERNING_TABLES,
-        0,
-        "MEASURED DEFECT (codetracer-trace-format-nim): multi_stream_writer.nim never passes \
-         hasInterningTables to writeMetaDat, so bit 12 is clear on a container that HAS the \
-         tables. When it is fixed this assertion fails and the whole flags word joins the \
-         compared set."
-    );
-    // Every other bit must already agree, so the exclusion is exactly one bit
-    // wide rather than "the flags differ somehow".
-    assert_eq!(
-        n.flags | FLAG_HAS_INTERNING_TABLES,
-        r.flags | FLAG_HAS_INTERNING_TABLES,
-        "the flags words must differ in bit 12 and nothing else: nim {:#06x} rust {:#06x}",
-        n.flags,
-        r.flags
+        n.flags, r.flags,
+        "the two writers must agree on the WHOLE flags word: nim {:#06x} rust {:#06x}",
+        n.flags, r.flags
     );
 }
 

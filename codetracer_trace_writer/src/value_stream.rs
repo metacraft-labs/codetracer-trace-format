@@ -159,7 +159,10 @@ pub enum ValueStreamEvent {
     VariableCell { variable_id: u64, place: i64 },
     /// Variable assignment or parameter passing (`from` is a CBOR `RValue`).
     Assignment { to: u64, pass_by: u8, from: Vec<u8> },
+    /// Forward-compatible unknown event (tag >= 10), self-delimited by a varint length prefix.
+    Unknown { tag: u8, payload: Vec<u8> },
 }
+
 
 /// One value record: the (possibly empty) sequence of value-stream events
 /// attributed to a single step. Parallel-indexed — record `N` ↔ step `N`.
@@ -302,6 +305,11 @@ impl ValueStreamEvent {
                 encode_varint(from.len() as u64, out);
                 out.extend_from_slice(from);
             }
+            ValueStreamEvent::Unknown { tag, payload } => {
+                out.push(*tag);
+                encode_varint(payload.len() as u64, out);
+                out.extend_from_slice(payload);
+            }
         }
     }
 
@@ -376,9 +384,22 @@ impl ValueStreamEvent {
                 let from = decode_blob(data, pos)?;
                 Ok(ValueStreamEvent::Assignment { to, pass_by, from })
             }
+            tag if tag >= 10 => {
+                let len = decode_varint(data, pos)? as usize;
+                if *pos + len > data.len() {
+                    return Err(format!(
+                        "values.dat: truncated payload for unknown event tag {tag} (expected {len} bytes, only {} remain)",
+                        data.len() - *pos
+                    ));
+                }
+                let payload = data[*pos..*pos + len].to_vec();
+                *pos += len;
+                Ok(ValueStreamEvent::Unknown { tag, payload })
+            }
             other => Err(format!("values.dat: unknown value-event tag {other}")),
         }
     }
+
 }
 
 impl ValueRecordEntry {
@@ -716,6 +737,10 @@ mod tests {
                 pass_by: 1,
                 from: cbor_bytes(&RValue::Simple(VariableId(2))),
             },
+            ValueStreamEvent::Unknown {
+                tag: 10,
+                payload: vec![0xCA, 0xFE, 0xBA, 0xBE],
+            },
         ];
         let rec = ValueRecordEntry { events: events.clone() };
         let mut buf = Vec::new();
@@ -730,6 +755,31 @@ mod tests {
             panic!("expected CellValue");
         }
     }
+
+    #[test]
+    fn forward_compat_unknown_tag_roundtrip_and_truncation() {
+        // Tag 42 with 3-byte payload
+        let ev = ValueStreamEvent::Unknown {
+            tag: 42,
+            payload: vec![1, 2, 3],
+        };
+        let mut buf = Vec::new();
+        ev.encode(&mut buf);
+        // Wire: [42, varint(3), 1, 2, 3]
+        assert_eq!(buf, vec![42, 3, 1, 2, 3]);
+
+        let mut pos = 0;
+        let dec = ValueStreamEvent::decode(&buf, &mut pos).unwrap();
+        assert_eq!(dec, ev);
+        assert_eq!(pos, 5);
+
+        // Truncation: declared len 10, but only 2 bytes exist
+        let trunc_buf = vec![42, 10, 1, 2];
+        let mut pos2 = 0;
+        let err = ValueStreamEvent::decode(&trunc_buf, &mut pos2).unwrap_err();
+        assert!(err.contains("truncated payload for unknown event tag 42"), "expected truncation error, got: {err}");
+    }
+
 
     #[test]
     fn empty_record_is_one_zero_count_byte_after_step_values_absent() {

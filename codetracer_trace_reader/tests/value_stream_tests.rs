@@ -208,3 +208,46 @@ fn legacy_trace_has_no_value_stream() {
     let expected = expected_records_from_events(&ct_path);
     assert!(!expected.is_empty());
 }
+
+#[test]
+fn forward_compat_chunk_records_decode_unknown_tags() {
+    use codetracer_trace_reader::value_stream_reader::decode_chunk_records;
+
+    let rec = ValueRecordEntry {
+        events: vec![
+            ValueStreamEvent::StepValues {
+                values: vec![(1, vec![0x01, 0x02])],
+            },
+            ValueStreamEvent::Unknown {
+                tag: 15,
+                payload: vec![0xAA, 0xBB, 0xCC],
+            },
+        ],
+    };
+
+    let mut uncompressed = Vec::new();
+    let mut rec_bytes = Vec::new();
+    rec.encode(&mut rec_bytes);
+
+    // varint len + rec_bytes
+    let mut val = rec_bytes.len() as u64;
+    loop {
+        let mut byte = (val & 0x7f) as u8;
+        val >>= 7;
+        if val != 0 {
+            byte |= 0x80;
+        }
+        uncompressed.push(byte);
+        if val == 0 {
+            break;
+        }
+    }
+    uncompressed.extend_from_slice(&rec_bytes);
+
+    let compressed = zstd::encode_all(&uncompressed[..], 1).unwrap();
+    let decoded_records = decode_chunk_records(&compressed).unwrap();
+    assert_eq!(decoded_records.len(), 1);
+    assert_eq!(decoded_records[0].events.len(), 2);
+    assert_eq!(decoded_records[0].events, rec.events);
+}
+

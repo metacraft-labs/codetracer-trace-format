@@ -4,3 +4,6 @@ target/
 
 # Nix-generated pre-commit config
 .pre-commit-config.yaml
+
+# A nix-store symlink some dev shells drop here; not part of any crate.
+node_modules

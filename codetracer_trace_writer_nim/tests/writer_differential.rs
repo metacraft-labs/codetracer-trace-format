@@ -617,17 +617,68 @@ const NIM_ONLY: [&str; 0] = [];
 /// directions: a file here that stops differing fails the test (so a fix cannot
 /// leave a stale exclusion behind), and a file that differs without being here
 /// fails it too.
-const KNOWN_DIVERGENCES: [(&str, &str); 1] = [
-    (
-        "meta.dat",
-        "three measured causes, none of them the field set: (1) recording_id is a freshly minted \
-         UUIDv7 on both sides — inherent; (2) the Nim writer stores an empty workdir where the \
-         Rust writer stores the real one; (3) the Nim writer emits all four interning tables and \
-         then never stamps FLAG_HAS_INTERNING_TABLES (bit 12). Compared FIELD BY FIELD by \
-         `the_two_writers_meta_dat_agrees_on_every_field_except_the_minted_recording_id`, which \
-         pins (2) and (3) individually.",
-    ),
-];
+/// Files that differ, each paired with the reason — and with a NORMALISER that
+/// must fully account for it.
+///
+/// # Why a normaliser rather than a sentence
+///
+/// The stale-exclusion check below fires per ENTRY: an entry is stale when its
+/// file stops differing. That works for a file whose only difference is the one
+/// described, and fails silently for a file with SEVERAL. `meta.dat` had three
+/// causes bundled in one row — a minted UUID, an empty workdir and an unstamped
+/// capability bit — and because the UUID guarantees the file always differs,
+/// the row could never go stale. Two of those three were fixed and the row went
+/// on describing them; one was still listed here after the flag it named had
+/// been stamped for a day.
+///
+/// So a reason is no longer prose. It is a function that removes exactly what
+/// it claims to explain, and the file must then be IDENTICAL. A cause that
+/// stops being true leaves a residue, and the residue fails the test — the same
+/// way `funcs.dat` and `types.dat` failed theirs, rather than rotting quietly.
+const KNOWN_DIVERGENCES: [(&str, &str, fn(&mut Vec<u8>)); 1] = [(
+    "meta.dat",
+    "the recording_id is a freshly minted UUIDv7 on each side and can never match.      EVERY OTHER BYTE MUST BE IDENTICAL — the normaliser blanks both ids and the residue is      compared, so a second cause appearing here fails rather than hiding behind this one.",
+    blank_recording_id,
+)];
+
+/// Overwrite the canonical 36-character UUID in a `meta.dat` image with `0`s.
+///
+/// Found by shape rather than by offset: `8-4-4-4-12` hex with hyphens is a
+/// pattern nothing else in the image matches, and locating it that way keeps
+/// this working if a field before it changes width.
+fn blank_recording_id(buf: &mut Vec<u8>) {
+    fn looks_like_uuid(w: &[u8]) -> bool {
+        w.len() == 36
+            && w.iter().enumerate().all(|(i, c)| match i {
+                8 | 13 | 18 | 23 => *c == b'-',
+                _ => c.is_ascii_hexdigit(),
+            })
+    }
+    let mut i = 0;
+    while i + 36 <= buf.len() {
+        if looks_like_uuid(&buf[i..i + 36]) {
+            for b in &mut buf[i..i + 36] {
+                *b = b'0';
+            }
+            return;
+        }
+        i += 1;
+    }
+}
+
+
+// THE FIXTURE TELLS BOTH WRITERS THE SAME THINGS, which it did not before.
+//
+// It passed `&[]` for args and never called `set_workdir` on either side. The
+// Rust writer defaults a workdir; the Nim one is told nothing and stores what
+// it was told. So the comparison was "Rust, defaulting" against "Nim, told
+// nothing", and the difference it recorded was a property of the FIXTURE.
+//
+// A vacuous comparison is the same defect in the other direction: with `&[]` on
+// both sides `assert_eq!(n.args, r.args)` holds whatever either writer does
+// with args, so it could not have caught a writer that dropped them.
+const FIXTURE_ARGS: [&str; 2] = ["--fixture", "--two-args"];
+const FIXTURE_WORKDIR: &str = "/fixture/workdir";
 
 /// Drive a fixture that populates EVERY stream through both writers.
 fn write_populated(dir: &Path, program: &str, nim: bool) -> PathBuf {
@@ -648,7 +699,9 @@ fn write_populated(dir: &Path, program: &str, nim: bool) -> PathBuf {
     };
 
     if nim {
-        let mut w = NimTraceWriter::new(program, &[], TraceEventsFileFormat::Ctfs);
+        let args: Vec<String> = FIXTURE_ARGS.iter().map(|a| a.to_string()).collect();
+        let mut w = NimTraceWriter::new(program, &args, TraceEventsFileFormat::Ctfs);
+        w.set_workdir(std::path::Path::new(FIXTURE_WORKDIR));
         w.begin_writing_trace_events(&dir.join("p_events.json")).expect("nim begin_events");
         w.begin_writing_trace_metadata(&dir.join("p_meta.json")).expect("nim begin_metadata");
         w.begin_writing_trace_paths(&dir.join("p_paths.json")).expect("nim begin_paths");
@@ -675,9 +728,11 @@ fn write_populated(dir: &Path, program: &str, nim: bool) -> PathBuf {
         drop(w);
         dir.join(format!("{program}.ct"))
     } else {
-        let mut w = CtfsTraceWriter::new(program, &[]);
+        let args: Vec<String> = FIXTURE_ARGS.iter().map(|a| a.to_string()).collect();
+        let mut w = CtfsTraceWriter::new(program, &args);
         w.enable_column_aware_steps();
         let out = dir.join(program);
+        AbstractTraceWriter::set_workdir(&mut w, std::path::Path::new(FIXTURE_WORKDIR));
         TraceWriter::begin_writing_trace_events(&mut w, &out).expect("rust begin_events");
         for (i, p) in ps.iter().enumerate() {
             w.register_path_with_line_lengths(p, &lls[i]);
@@ -707,8 +762,18 @@ fn every_file_in_the_container_is_either_compared_or_a_named_divergence() {
     // one-sided for a declared reason, or a declared divergence.
     let _guard = nim_lock();
     let dir = tempfile::tempdir().expect("tempdir");
-    let nim_ct = write_populated(dir.path(), "census_nim", true);
-    let rust_ct = write_populated(dir.path(), "census_rust", false);
+    // THE SAME PROGRAM NAME, IN DIFFERENT DIRECTORIES — the arrangement the
+    // field-by-field test already uses, and for the reason it gives: distinct
+    // names make `program` differ for a test-harness reason and mask a real
+    // one. Here it did exactly that, hidden behind the minted recording_id
+    // until the reasons became normalisers that have to account for the WHOLE
+    // difference.
+    let dn = dir.path().join("n");
+    let dr = dir.path().join("r");
+    std::fs::create_dir_all(&dn).expect("mkdir n");
+    std::fs::create_dir_all(&dr).expect("mkdir r");
+    let nim_ct = write_populated(&dn, "census", true);
+    let rust_ct = write_populated(&dr, "census", false);
 
     let mut nim_reader = CtfsReader::open(&nim_ct).expect("open nim");
     let mut rust_reader = CtfsReader::open(&rust_ct).expect("open rust");
@@ -732,12 +797,26 @@ fn every_file_in_the_container_is_either_compared_or_a_named_divergence() {
             (Some(a), Some(b)) if a == b => identical.push(name.clone()),
             (Some(a), Some(b)) => {
                 differing.push(name.clone());
-                if !KNOWN_DIVERGENCES.iter().any(|(n, _)| n == name) {
-                    unexplained.push(format!(
+                match KNOWN_DIVERGENCES.iter().find(|(n, _, _)| n == name) {
+                    None => unexplained.push(format!(
                         "{name} differs (nim {} B, rust {} B) and is not in KNOWN_DIVERGENCES",
                         a.len(),
                         b.len()
-                    ));
+                    )),
+                    Some((_, why, normalise)) => {
+                        // THE REASON MUST ACCOUNT FOR THE WHOLE DIFFERENCE.
+                        let (mut na, mut nb) = (a.clone(), b.clone());
+                        normalise(&mut na);
+                        normalise(&mut nb);
+                        if na != nb {
+                            let at = na.iter().zip(&nb).position(|(x, y)| x != y);
+                            unexplained.push(format!(
+                                "{name} still differs AFTER its declared reason is normalised away                                  (first residual byte at {at:?}, nim {} B, rust {} B) — the entry                                  is hiding a second cause behind the first. Its reason was: {why}",
+                                na.len(),
+                                nb.len()
+                            ));
+                        }
+                    }
                 }
             }
             (None, Some(_)) => {
@@ -763,7 +842,7 @@ fn every_file_in_the_container_is_either_compared_or_a_named_divergence() {
     // The other direction: a declared divergence that has stopped diverging is
     // a stale exclusion, and stale exclusions are how a fixed defect keeps
     // being described as unfixable.
-    for (name, why) in KNOWN_DIVERGENCES {
+    for (name, why, _) in KNOWN_DIVERGENCES {
         assert!(
             differing.iter().any(|d| d == name),
             "{name} no longer differs — remove it from KNOWN_DIVERGENCES and let the census compare it. \
@@ -868,6 +947,10 @@ fn the_two_writers_meta_dat_agrees_on_every_field_except_the_minted_recording_id
     assert_eq!(n.version, r.version, "meta.dat version");
     assert_eq!(n.program, r.program, "program");
     assert_eq!(n.args, r.args, "args");
+    // NON-DEGENERACY FOR `args`, because this comparison used to be vacuous:
+    // the fixture passed `&[]` to both writers, so it held whatever either did
+    // with args — including dropping them. The fixture passes two now.
+    assert_eq!(n.args.len(), FIXTURE_ARGS.len(), "control: the fixture passes real args");
     assert_eq!(n.recorder_id, r.recorder_id, "recorder_id");
     assert_eq!(n.paths, r.paths, "paths");
     assert_eq!(n.trailing, r.trailing, "trailing extension blocks");
@@ -885,13 +968,17 @@ fn the_two_writers_meta_dat_agrees_on_every_field_except_the_minted_recording_id
     );
 
     // Defect (2): the Nim writer drops the working directory.
-    assert!(!r.workdir.is_empty(), "the Rust writer must record a real workdir; got {:?}", r.workdir);
-    assert_eq!(
-        n.workdir, "",
-        "MEASURED DEFECT (codetracer-trace-format-nim): the Nim writer stores an empty workdir. \
-         When it is fixed this assertion fails and the workdir joins the compared set above."
-    );
-
+    // WORKDIR JOINS THE COMPARED SET, exactly as the exception it replaces said
+    // it would: *"When it is fixed this assertion fails and the workdir joins
+    // the compared set above."* It failed the moment the fixture started
+    // CALLING `set_workdir` on the Nim side.
+    //
+    // So the "empty workdir" was never a writer defect. The ABI has
+    // `trace_writer_set_workdir`, the wrapper implements it, and the Nim writer
+    // stores what it is told — the fixture told the Rust writer and not the Nim
+    // one, and the difference it recorded was its own.
+    assert!(!r.workdir.is_empty(), "control: the fixture must set a real workdir; got {:?}", r.workdir);
+    assert_eq!(n.workdir, r.workdir, "workdir");
     // Defect (3): the interning-tables capability bit. Both containers carry
     // funcs/types/paths/varnames tables; only the Rust one says so.
     use codetracer_trace_writer::meta_dat::FLAG_HAS_INTERNING_TABLES;

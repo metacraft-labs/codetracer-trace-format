@@ -101,14 +101,20 @@ const SPLIT_DATA_FILES: &[&str] = &[
 /// Deliverable #1 — a DEFAULT `CtfsTraceWriter` bundle carries ALL five split
 /// streams + their indices + `meta.dat` with every flag set + `events.log`.
 #[test]
-fn default_bundle_emits_all_split_streams_plus_events_log() {
+fn default_bundle_emits_all_split_streams_and_no_events_log() {
     let dir = tempfile::tempdir().unwrap();
     let ct = write_trace(dir.path(), false);
 
     let mut r = codetracer_ctfs::CtfsReader::open(&ct).unwrap();
 
-    // events.log is STILL present (additive — M23e-5 removes it).
-    assert!(r.read_file("events.log").is_ok(), "default bundle must keep events.log (additive)");
+    // `events.log` IS GONE. The spec defines no such stream — it appears in
+    // none of the seven spec files — and the event disposition table records the
+    // combined log as *moved to events.dat*. Its companion marker goes with it.
+    assert!(r.read_file("events.log").is_err(), "the spec defines no events.log, but one was written");
+    assert!(
+        r.read_file("events.fmt").is_err(),
+        "events.fmt described events.log and should go with it"
+    );
 
     // Every split data file + companion index is present.
     for f in SPLIT_DATA_FILES {
@@ -158,46 +164,11 @@ fn default_bundle_events_round_trip_via_events_log() {
     );
 }
 
-/// Deliverable #3 — a fully-disabled bundle is `events.log`-only: NONE of the
-/// split files are present, there is NO `meta.dat`, and the events still
-/// round-trip. The legacy postprocessing path is preserved verbatim.
-#[test]
-fn disabled_bundle_is_events_log_only_legacy() {
-    let dir = tempfile::tempdir().unwrap();
-    let ct = write_trace(dir.path(), true);
-
-    let mut r = codetracer_ctfs::CtfsReader::open(&ct).unwrap();
-
-    assert!(r.read_file("events.log").is_ok(), "legacy bundle must carry events.log");
-
-    for f in SPLIT_DATA_FILES {
-        assert!(r.read_file(f).is_err(), "legacy (splits-off) bundle must NOT carry split file `{f}`");
-    }
-    // meta.dat IS carried, even with every split stream off.
-    //
-    // It used to be omitted so a flags-off bundle stayed byte-for-byte
-    // identical to the legacy container — which was only tenable while the
-    // retired `meta.json` sidecar carried the metadata for that case. With the
-    // sidecars gone, omitting it here would leave this bundle with no metadata
-    // document at all.
-    let meta = codetracer_trace_writer::meta_dat::decode_meta_dat(
-        &r.read_file("meta.dat").expect("splits-off bundle must still carry meta.dat"),
-    )
-    .expect("meta.dat must decode");
-    assert_eq!(meta.flags, 0, "a splits-off bundle records no stream-capability flags");
-    assert!(!meta.recording_id.is_empty(), "meta.dat must carry a recording_id");
-
-    // Events still round-trip through the legacy events.log path.
-    let mut reader = codetracer_trace_reader::create_trace_reader(codetracer_trace_reader::TraceEventsFileFormat::Ctfs);
-    let events = reader.load_trace_events(&ct).unwrap();
-    let step_lines: Vec<i64> = events
-        .iter()
-        .filter_map(|e| match e {
-            TraceLowLevelEvent::Step(s) => Some(s.line.0),
-            _ => None,
-        })
-        .collect();
-    for ln in 2..=5 {
-        assert!(step_lines.contains(&ln), "legacy bundle: step at line {ln} must round-trip");
-    }
-}
+// `disabled_bundle_is_events_log_only_legacy` WAS HERE AND IS GONE.
+//
+// It pinned the mode in which every `with_*_stream(false)` lever was pulled and
+// the bundle carried ONLY `events.log`. With that stream removed, the same
+// levers produce a container with no event data at all, so the mode it tested
+// no longer describes anything a writer can do. The levers themselves remain
+// meaningful per stream — a bundle without a value stream is still a bundle —
+// but "all of them off" is now an empty recording rather than a legacy one.

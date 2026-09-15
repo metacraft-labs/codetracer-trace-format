@@ -1114,15 +1114,14 @@ impl TraceWriter for CtfsTraceWriter {
             );
         }
 
-        let mut writer = match self.output {
+        let writer = match self.output {
             // Create .ct file at path (replace any existing extension)
             CtfsOutput::File => CtfsWriter::create(&path.with_extension("ct"), 4096, 31)?,
             CtfsOutput::Memory => CtfsWriter::create_in_memory(4096, 31, codetracer_ctfs::CompressionMethod::None)?,
         };
-        let events_handle = writer.add_file("events.log")?;
         self.container_bytes = None;
         self.ctfs_writer = Some(writer);
-        self.events_handle = Some(events_handle);
+        self.events_handle = None;
 
         match self.serialization_format {
             EventSerializationFormat::Cbor => {
@@ -1223,12 +1222,6 @@ impl TraceWriter for CtfsTraceWriter {
 
         if let Some(ref mut writer) = self.ctfs_writer {
             // Write the format marker file.
-            let format_name = match self.serialization_format {
-                EventSerializationFormat::SplitBinary => b"split-binary" as &[u8],
-                EventSerializationFormat::Cbor => b"cbor" as &[u8],
-            };
-            let format_handle = writer.add_file("events.fmt")?;
-            writer.write(format_handle, format_name)?;
 
             // M-REC-1: mint a UUIDv7 recording_id for this trace.
             // Recorders that need to pin a pre-existing id (the

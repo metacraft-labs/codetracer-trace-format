@@ -184,7 +184,19 @@ fn test_ctfs_container_has_expected_files() {
     // Open the CTFS container directly and verify the embedded files
     let mut r = codetracer_ctfs::CtfsReader::open(&ct_path).unwrap();
     let files = r.list_files();
-    assert!(files.contains(&"events.log".to_string()), "Missing events.log");
+    // `events.log` is NOT expected: the spec defines no such stream, and the
+    // recording lives in the split streams asserted below.
+    assert!(
+        !files.contains(&"events.log".to_string()),
+        "events.log was written; the spec defines no such stream"
+    );
+    assert!(
+        !files.contains(&"events.fmt".to_string()),
+        "events.fmt was written; it described events.log"
+    );
+    for required in ["steps.dat", "steps.idx", "paths.dat", "funcs.dat"] {
+        assert!(files.contains(&required.to_string()), "Missing {required}, got: {files:?}");
+    }
     assert!(files.contains(&"meta.dat".to_string()), "Missing meta.dat");
     // The legacy JSON sidecars are retired.
     assert!(!files.contains(&"meta.json".to_string()), "meta.json was written");
@@ -224,11 +236,6 @@ fn test_ctfs_split_binary_roundtrip() {
         TraceWriter::register_asm(writer, &["nop".to_string(), "ret".to_string()]);
     });
 
-    // Verify the format marker file exists.
-    let mut r = codetracer_ctfs::CtfsReader::open(&ct_path).unwrap();
-    let format_data = r.read_file("events.fmt").unwrap();
-    assert_eq!(format_data, b"split-binary");
-
     // Read back via the standard reader.
     let mut reader = codetracer_trace_reader::create_trace_reader(codetracer_trace_reader::TraceEventsFileFormat::Ctfs);
     let events = reader.load_trace_events(&ct_path).unwrap();
@@ -257,6 +264,15 @@ fn test_ctfs_split_binary_roundtrip() {
     assert_eq!(special_events.len(), 1);
     assert_eq!(special_events[0].content, "hello");
 
+    // `Asm` DOES NOT SURVIVE, AND THAT IS THE SPEC'S DECISION RATHER THAN THIS
+    // READER'S OMISSION. `trace-events.md`'s event disposition table reads
+    // `| 10 | Asm | Removed (unused by current recorders) |`, and no split
+    // stream carries it — it existed only in the combined `events.log`.
+    //
+    // It is asserted ABSENT rather than left untested, because the writer still
+    // exposes `register_asm`: a caller can still hand it instructions, and they
+    // now go nowhere. Pinning that here makes it a known, stated property
+    // instead of something a recorder discovers when its disassembly vanishes.
     let asm_events: Vec<_> = events
         .iter()
         .filter_map(|e| match e {
@@ -264,8 +280,11 @@ fn test_ctfs_split_binary_roundtrip() {
             _ => None,
         })
         .collect();
-    assert_eq!(asm_events.len(), 1);
-    assert_eq!(asm_events[0], &vec!["nop".to_string(), "ret".to_string()]);
+    assert!(
+        asm_events.is_empty(),
+        "the spec retired Asm and no split stream carries it, but {} survived the round trip",
+        asm_events.len()
+    );
 }
 
 #[test]
@@ -285,8 +304,18 @@ fn test_ctfs_split_binary_seek() {
     let count = 100;
     let events = codetracer_trace_reader::ctfs_reader::seek_events_in_ctfs(&ct_path, target, count).unwrap();
 
+    // THE BOUND IS ON STEPS, NOT ON EVENTS, because the unit changed with the
+    // format. `count` was an event count while the combined `events.log` had a
+    // global event ordinal; a split-stream container has no such number, so
+    // `seek_events_in_ctfs` takes a STEP index and a step count there. A window
+    // of 100 steps necessarily yields MORE than 100 events — the interning
+    // tables precede it, and a step can carry values, an I/O event, a call or a
+    // return — so bounding the events at 100 would be asserting the old unit
+    // against the new answer.
     assert!(!events.is_empty(), "Expected events from seek at {}", target);
-    assert!(events.len() <= count, "Expected at most {} events, got {}", count, events.len());
+    let stepped = events.iter().filter(|e| matches!(e, TraceLowLevelEvent::Step(_))).count();
+    assert!(stepped > 0, "the window contains no steps at all");
+    assert!(stepped <= count, "Expected at most {} steps in the window, got {}", count, stepped);
 }
 
 #[test]
@@ -301,11 +330,12 @@ fn test_ctfs_backward_compat_cbor() {
         }
     });
 
-    // Verify the format marker says "cbor".
-    let mut r = codetracer_ctfs::CtfsReader::open(&ct_path).unwrap();
-    let format_data = r.read_file("events.fmt").unwrap();
-    assert_eq!(format_data, b"cbor");
-
+    // There is no format marker to check any more, and no format to choose
+    // between: `EventSerializationFormat` only ever selected how the combined
+    // `events.log` was encoded. With that stream gone both settings produce the
+    // same split streams, so this test now asserts that a CBOR-configured
+    // writer still yields a readable recording rather than that it yields a
+    // different encoding.
     // Read back via the standard reader.
     let mut reader = codetracer_trace_reader::create_trace_reader(codetracer_trace_reader::TraceEventsFileFormat::Ctfs);
     let events = reader.load_trace_events(&ct_path).unwrap();
@@ -371,8 +401,10 @@ fn test_ctfs_container_has_format_file() {
 
     let mut r = codetracer_ctfs::CtfsReader::open(&ct_path).unwrap();
     let files = r.list_files();
-    assert!(files.contains(&"events.fmt".to_string()), "Missing events.fmt, got: {:?}", files);
-    assert!(files.contains(&"events.log".to_string()), "Missing events.log");
+    // `events.fmt` described how to decode `events.log`; with the stream gone
+    // the marker describes nothing and is not written either.
+    assert!(!files.contains(&"events.fmt".to_string()), "events.fmt was written, got: {:?}", files);
+    assert!(!files.contains(&"events.log".to_string()), "events.log was written");
     assert!(files.contains(&"meta.dat".to_string()), "Missing meta.dat");
     assert!(!files.contains(&"meta.json".to_string()), "meta.json was written");
     assert!(!files.contains(&"paths.json".to_string()), "paths.json was written");

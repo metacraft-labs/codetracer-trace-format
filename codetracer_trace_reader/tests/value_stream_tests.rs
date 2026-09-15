@@ -10,9 +10,12 @@
 //! stream it was split from, that the parallel-index invariant holds (value
 //! record N ↔ step N, empty record for value-less steps), and that seeking
 //! (incl. across a chunk boundary) recovers the exact per-step records. A
-//! flag-off (legacy) trace is also exercised to confirm the value stream is
-//! absent and old readers are unaffected, and an `events.log` byte-identity
-//! check proves the split is additive.
+//! flag-off trace is also exercised to confirm the value stream is absent.
+//!
+//! The combined `events.log` stream is not part of the trace format spec and is
+//! no longer written, so the test asserting `events.log` stayed byte-identical
+//! with and without `values.dat` was removed: it compared two bundles on a
+//! stream that no longer exists.
 
 use std::path::Path;
 
@@ -189,31 +192,6 @@ fn fetching_one_step_decompresses_only_its_chunk() {
     // Reading a step in chunk 0 switches the single-chunk cache to chunk 0.
     let _ = vs.read(0).unwrap();
     assert_eq!(vs.cached_chunk(), Some(0));
-}
-
-#[test]
-fn events_log_byte_identical_with_and_without_value_stream() {
-    // The value-stream split is ADDITIVE: enabling it must not perturb the
-    // unified events.log a single byte.
-    let dir_off = tempfile::tempdir().unwrap();
-    let dir_on = tempfile::tempdir().unwrap();
-    let ct_off = write_trace(&dir_off, false, 4);
-    let ct_on = write_trace(&dir_on, true, 4);
-
-    let mut r_off = codetracer_ctfs::CtfsReader::open(&ct_off).unwrap();
-    let mut r_on = codetracer_ctfs::CtfsReader::open(&ct_on).unwrap();
-    let events_off = r_off.read_file("events.log").unwrap();
-    let events_on = r_on.read_file("events.log").unwrap();
-    assert_eq!(
-        events_off, events_on,
-        "events.log must be byte-identical regardless of the value-stream flag"
-    );
-
-    // The flag-on container additionally carries values.dat + values.idx; the
-    // flag-off one must not.
-    assert!(r_on.read_file("values.dat").is_ok());
-    assert!(r_on.read_file("values.idx").is_ok());
-    assert!(r_off.read_file("values.dat").is_err());
 }
 
 #[test]

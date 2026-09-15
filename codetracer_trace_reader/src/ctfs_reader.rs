@@ -46,6 +46,25 @@ fn deserialize_cbor(data: &[u8]) -> Result<Vec<TraceLowLevelEvent>, Box<dyn std:
 /// from the `events.fmt` marker file.
 pub fn read_trace_from_ctfs(path: &std::path::Path) -> Result<Vec<TraceLowLevelEvent>, Box<dyn std::error::Error>> {
     let mut reader = CtfsReader::open(path)?;
+
+    // A CONFORMANT CONTAINER HAS NO `events.log` and is assembled from the split
+    // streams instead.
+    //
+    // THE DISPATCH IS ON THE ABSENCE OF THE COMBINED STREAM, not on the presence
+    // of the split ones, and the difference is not academic. Today's writer emits
+    // both — the split streams are ADDITIVE — so dispatching on `steps.dat`
+    // would re-route every existing container onto this path and change what
+    // they decode to. Measured: it does, and it breaks bundles written with a
+    // stream flag off, which have `steps.dat` but no `calls.dat` and so lose
+    // their call tree. Dispatching on the absence preserves today's behaviour
+    // exactly and becomes the only path the moment the legacy stream is retired.
+    //
+    // A container with NEITHER is refused by the split reader, by name, saying
+    // which stream it wanted.
+    if !reader.list_files().iter().any(|f| f == "events.log") {
+        return crate::split_stream_reader::read_trace_from_split_streams(&mut reader).map_err(|e| e.into());
+    }
+
     let format = detect_format(&mut reader);
     let events_data = reader.read_file("events.log")?;
 
@@ -95,6 +114,18 @@ pub fn read_trace_from_ctfs(path: &std::path::Path) -> Result<Vec<TraceLowLevelE
 /// decompressing the entire target chunk.
 pub fn seek_events_in_ctfs(path: &std::path::Path, target_event: usize, count: usize) -> Result<Vec<TraceLowLevelEvent>, Box<dyn std::error::Error>> {
     let mut reader = CtfsReader::open(path)?;
+
+    // THE SPLIT PATH SEEKS BY STEP, AND SAYS SO RATHER THAN PRETENDING.
+    // `target_event` was an ordinal into the combined `events.log`. A
+    // split-stream container has no global event ordinal — its streams are
+    // indexed by step, by call key and by record — so the argument is taken as a
+    // STEP index there. Reinterpreting it silently under the same name would be
+    // the kind of quiet semantic change this campaign keeps paying for, so it is
+    // stated here and at `read_window`.
+    if !reader.list_files().iter().any(|f| f == "events.log") {
+        return crate::split_stream_reader::read_window(&mut reader, target_event as u64, count as u64).map_err(|e| e.into());
+    }
+
     let format = detect_format(&mut reader);
     let events_data = reader.read_file("events.log")?;
 

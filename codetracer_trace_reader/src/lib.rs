@@ -32,6 +32,10 @@ pub mod io_event_stream_reader;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod interning_tables_reader;
 
+/// Assembles a linear event sequence from the split streams, for containers
+/// that carry no `events.log`.
+pub mod split_stream_reader;
+
 // `streaming_ctfs_reader` (the legacy `events.log`-tailing `StreamingCtfsReader`)
 // was retired in M1 of the CTFS Lazy/Seekable Coverage initiative. Live/streaming
 // replay now runs the REAL-PRODUCT db-backend split-stream reader over a

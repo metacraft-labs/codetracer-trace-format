@@ -585,31 +585,27 @@ fn the_two_writers_agree_across_a_chunk_boundary() {
 /// property "All metadata in binary format within the container; no external
 /// files or JSON".
 ///
-/// They are nevertheless NOT deletable today, and the reason is not
-/// nostalgia. `events.log` is load-bearing as a *format discriminator*: at
-/// least two shipping readers key off its ABSENCE to decide which decoder to
-/// use —
+/// THE LIST IS EMPTY NOW: both were retired from the Rust writer.
 ///
-/// * `codetracer/src/db-backend/src/ctfs_trace_reader/mod.rs`:
-///   `fn is_new_format(ctfs) -> bool { has_file("steps.dat") && !has_file("events.log") }`
-/// * `codetracer-trace-format-nim/src/codetracer_trace_reader.nim`:
-///   `let isV4 = ... "events.log" ... .size == 0`
+/// The paragraph this replaces said they were "NOT deletable today" because two
+/// shipping readers key off `events.log`'s ABSENCE to choose a decoder —
+/// `codetracer`'s db-backend (`has_file("steps.dat") && !has_file("events.log")`)
+/// and `codetracer-trace-format-nim`'s `isV4`. That is still true, and it is why
+/// the removal is a cross-repo change rather than a deletion: those predicates
+/// now answer TRUE for a Rust-written container, which is CORRECT — it is the
+/// split format — but it routes those readers down a path they previously only
+/// took for Nim-written bundles.
 ///
-/// Dropping `events.log` from this writer flips both predicates for every
-/// container it produces and routes them to a decoder that cannot read this
-/// writer's index layout. The failure mode is a trace that opens successfully
-/// and reports ZERO steps — the same silently-empty answer this whole file
-/// exists to catch. `events.fmt` is coupled to it: both readers default to
-/// CBOR when it is missing, so removing it alone silently misdecodes every
-/// split-binary container.
-///
-/// Retiring them therefore requires replacing the absence-discriminator with a
-/// positive marker first, in repos this crate does not own.
-///
-/// `meta.json` and `paths.json` were on this list until the legacy JSON
-/// metadata sidecars were retired from the Rust writer; neither writer emits
-/// them now, so listing them would fail the bidirectional check below.
-const RUST_ONLY: [&str; 2] = ["events.log", "events.fmt"];
+/// What makes that survivable is measured rather than assumed, and it is in
+/// `KNOWN_DIVERGENCES` below: the EXECUTION streams — `steps.dat`, `values.dat`,
+/// `calls.dat`, `events.dat`, `paths.dat`, `varnames.dat` and their indices —
+/// are BYTE-IDENTICAL between the two writers, so a decoder that reads one reads
+/// the other. What is left differing is `meta.dat`, `funcs.dat`/`.off` and
+/// `types.dat`/`.off`, and on the latter two the spec settles AGAINST the Nim
+/// writer. A consumer whose interning-table decoder was written to Nim's bare-
+/// bytes shape will misread the Rust writer's spec-correct records; that is the
+/// named, remaining risk of this removal and it lives in the consuming repos.
+const RUST_ONLY: [&str; 0] = [];
 
 /// Files only the Nim writer emits. Empty today; the constant exists so a Nim
 /// stream that appears later is a failure with a name rather than a silent

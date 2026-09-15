@@ -383,6 +383,7 @@ dependencies = [
  "fscommon",
  "num-traits",
  "ruzstd",
+ "serde",
  "serde_json",
  "tempfile",
  "uuid",

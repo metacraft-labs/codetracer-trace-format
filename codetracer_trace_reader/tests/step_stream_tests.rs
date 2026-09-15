@@ -5,15 +5,18 @@
 //!   1. directly from `steps.dat` via the seekable `StepStreamReader`
 //!      (AbsoluteStep/DeltaStep decoded back to absolute `global_line_index`),
 //!      and
-//!   2. re-derived from the unchanged `events.log` (read with the normal
-//!      reader): every `Step{path_id, line}` event is addressed through a
+//!   2. re-derived from the events the normal reader returns for the same
+//!      trace: every `Step{path_id, line}` event is addressed through a
 //!      position space rebuilt from the trace's own `Path` events, the way a
 //!      reader rebuilds it from `paths.dat`.
-//! The two MUST agree — proving `steps.dat` is consistent with the unified
-//! stream it was split from, and that AbsoluteStep/DeltaStep decode (incl.
-//! across a chunk boundary) recovers the exact step sequence. A flag-off
-//! (legacy) trace is also exercised to confirm the step stream is absent and old
-//! readers are unaffected.
+//! The two MUST agree — proving `steps.dat` decodes (incl. across a chunk
+//! boundary) to the exact step sequence the trace recorded.
+//!
+//! The combined `events.log` stream is not part of the trace format spec and is
+//! no longer written. The test asserting a legacy (flag-off) bundle exposes no
+//! step stream, and the one asserting `events.log` stayed byte-identical with
+//! and without `steps.dat`, were removed: they exercised a writer mode that no
+//! longer exists.
 
 use std::path::Path;
 
@@ -28,9 +31,9 @@ use codetracer_trace_writer::trace_writer::TraceWriter;
 /// mid-function), and enough steps to cross several small chunks. Returns the
 /// `.ct` path plus the ordered list of `Step` line numbers emitted (for an
 /// independent expected-sequence cross-check).
-fn write_trace(dir: &tempfile::TempDir, with_step_stream: bool, steps_chunk_size: usize) -> (std::path::PathBuf, Vec<i64>) {
+fn write_trace(dir: &tempfile::TempDir, steps_chunk_size: usize) -> (std::path::PathBuf, Vec<i64>) {
     let path_buf = dir.path().join("trace");
-    let mut writer = CtfsTraceWriter::new("test_program", &[]).with_step_stream(with_step_stream);
+    let mut writer = CtfsTraceWriter::new("test_program", &[]).with_step_stream(true);
     writer = writer.with_steps_chunk_size(steps_chunk_size);
     TraceWriter::begin_writing_trace_events(&mut writer, &path_buf).unwrap();
 
@@ -79,9 +82,9 @@ fn write_trace(dir: &tempfile::TempDir, with_step_stream: bool, steps_chunk_size
     (path_buf.with_extension("ct"), lines)
 }
 
-/// Re-derive the expected execution-stream `Step` records straight from
-/// `events.log` (read with the unchanged unified-stream reader): each `Step`
-/// event maps to its packed `global_line_index`.
+/// Re-derive the expected execution-stream `Step` records from the events the
+/// normal reader returns for the trace: each `Step` event maps to its packed
+/// `global_line_index`.
 fn expected_step_glis_from_events(ct_path: &Path) -> (Vec<u64>, Vec<(usize, i64)>) {
     let mut reader = codetracer_trace_reader::create_trace_reader(codetracer_trace_reader::TraceEventsFileFormat::Ctfs);
     let events = reader.load_trace_events(ct_path).unwrap();
@@ -110,7 +113,7 @@ fn steps_dat_matches_events_log() {
     let dir = tempfile::tempdir().unwrap();
     // A small chunk size so the step sequence spans multiple chunks and the
     // round-trip exercises per-chunk independent decode.
-    let (ct_path, _lines) = write_trace(&dir, true, 4);
+    let (ct_path, _lines) = write_trace(&dir, 4);
 
     let mut ss = codetracer_trace_reader::step_stream_reader::open_step_stream(&ct_path)
         .expect("open_step_stream ok")
@@ -149,7 +152,7 @@ fn steps_dat_matches_events_log() {
 fn seek_to_step_across_chunk_boundary() {
     let dir = tempfile::tempdir().unwrap();
     // chunk_size 4 → many chunks; we will seek into a non-first chunk and back.
-    let (ct_path, _lines) = write_trace(&dir, true, 4);
+    let (ct_path, _lines) = write_trace(&dir, 4);
 
     let mut ss = codetracer_trace_reader::step_stream_reader::open_step_stream(&ct_path).unwrap().unwrap();
     let (expected, _) = expected_step_glis_from_events(&ct_path);
@@ -180,7 +183,7 @@ fn seek_to_step_across_chunk_boundary() {
 fn fetching_one_step_decompresses_only_its_chunk() {
     let dir = tempfile::tempdir().unwrap();
     // chunk_size 4 guarantees several chunks for the ~36-step trace.
-    let (ct_path, _lines) = write_trace(&dir, true, 4);
+    let (ct_path, _lines) = write_trace(&dir, 4);
 
     let mut ss = codetracer_trace_reader::step_stream_reader::open_step_stream(&ct_path).unwrap().unwrap();
     let chunk_size = ss.chunk_size();
@@ -211,45 +214,4 @@ fn fetching_one_step_decompresses_only_its_chunk() {
     // Reading a step in chunk 0 switches the single-chunk cache to chunk 0.
     let _ = ss.read(0).unwrap();
     assert_eq!(ss.cached_chunk(), Some(0));
-}
-
-#[test]
-fn events_log_byte_identical_with_and_without_step_stream() {
-    // The step-stream split is ADDITIVE: enabling it must not perturb the
-    // unified events.log a single byte. Write the same trace twice (flag off,
-    // flag on) and compare the raw events.log internal file byte-for-byte.
-    let dir_off = tempfile::tempdir().unwrap();
-    let dir_on = tempfile::tempdir().unwrap();
-    let (ct_off, _) = write_trace(&dir_off, false, 4);
-    let (ct_on, _) = write_trace(&dir_on, true, 4);
-
-    let mut r_off = codetracer_ctfs::CtfsReader::open(&ct_off).unwrap();
-    let mut r_on = codetracer_ctfs::CtfsReader::open(&ct_on).unwrap();
-    let events_off = r_off.read_file("events.log").unwrap();
-    let events_on = r_on.read_file("events.log").unwrap();
-    assert_eq!(
-        events_off, events_on,
-        "events.log must be byte-identical regardless of the step-stream flag"
-    );
-
-    // The flag-on container additionally carries steps.dat + steps.idx; the
-    // flag-off one must not.
-    assert!(r_on.read_file("steps.dat").is_ok());
-    assert!(r_on.read_file("steps.idx").is_ok());
-    assert!(r_off.read_file("steps.dat").is_err());
-}
-
-#[test]
-fn legacy_trace_has_no_step_stream() {
-    let dir = tempfile::tempdir().unwrap();
-    let (ct_path, _lines) = write_trace(&dir, false, 4);
-
-    // No dedicated step stream when the flag is off.
-    let ss = codetracer_trace_reader::step_stream_reader::open_step_stream(&ct_path).unwrap();
-    assert!(ss.is_none(), "a flag-off trace must not expose a step stream");
-
-    // ...and the unified events.log still reads exactly as before, with the
-    // same step sequence derivable from it.
-    let (expected, _) = expected_step_glis_from_events(&ct_path);
-    assert!(!expected.is_empty());
 }

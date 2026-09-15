@@ -6,8 +6,11 @@
 //! explain. It is not: one of them is wrong, and these tests say which by
 //! quoting the spec rather than the other implementation.
 //!
-//! What is pinned here is the CONTAINER HEADER, read straight out of
-//! `ctfs-container.md` section 1:
+//! Two things are pinned. First, that the container carries no `events.log`:
+//! the string appears in none of the seven spec files, `internal-files.md`
+//! defines `events.dat`, and the event disposition table records the combined
+//! log as *moved to events.dat*. Second, the CONTAINER HEADER, read straight out
+//! of `ctfs-container.md` section 1:
 //!
 //!   * **Byte 5 is `4`.** v4 also RE-DEFINES bytes 6 and 7 — under v2/v3 they
 //!     were compression and encryption, under v4 they are encryption and
@@ -112,20 +115,23 @@ fn version_4_reinterprets_bytes_6_and_7_and_this_writer_respects_that() {
     );
 }
 
-// THE `events.log` TEST IS NOT HERE YET, AND ITS ABSENCE IS DELIBERATE.
-//
-// The spec defines no `events.log` and this writer still emits one, so the
-// assertion would be red. It is not written as a pending red because removing
-// the stream is not a writer-side change: `read_trace_from_ctfs` reads
-// `events.log` and NOTHING ELSE, and the Rust reader has no combiner that
-// reconstructs `TraceLowLevelEvent`s from the split streams — `step_stream_reader`
-// and `value_stream_reader` yield stream RECORDS, and nothing assembles them.
-// Measured: with the stream suppressed, the writer's own round-trip test fails
-// `FileNotFound("events.log")`, and 36 workspace tests go red.
-//
-// So the writer cannot stop emitting it until the Rust reader gains the
-// equivalent of the Nim `NewTraceReader`. That is a new component, not a
-// deletion, and it is tracked rather than half-done here.
+#[test]
+fn the_container_carries_no_events_log() {
+    let dir = tempfile::tempdir().unwrap();
+    let ct = write_container(dir.path());
+    let reader = codetracer_ctfs::CtfsReader::open(&ct).unwrap();
+    let entries = reader.list_files();
+
+    assert!(
+        !entries.iter().any(|f| f == "events.log"),
+        "the spec defines no `events.log`; this container carries one, among {entries:?}"
+    );
+    assert!(
+        !entries.iter().any(|f| f == "events.fmt"),
+        "`events.fmt` described how to decode `events.log`; with the stream gone it describes \
+         nothing, but this container carries one, among {entries:?}"
+    );
+}
 
 /// THE CONTROL, and it is what stops the test above passing for the wrong
 /// reason. "No `events.log`" is satisfied by a writer that produced nothing at

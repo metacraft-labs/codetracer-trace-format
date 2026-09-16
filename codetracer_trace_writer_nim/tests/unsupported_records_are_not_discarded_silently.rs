@@ -5,20 +5,20 @@
 //!
 //! Guard one defect class: **silent incompleteness.**  A dozen
 //! [`NimTraceWriter`] operations have no counterpart in the Nim C API —
-//! `drop_variables`, `drop_variable`, `register_compound_value`,
-//! `register_cell_value`, `assign_compound_item`, `assign_cell`,
-//! `register_variable`, `bind_variable`, `assign` (since fixed, see below),
-//! `register_asm`,
+//! `drop_variables` (since fixed, see below), `drop_variable`,
+//! `register_compound_value`, `register_cell_value`, `assign_compound_item`,
+//! `assign_cell`, `register_variable`, `bind_variable`,
+//! `assign` (since fixed, see below), `register_asm`,
 //! `drop_last_step`.  Each was a bare no-op carrying the comment
 //! `// Not exposed in the Nim C API — no-op`.
 //!
-//! `add_event` dispatches `TraceLowLevelEvent::DropVariables` straight into
-//! `drop_variables`, so a recorder that emitted those records produced a
-//! trace with none of them in it — and said nothing.  The recording came out
-//! quietly incomplete and was indistinguishable, to the user and to any
-//! downstream assertion, from a complete one.  That is the same lie as a
-//! test that reports success while doing nothing, moved one layer down: the
-//! artifact claims to be a faithful recording and is not.
+//! `add_event` dispatches variants straight into those operations, so a
+//! recorder that emitted such records produced a trace with none of them in
+//! it — and said nothing.  The recording came out quietly incomplete and was
+//! indistinguishable, to the user and to any downstream assertion, from a
+//! complete one.  That is the same lie as a test that reports success while
+//! doing nothing, moved one layer down: the artifact claims to be a faithful
+//! recording and is not.
 //!
 //! # What this test pins
 //!
@@ -26,7 +26,7 @@
 //!    lost it (`discard_is_counted_and_named`).
 //! 2. The `add_event` dispatch path — the one recorders actually use — is
 //!    covered, not just the direct method call
-//!    (`add_event_drop_variables_is_counted_not_swallowed`).
+//!    (`add_event_bind_variable_is_counted_not_swallowed`).
 //! 3. An operation the backend really does support does NOT get counted, so
 //!    the counter cannot pass by over-reporting
 //!    (`supported_operations_are_not_counted_as_discards`).
@@ -42,13 +42,20 @@
 //! C API and matching encoder support on the Nim side.  What changed here is
 //! that the loss is stated instead of hidden.
 //!
-//! **`assign` is no longer one of them.**  Its entry point
-//! (`trace_writer_register_assignment`) landed on 2026-09-11 and assignments
-//! now reach the container as tag-9 value-stream events; that is asserted,
-//! end to end, by `tests/assignments_reach_the_trace.rs`.  The tests below
-//! deliberately use `drop_variables` — still genuinely unsupported — as the
+//! **`assign` and `drop_variables` are no longer among them.**  `assign`'s
+//! entry point (`trace_writer_register_assignment`) landed on 2026-09-11 and
+//! assignments now reach the container as tag-9 value-stream events, asserted
+//! end to end by `tests/assignments_reach_the_trace.rs`.  `drop_variables`
+//! followed via `trace_writer_register_drop_variables`, reaching the container
+//! as tag-3 value-stream events, asserted by
+//! `tests/drop_variables_reach_the_trace.rs`.
+//!
+//! The tests below therefore use `bind_variable` — still genuinely
+//! unsupported, and in the same variable-lifetime family — as the
 //! representative discard, so they keep testing the discard MECHANISM rather
-//! than any particular operation's state of repair.
+//! than any particular operation's state of repair.  Expect this exemplar to
+//! move again: each entry point that lands retires the one before it, and a
+//! test pinned to a fixed operation would quietly become a test of nothing.
 //!
 //! # Mocking policy justification (workspace AGENTS.md)
 //!
@@ -105,8 +112,8 @@ fn all_bytes_written_under(dir: &Path) -> Vec<u8> {
     out
 }
 
-use codetracer_trace_types::{Line, Place, TraceLowLevelEvent, TypeId, ValueRecord, VariableId};
-use codetracer_trace_writer_nim::{strict_from_env_value, NimTraceWriter, TraceEventsFileFormat};
+use codetracer_trace_types::{BindVariableRecord, Line, Place, TraceLowLevelEvent, TypeId, ValueRecord, VariableId};
+use codetracer_trace_writer_nim::{NimTraceWriter, TraceEventsFileFormat, strict_from_env_value};
 
 /// The Nim runtime is **not** thread-safe — its global state lives behind a
 /// single lock.  Serialize every test in this binary, exactly as
@@ -153,7 +160,7 @@ fn discard_is_counted_and_named() {
         "a fresh writer must not claim to have discarded anything"
     );
 
-    writer.drop_variables(&["a".to_string(), "b".to_string()]);
+    writer.bind_variable("a", Place(0));
     writer.drop_variable("c");
     // THE TYPE IS REGISTERED, because a bare `TypeId(0)` is a DANGLING id and
     // the writer now refuses one by name. There is no auto-registration rule in
@@ -165,9 +172,9 @@ fn discard_is_counted_and_named() {
 
     let counts = writer.discarded_record_counts();
     assert_eq!(
-        counts.get("drop_variables").copied(),
+        counts.get("bind_variable").copied(),
         Some(1),
-        "a `drop_variables` call that persists nothing must be counted; \
+        "a `bind_variable` call that persists nothing must be counted; \
          counts were {counts:?}"
     );
     assert_eq!(counts.get("drop_variable").copied(), Some(1), "{counts:?}");
@@ -175,22 +182,25 @@ fn discard_is_counted_and_named() {
     assert_eq!(writer.discarded_record_total(), 3);
 }
 
-/// The path recorders actually use.  `add_event(DropVariables(..))` must not
-/// be able to vanish.
+/// The path recorders actually use.  An `add_event` whose variant dispatches
+/// into an unsupported operation must not be able to vanish.
 #[test]
-fn add_event_drop_variables_is_counted_not_swallowed() {
+fn add_event_bind_variable_is_counted_not_swallowed() {
     let _guard = nim_lock();
     let (_dir, mut writer) = make_writer("discard_add_event");
 
     writer.start(Path::new("/tmp/discard_add_event.rb"), Line(1));
     writer.register_step(Path::new("/tmp/discard_add_event.rb"), Line(2));
 
-    writer.add_event(TraceLowLevelEvent::DropVariables(vec![VariableId(0), VariableId(1)]));
+    writer.add_event(TraceLowLevelEvent::BindVariable(BindVariableRecord {
+        variable_id: VariableId(0),
+        place: Place(0),
+    }));
 
     assert_eq!(
-        writer.discarded_record_counts().get("drop_variables").copied(),
+        writer.discarded_record_counts().get("bind_variable").copied(),
         Some(1),
-        "`add_event(DropVariables)` dispatches into `drop_variables`, which \
+        "`add_event(BindVariable)` dispatches into `bind_variable`, which \
          cannot persist the record.  Before this was counted, the record was \
          dropped and the trace looked complete: counts were {:?}",
         writer.discarded_record_counts()
@@ -241,12 +251,10 @@ fn register_variable_name_is_uncounted_because_the_name_really_survives() {
     // interned — so this used to work only because the binding invented a
     // `type_0` name to satisfy a C ABI that had no way to accept an id.
     let tid = writer.ensure_type_id(codetracer_trace_types::TypeKind::Int, "Int");
-    writer.add_event(TraceLowLevelEvent::Value(
-        codetracer_trace_types::FullValueRecord {
-            variable_id: VariableId(0),
-            value: ValueRecord::Int { i: 7, type_id: tid },
-        },
-    ));
+    writer.add_event(TraceLowLevelEvent::Value(codetracer_trace_types::FullValueRecord {
+        variable_id: VariableId(0),
+        value: ValueRecord::Int { i: 7, type_id: tid },
+    }));
 
     assert!(
         writer.discarded_record_counts().is_empty(),
@@ -325,7 +333,7 @@ fn the_discard_tally_survives_close() {
     let _guard = nim_lock();
     let (_dir, mut writer) = make_writer("discard_survives_close");
 
-    writer.drop_variables(&["a".to_string()]);
+    writer.bind_variable("a", Place(0));
     assert_eq!(writer.discarded_record_total(), 1, "precondition");
 
     writer.finish_writing_trace_events().expect("finish_events");
@@ -340,7 +348,7 @@ fn the_discard_tally_survives_close() {
         writer.discarded_record_counts()
     );
     assert_eq!(
-        writer.discarded_record_counts().get("drop_variables").copied(),
+        writer.discarded_record_counts().get("bind_variable").copied(),
         Some(1),
         "the per-operation attribution must survive close() too"
     );
@@ -348,12 +356,12 @@ fn the_discard_tally_survives_close() {
 
 /// Strict mode refuses to produce a knowingly incomplete trace.
 #[test]
-#[should_panic(expected = "cannot persist a `drop_variables` record")]
+#[should_panic(expected = "cannot persist a `bind_variable` record")]
 fn strict_mode_refuses_to_produce_an_incomplete_trace() {
     let _guard = nim_lock();
     let (_dir, mut writer) = make_writer("discard_strict");
     writer.set_strict(true);
-    writer.drop_variables(&["a".to_string()]);
+    writer.bind_variable("a", Place(0));
 }
 
 /// The documented spellings, and nothing else, enable strict mode.

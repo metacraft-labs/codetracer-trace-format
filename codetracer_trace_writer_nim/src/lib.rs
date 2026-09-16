@@ -1923,6 +1923,11 @@ impl NimTraceWriter {
     /// is visible with its history unreachable. Pass `""` for the defaults.
     ///
     /// No step is minted — the marker attaches to the enclosing step.
+    // The parameter list mirrors `trace_writer_mark_correlation_by_id`'s C signature one for one.
+    // Grouping them into a struct would let the two drift apart without
+    // anything failing at the call site, which is the whole reason this
+    // wrapper is shaped like the entry point it forwards to.
+    #[allow(clippy::too_many_arguments)]
     pub fn mark_correlation_by_id(
         &mut self,
         marker_id: u64,
@@ -1962,6 +1967,11 @@ impl NimTraceWriter {
 
     /// Declare a boundary crossing by label. A wrapper that interns and
     /// forwards to [`mark_correlation_by_id`](Self::mark_correlation_by_id).
+    // The parameter list mirrors `trace_writer_mark_correlation`'s C signature one for one.
+    // Grouping them into a struct would let the two drift apart without
+    // anything failing at the call site, which is the whole reason this
+    // wrapper is shaped like the entry point it forwards to.
+    #[allow(clippy::too_many_arguments)]
     pub fn mark_correlation(
         &mut self,
         direction: &str,

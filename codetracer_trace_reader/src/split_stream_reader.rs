@@ -240,7 +240,20 @@ pub fn read_window(reader: &mut CtfsReader, start_step: u64, max_steps: u64) -> 
     for i in start_step.min(step_count)..window_end {
         for &ci in &entering[i as usize] {
             let c = &all_calls[ci];
-            let args: Vec<FullValueRecord> = decode_cbor(&c.args, "a call's args")?.unwrap_or_default();
+            // One `calls.dat` entry per argument, each carrying its own
+            // interned name (`trace-events.md` §"Call Stream (`calls.dat`)").
+            // The name is the reason the entries are separate: a
+            // `FullValueRecord` is a (variable, value) pair and there is
+            // nowhere else to recover the variable from.
+            let mut args: Vec<FullValueRecord> = Vec::with_capacity(c.args.len());
+            for arg in &c.args {
+                if let Some(value) = decode_cbor::<ValueRecord>(&arg.value, "a call argument")? {
+                    args.push(FullValueRecord {
+                        variable_id: VariableId(arg.varname_id as usize),
+                        value,
+                    });
+                }
+            }
             out.push(TraceLowLevelEvent::Call(CallRecord {
                 function_id: FunctionId(c.function_id as usize),
                 args,
@@ -278,14 +291,15 @@ pub fn read_window(reader: &mut CtfsReader, start_step: u64, max_steps: u64) -> 
         }
 
         if let Some(ref mut v) = values
-            && i < v.count() {
-                let entry = v
-                    .read(i)
-                    .map_err(|e| format!("split-stream reader: values for step {i} are unreadable: {e}"))?;
-                for ev in entry.events {
-                    push_value_event(&mut out, ev)?;
-                }
+            && i < v.count()
+        {
+            let entry = v
+                .read(i)
+                .map_err(|e| format!("split-stream reader: values for step {i} are unreadable: {e}"))?;
+            for ev in entry.events {
+                push_value_event(&mut out, ev)?;
             }
+        }
 
         if let Some(events) = io_by_step.get(&i) {
             for (kind, metadata, content) in events {

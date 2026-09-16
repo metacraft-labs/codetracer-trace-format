@@ -65,6 +65,20 @@ pub const DEFAULT_CALLS_CHUNK_SIZE: usize = 256;
 /// `call_stream.nim`'s `VoidReturnMarker`.
 pub const VOID_RETURN_MARKER: u8 = 0xFF;
 
+/// One argument of a call, as `calls.dat` stores it.
+///
+/// The name is carried as an interned `varnames.dat` id alongside the value,
+/// because an argument's name is half of what the record is for and a reader
+/// assembling a `(variable, value)` pair has nowhere else to get it. See
+/// `trace-events.md` §"Call Stream (`calls.dat`)".
+#[derive(Debug, Clone, PartialEq)]
+pub struct CallArg {
+    /// Reference into the `varnames.dat` interning table.
+    pub varname_id: u64,
+    /// The argument's value, as streaming CBOR.
+    pub value: Vec<u8>,
+}
+
 /// A complete call-stream record, written when the call returns so it carries
 /// full entry/exit information. This is the on-disk projection of a function
 /// call (distinct from the event-stream [`EventCallRecord`], which only carries
@@ -84,9 +98,8 @@ pub struct CallStreamRecord {
     pub last_step_id: u64,
     /// Call-stack depth (0 for a root call).
     pub depth: u64,
-    /// CBOR `args` payload (the `Vec<FullValueRecord>` from the `Call` event),
-    /// or empty when there were no args.
-    pub args: Vec<u8>,
+    /// The call's arguments, one entry each, in declaration order.
+    pub args: Vec<CallArg>,
     /// CBOR `return_value` payload, or the single byte [`VOID_RETURN_MARKER`]
     /// for a void return.
     pub return_value: Vec<u8>,
@@ -154,19 +167,12 @@ impl CallStreamRecord {
         encode_varint(self.last_step_id, out);
         encode_varint(self.depth, out);
 
-        // args: count, then (varname_id placeholder, len, bytes). The Rust
-        // event stream stores args as a single CBOR blob (the `Vec<FullValueRecord>`)
-        // rather than per-arg (varname_id, value) pairs, so we emit a single
-        // synthetic arg entry carrying the whole CBOR payload under varname_id 0
-        // when args are present. This keeps the record self-describing while
-        // round-tripping the exact CBOR the `Call` event carried.
-        if self.args.is_empty() {
-            encode_varint(0, out);
-        } else {
-            encode_varint(1, out);
-            encode_varint(0, out); // varname_id (synthetic: whole-args blob)
-            encode_varint(self.args.len() as u64, out);
-            out.extend_from_slice(&self.args);
+        // args: count, then one (varname_id, len, bytes) triple per argument.
+        encode_varint(self.args.len() as u64, out);
+        for arg in &self.args {
+            encode_varint(arg.varname_id, out);
+            encode_varint(arg.value.len() as u64, out);
+            out.extend_from_slice(&arg.value);
         }
 
         encode_varint(self.return_value.len() as u64, out);
@@ -192,19 +198,17 @@ impl CallStreamRecord {
         let depth = decode_varint(data, &mut pos)?;
 
         let args_count = decode_varint(data, &mut pos)? as usize;
-        let mut args: Vec<u8> = Vec::new();
+        let mut args: Vec<CallArg> = Vec::with_capacity(args_count);
         for _ in 0..args_count {
-            let _varname_id = decode_varint(data, &mut pos)?;
+            let varname_id = decode_varint(data, &mut pos)?;
             let arg_len = decode_varint(data, &mut pos)? as usize;
             if pos + arg_len > data.len() {
                 return Err("calls.dat: truncated arg data".to_string());
             }
-            // We emit a single synthetic arg holding the whole CBOR blob; if a
-            // producer ever writes multiple, concatenate (only the first is the
-            // canonical args blob for Rust-written records).
-            if args.is_empty() {
-                args.extend_from_slice(&data[pos..pos + arg_len]);
-            }
+            args.push(CallArg {
+                varname_id,
+                value: data[pos..pos + arg_len].to_vec(),
+            });
             pos += arg_len;
         }
 
@@ -295,7 +299,13 @@ impl CallStreamBuilder {
                 };
                 let depth = self.open_stack.len() as u64;
                 let first_step_id = self.entry_step_id();
-                let args_bytes = if args.is_empty() { Vec::new() } else { cbor_bytes(args) };
+                let args_entries: Vec<CallArg> = args
+                    .iter()
+                    .map(|a| CallArg {
+                        varname_id: a.variable_id.0 as u64,
+                        value: cbor_bytes(&a.value),
+                    })
+                    .collect();
                 self.records.push(CallStreamRecord {
                     call_key,
                     function_id: function_id.0 as u64,
@@ -303,7 +313,7 @@ impl CallStreamBuilder {
                     first_step_id,
                     last_step_id: first_step_id,
                     depth,
-                    args: args_bytes,
+                    args: args_entries,
                     return_value: vec![VOID_RETURN_MARKER],
                     raised_exception: Vec::new(),
                     children: Vec::new(),
@@ -453,7 +463,16 @@ mod tests {
             first_step_id: 10,
             last_step_id: 20,
             depth: 2,
-            args: vec![1, 2, 3],
+            args: vec![
+                CallArg {
+                    varname_id: 2,
+                    value: vec![1, 2, 3],
+                },
+                CallArg {
+                    varname_id: 9,
+                    value: vec![4],
+                },
+            ],
             return_value: vec![VOID_RETURN_MARKER],
             raised_exception: vec![],
             children: vec![4, 5],

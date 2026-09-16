@@ -474,10 +474,10 @@ fn normalise_relative(relative: PathBuf) -> String {
         match component {
             Component::Normal(part) => components.push(part.to_string_lossy().to_string()),
             Component::CurDir => continue,
+            // `pop` on an empty vec is already a no-op, so a `..` that walks
+            // above the root leaves the result at the root.
             Component::ParentDir => {
-                if !components.is_empty() {
-                    components.pop();
-                }
+                components.pop();
             }
             _ => {}
         }

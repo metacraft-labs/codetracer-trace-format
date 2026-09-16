@@ -171,8 +171,7 @@ fn conv_valuerecord(bldr: crate::trace_capnp::trace::value_record::Builder, vr: 
         codetracer_trace_types::ValueRecord::Sequence { elements, is_slice, type_id } => {
             let mut qseq = bldr.init_sequence();
             let mut elems = qseq.reborrow().init_elements(elements.len().try_into().unwrap());
-            for i in 0..elements.len() {
-                let ele = &elements[i];
+            for (i, ele) in elements.iter().enumerate() {
                 let bele = elems.reborrow().get(i.try_into().unwrap());
                 conv_valuerecord(bele, ele);
             }
@@ -183,8 +182,7 @@ fn conv_valuerecord(bldr: crate::trace_capnp::trace::value_record::Builder, vr: 
         codetracer_trace_types::ValueRecord::Tuple { elements, type_id } => {
             let mut qtup = bldr.init_tuple();
             let mut elems = qtup.reborrow().init_elements(elements.len().try_into().unwrap());
-            for i in 0..elements.len() {
-                let ele = &elements[i];
+            for (i, ele) in elements.iter().enumerate() {
                 let bele = elems.reborrow().get(i.try_into().unwrap());
                 conv_valuerecord(bele, ele);
             }
@@ -194,8 +192,7 @@ fn conv_valuerecord(bldr: crate::trace_capnp::trace::value_record::Builder, vr: 
         codetracer_trace_types::ValueRecord::Struct { field_values, type_id } => {
             let mut qstruc = bldr.init_struct();
             let mut elems = qstruc.reborrow().init_field_values(field_values.len().try_into().unwrap());
-            for i in 0..field_values.len() {
-                let ele = &field_values[i];
+            for (i, ele) in field_values.iter().enumerate() {
                 let bele = elems.reborrow().get(i.try_into().unwrap());
                 conv_valuerecord(bele, ele);
             }
@@ -253,8 +250,8 @@ fn conv_valuerecord(bldr: crate::trace_capnp::trace::value_record::Builder, vr: 
         codetracer_trace_types::ValueRecord::BigInt { b, negative, type_id } => {
             let mut qbigint = bldr.init_bigint();
             let mut bigint_b = qbigint.reborrow().init_b(b.len().try_into().unwrap());
-            for i in 0..=b.len() {
-                bigint_b.set(i.try_into().unwrap(), b[i]);
+            for (i, byte) in b.iter().enumerate() {
+                bigint_b.set(i.try_into().unwrap(), *byte);
             }
             qbigint.set_negative(*negative);
             let mut q_typ_id = qbigint.init_type_id();
@@ -264,7 +261,7 @@ fn conv_valuerecord(bldr: crate::trace_capnp::trace::value_record::Builder, vr: 
         // so we serialize it as Raw with the char's string representation.
         codetracer_trace_types::ValueRecord::Char { c, type_id } => {
             let mut qraw = bldr.init_raw();
-            qraw.set_r(&c.to_string());
+            qraw.set_r(c.to_string());
             let mut q_typ_id = qraw.init_type_id();
             q_typ_id.set_i(type_id.0.try_into().unwrap());
         }
@@ -294,8 +291,7 @@ pub fn write_trace(q: &[codetracer_trace_types::TraceLowLevelEvent], output: &mu
                     codetracer_trace_types::TypeSpecificInfo::Struct { fields } => {
                         let strct = specific_info.init_struct();
                         let mut flds = strct.init_fields(fields.len().try_into().unwrap());
-                        for i in 0..fields.len() {
-                            let ftr = &fields[i];
+                        for (i, ftr) in fields.iter().enumerate() {
                             let mut fld = flds.reborrow().get(i.try_into().unwrap());
                             fld.set_name(ftr.name.clone());
                             let mut typ_id = fld.init_type_id();
@@ -375,8 +371,8 @@ pub fn write_trace(q: &[codetracer_trace_types::TraceLowLevelEvent], output: &mu
             }
             TraceLowLevelEvent::Asm(strs) => {
                 let mut ret = event.init_asm(strs.len().try_into().unwrap());
-                for i in 0..strs.len() {
-                    ret.set(i.try_into().unwrap(), &strs[i]);
+                for (i, s) in strs.iter().enumerate() {
+                    ret.set(i.try_into().unwrap(), s);
                 }
             }
             TraceLowLevelEvent::BindVariable(bindvarrec) => {
@@ -384,7 +380,7 @@ pub fn write_trace(q: &[codetracer_trace_types::TraceLowLevelEvent], output: &mu
                 let mut ret_var_id = ret.reborrow().init_variable_id();
                 ret_var_id.set_i(bindvarrec.variable_id.0.try_into().unwrap());
                 let mut ret_place = ret.init_place();
-                ret_place.set_p(bindvarrec.place.0.try_into().unwrap());
+                ret_place.set_p(bindvarrec.place.0);
             }
             TraceLowLevelEvent::Assignment(assrec) => {
                 let mut ret = event.init_assignment();
@@ -399,9 +395,9 @@ pub fn write_trace(q: &[codetracer_trace_types::TraceLowLevelEvent], output: &mu
                     }
                     codetracer_trace_types::RValue::Compound(variable_ids) => {
                         let mut ret_from_compound = ret_from.init_compound(variable_ids.len().try_into().unwrap());
-                        for i in 0..variable_ids.len() {
+                        for (i, variable_id) in variable_ids.iter().enumerate() {
                             let mut r = ret_from_compound.reborrow().get(i.try_into().unwrap());
-                            r.set_i(variable_ids[i].0.try_into().unwrap());
+                            r.set_i(variable_id.0.try_into().unwrap());
                         }
                     }
                     // M14 RValue extensions
@@ -435,9 +431,9 @@ pub fn write_trace(q: &[codetracer_trace_types::TraceLowLevelEvent], output: &mu
             }
             TraceLowLevelEvent::DropVariables(vars) => {
                 let mut ret_vars = event.init_drop_variables(vars.len().try_into().unwrap());
-                for i in 0..vars.len() {
+                for (i, var) in vars.iter().enumerate() {
                     let mut q = ret_vars.reborrow().get(i.try_into().unwrap());
-                    q.set_i(vars[i].0.try_into().unwrap());
+                    q.set_i(var.0.try_into().unwrap());
                 }
             }
             TraceLowLevelEvent::DropVariable(varid) => {
@@ -447,38 +443,38 @@ pub fn write_trace(q: &[codetracer_trace_types::TraceLowLevelEvent], output: &mu
             TraceLowLevelEvent::CompoundValue(cvr) => {
                 let mut ret = event.init_compound_value();
                 let mut ret_place = ret.reborrow().init_place();
-                ret_place.set_p(cvr.place.0.try_into().unwrap());
+                ret_place.set_p(cvr.place.0);
                 let ret_value = ret.init_value();
                 conv_valuerecord(ret_value, &cvr.value);
             }
             TraceLowLevelEvent::CellValue(cvr) => {
                 let mut ret = event.init_cell_value();
                 let mut ret_place = ret.reborrow().init_place();
-                ret_place.set_p(cvr.place.0.try_into().unwrap());
+                ret_place.set_p(cvr.place.0);
                 let ret_value = ret.init_value();
                 conv_valuerecord(ret_value, &cvr.value);
             }
             TraceLowLevelEvent::AssignCell(acr) => {
                 let mut ret = event.init_assign_cell();
                 let mut ret_place = ret.reborrow().init_place();
-                ret_place.set_p(acr.place.0.try_into().unwrap());
+                ret_place.set_p(acr.place.0);
                 let ret_new_value = ret.init_new_value();
                 conv_valuerecord(ret_new_value, &acr.new_value);
             }
             TraceLowLevelEvent::AssignCompoundItem(aci) => {
                 let mut ret = event.init_assign_compound_item();
                 let mut ret_place = ret.reborrow().init_place();
-                ret_place.set_p(aci.place.0.try_into().unwrap());
+                ret_place.set_p(aci.place.0);
                 ret.set_index(aci.index.try_into().unwrap());
                 let mut ret_item_place = ret.init_item_place();
-                ret_item_place.set_p(aci.item_place.0.try_into().unwrap());
+                ret_item_place.set_p(aci.item_place.0);
             }
             TraceLowLevelEvent::VariableCell(vcr) => {
                 let mut ret = event.init_variable_cell();
                 let mut ret_variable_id = ret.reborrow().init_variable_id();
                 ret_variable_id.set_i(vcr.variable_id.0.try_into().unwrap());
                 let mut ret_place = ret.init_place();
-                ret_place.set_p(vcr.place.0.try_into().unwrap());
+                ret_place.set_p(vcr.place.0);
             }
             TraceLowLevelEvent::ThreadStart(tid) => {
                 let mut ret = event.init_thread_start();

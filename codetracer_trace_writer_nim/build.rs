@@ -183,16 +183,17 @@ fn main() {
         .arg("--nimMainPrefix:codetracerTraceWriter")
         .arg(format!("--path:{}", nim_src.display()))
         .arg(format!("--nimcache:{}", nimcache.display()));
-    // ``CODETRACER_TRACE_FORMAT_NIM_EXTRA_PATHS`` (colon-separated)
+    // ``CODETRACER_TRACE_FORMAT_NIM_EXTRA_PATHS`` (the host platform's path
+    // separator: `:` on POSIX, `;` on Windows)
     // injects additional ``--path:`` directives.  Callers that skip
     // the nimble-install step (above) use this to provide the
     // ``results`` / ``stew`` package sources directly.
     if let Ok(extra) = env::var("CODETRACER_TRACE_FORMAT_NIM_EXTRA_PATHS") {
-        for path in extra.split(':') {
-            if path.is_empty() {
+        for path in env::split_paths(&extra) {
+            if path.as_os_str().is_empty() {
                 continue;
             }
-            nim.arg(format!("--path:{path}"));
+            nim.arg(format!("--path:{}", path.display()));
         }
     }
     // The zstd bindings do `#include <zstd.h>`; put its header dir on the C

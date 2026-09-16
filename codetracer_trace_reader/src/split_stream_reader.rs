@@ -411,8 +411,44 @@ fn push_value_event(out: &mut Vec<TraceLowLevelEvent>, ev: ValueStreamEvent) -> 
                 }));
             }
         }
+        // A self-delimiting event this binary has no `TraceLowLevelEvent`
+        // spelling for (tag >= 10, length-prefixed). Skipping it is the point
+        // of the self-delimiting design — a reader older than a tag stays
+        // usable instead of refusing the whole recording — but skipping it
+        // QUIETLY would make a trace that carries records this reader cannot
+        // show indistinguishable from one that carries none. So it is counted
+        // and named once per tag, matching what the Nim reader reports for the
+        // same container.
+        ValueStreamEvent::Unknown { tag, payload } => {
+            warn_unknown_value_tag_once(tag, payload.len());
+        }
     }
     Ok(())
+}
+
+/// Name an unhandled value-stream tag on stderr, once per distinct tag per
+/// process.
+///
+/// Once per tag rather than once per occurrence: an unknown tag typically
+/// appears on a large fraction of the steps in a recording, and a per-record
+/// warning would bury the rest of the output while telling the reader nothing
+/// the first line did not.
+fn warn_unknown_value_tag_once(tag: u8, payload_len: usize) {
+    use std::sync::{Mutex, OnceLock};
+    static SEEN: OnceLock<Mutex<std::collections::HashSet<u8>>> = OnceLock::new();
+    let seen = SEEN.get_or_init(|| Mutex::new(std::collections::HashSet::new()));
+    // A poisoned lock here means another thread panicked mid-warning; the
+    // tally is advisory, so recover the set rather than propagate the panic
+    // into a trace read that is otherwise fine.
+    let mut seen = seen.lock().unwrap_or_else(|e| e.into_inner());
+    if seen.insert(tag) {
+        eprintln!(
+            "WARNING: values.dat carries a tag-{tag} event ({payload_len} byte payload) that this \
+             reader has no representation for; events of this tag are being SKIPPED. The \
+             container was written by a newer writer — rebuild this binary from \
+             codetracer-trace-format to see them."
+        );
+    }
 }
 
 fn pass_by_from_ordinal(pass_by: u8) -> PassBy {

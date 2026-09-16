@@ -334,6 +334,15 @@ impl PositionSpace {
         &self.line_lengths
     }
 
+    /// Whether `path_id` has a column axis — i.e. a non-empty per-line table.
+    ///
+    /// A file without one is sized by the [`DEFAULT_LINES_PER_FILE`] fallback,
+    /// where one address is one line, so a column delta added to its address
+    /// names a later line instead of a column.
+    pub fn has_column_axis(&self, path_id: u64) -> bool {
+        self.line_lengths.get(path_id as usize).is_some_and(|lls| !lls.is_empty())
+    }
+
     fn rebuild(&mut self) {
         let mut prefix = Vec::with_capacity(self.line_lengths.len());
         let mut running: u64 = 0;

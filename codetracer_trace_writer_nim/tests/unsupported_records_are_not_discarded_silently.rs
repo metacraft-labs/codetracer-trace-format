@@ -114,7 +114,7 @@ fn all_bytes_written_under(dir: &Path) -> Vec<u8> {
     out
 }
 
-use codetracer_trace_types::{BindVariableRecord, Line, Place, TraceLowLevelEvent, TypeId, ValueRecord, VariableId};
+use codetracer_trace_types::{BindVariableRecord, Line, Place, TraceLowLevelEvent, ValueRecord, VariableId};
 use codetracer_trace_writer_nim::{NimTraceWriter, TraceEventsFileFormat, strict_from_env_value};
 
 /// The Nim runtime is **not** thread-safe — its global state lives behind a

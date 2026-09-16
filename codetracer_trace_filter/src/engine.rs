@@ -502,11 +502,7 @@ pub fn normalise_to_posix(path: &Path) -> Option<String> {
             Component::ParentDir => parts.push("..".to_string()),
         }
     }
-    if parts.is_empty() {
-        None
-    } else {
-        Some(parts.join("/"))
-    }
+    if parts.is_empty() { None } else { Some(parts.join("/")) }
 }
 
 /// Convert a normalised relative path (e.g., `pkg/foo.py`) into a dotted
@@ -525,11 +521,7 @@ pub fn module_from_relative(relative: &str) -> Option<String> {
     } else {
         parts.push(last);
     }
-    if parts.is_empty() {
-        None
-    } else {
-        Some(parts.join("."))
-    }
+    if parts.is_empty() { None } else { Some(parts.join(".")) }
 }
 
 /// Return true when the supplied module name is a dotted identifier.
@@ -570,7 +562,7 @@ version = 1
             ),
         )
         .expect("write filter");
-        let config = TraceFilterConfig::from_paths(&[filter_path.clone()]).expect("config");
+        let config = TraceFilterConfig::from_paths(std::slice::from_ref(&filter_path)).expect("config");
         let file_path = temp.path().join("app").join("foo.py");
         fs::create_dir_all(file_path.parent().unwrap()).expect("create app dir");
         fs::File::create(&file_path).expect("create file");

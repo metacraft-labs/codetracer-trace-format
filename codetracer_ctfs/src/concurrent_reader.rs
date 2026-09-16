@@ -1,12 +1,12 @@
 use std::fs::File;
 use std::path::Path;
 
+use crate::CtfsError;
 use crate::base40::base40_decode;
 use crate::block_bounds::BlockBound;
-use crate::file_entry::{FileEntry, FILE_ENTRY_SIZE};
+use crate::file_entry::{FILE_ENTRY_SIZE, FileEntry};
 use crate::header::{EXTENDED_HEADER_SIZE, HEADER_SIZE};
 use crate::pread_compat::pread_exact;
-use crate::CtfsError;
 
 /// Thread-safe reader for CTFS containers.
 ///

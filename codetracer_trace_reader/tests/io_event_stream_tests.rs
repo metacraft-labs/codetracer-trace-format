@@ -8,6 +8,7 @@
 //!   2. re-derived from the events the normal reader returns for the same
 //!      trace, by feeding them through the SAME `IoEventStreamBuilder` the
 //!      writer used.
+//!
 //! The two MUST agree — proving each record's kind / step_id / metadata /
 //! content match the `Event` records the trace carries, and that paginated
 //! reads (incl. across a chunk boundary) recover the exact records.
@@ -29,6 +30,7 @@ use codetracer_trace_writer::trace_writer::TraceWriter;
 ///   * stdout/stderr writes,
 ///   * file writes,
 ///   * an error event,
+///
 /// across enough steps to cross several small `events.dat` chunks. Returns the
 /// `.ct` path.
 fn write_trace(dir: &tempfile::TempDir, events_chunk_size: usize) -> std::path::PathBuf {
@@ -198,7 +200,7 @@ fn fetching_one_event_decompresses_only_its_chunk() {
     );
 
     // Reading another record in the SAME chunk reuses the cache.
-    if target_index % chunk_size as u64 != 0 {
+    if !target_index.is_multiple_of(chunk_size as u64) {
         let sibling = target_index - 1;
         if (sibling as usize) / chunk_size == expected_chunk {
             let _ = es.read(sibling).unwrap();

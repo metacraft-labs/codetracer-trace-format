@@ -63,7 +63,7 @@ pub(crate) fn run(cmd: InspectCtfsCommand) {
 
     for name in &files {
         let size = reader.file_size(name).unwrap_or(0);
-        let data_blocks = if size == 0 { 0 } else { (size + block_size - 1) / block_size };
+        let data_blocks = if size == 0 { 0 } else { size.div_ceil(block_size) };
 
         // Each file has at least one mapping block (the root mapping block).
         // For multi-level mappings there could be more, but for a simple
@@ -77,7 +77,7 @@ pub(crate) fn run(cmd: InspectCtfsCommand) {
             1
         } else {
             // Level 2+: rough estimate of mapping overhead
-            let extra = (data_blocks - usable + usable - 1) / usable;
+            let extra = (data_blocks - usable).div_ceil(usable);
             1 + extra
         };
 

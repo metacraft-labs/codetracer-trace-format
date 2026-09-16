@@ -173,8 +173,8 @@ mod tests {
         let path = tmp.path().to_path_buf();
 
         let block_size = 4096u32;
-        let data_size = 10 * 1024; // 10KB
-        let expected_blocks = (data_size + block_size as usize - 1) / block_size as usize;
+        let data_size = 10 * 1024usize; // 10KB
+        let expected_blocks = data_size.div_ceil(block_size as usize);
         assert_eq!(expected_blocks, 3); // 10KB / 4KB = 2.5, rounds up to 3
 
         let data: Vec<u8> = (0..data_size).map(|i| (i % 251) as u8).collect();
@@ -232,9 +232,9 @@ mod tests {
             assert_eq!(n, 4096);
 
             // Verify the pattern
-            for i in 0..4096 {
+            for (i, byte) in buf.iter().enumerate() {
                 let expected = ((seek_offset as usize + i) % 251) as u8;
-                assert_eq!(buf[i], expected, "mismatch at offset {}", seek_offset as usize + i);
+                assert_eq!(*byte, expected, "mismatch at offset {}", seek_offset as usize + i);
             }
         }
     }
@@ -275,16 +275,16 @@ mod tests {
             let n = r.read_at("multi.dat", last_block_offset, &mut buf).unwrap();
             assert_eq!(n, block_size as usize);
 
-            for i in 0..block_size as usize {
+            for (i, byte) in buf.iter().enumerate() {
                 let expected = ((last_block_offset as usize + i) % 251) as u8;
-                assert_eq!(buf[i], expected, "mismatch at offset {}", last_block_offset as usize + i);
+                assert_eq!(*byte, expected, "mismatch at offset {}", last_block_offset as usize + i);
             }
 
             // Also verify full read
             let all_data = r.read_file("multi.dat").unwrap();
             assert_eq!(all_data.len(), file_size);
-            for i in 0..file_size {
-                assert_eq!(all_data[i], (i % 251) as u8, "full read mismatch at {}", i);
+            for (i, byte) in all_data.iter().enumerate() {
+                assert_eq!(*byte, (i % 251) as u8, "full read mismatch at {}", i);
             }
         }
     }
@@ -325,8 +325,8 @@ mod tests {
 
             let all_data = r.read_file("append.dat").unwrap();
             assert_eq!(all_data.len(), total_size);
-            for i in 0..total_size {
-                assert_eq!(all_data[i], (i % 251) as u8, "mismatch at byte {}", i);
+            for (i, byte) in all_data.iter().enumerate() {
+                assert_eq!(*byte, (i % 251) as u8, "mismatch at byte {}", i);
             }
         }
     }
@@ -379,9 +379,9 @@ mod tests {
         }
 
         // Move each FileWriter to its own thread
-        for i in 0..num_threads {
+        for slot in &mut file_writers {
             let writer_ref = Arc::clone(&writer);
-            let mut fw = file_writers[i].take().unwrap();
+            let mut fw = slot.take().unwrap();
             let handle = thread::spawn(move || {
                 let start = Instant::now();
                 let duration = Duration::from_secs(2);
@@ -411,14 +411,14 @@ mod tests {
         let files = reader.list_files();
         assert_eq!(files.len(), num_threads);
 
-        for i in 0..num_threads {
+        for (i, size) in sizes.iter().enumerate() {
             let name = format!("f{:011}", i);
             let data = reader.read_file(&name).unwrap();
-            assert_eq!(data.len(), sizes[i], "file {} size mismatch", name);
+            assert_eq!(data.len(), *size, "file {} size mismatch", name);
 
             // Verify pattern
-            for j in 0..data.len() {
-                assert_eq!(data[j], (j % 251) as u8, "corruption in file {} at byte {}", name, j);
+            for (j, byte) in data.iter().enumerate() {
+                assert_eq!(*byte, (j % 251) as u8, "corruption in file {} at byte {}", name, j);
             }
         }
     }
@@ -462,8 +462,8 @@ mod tests {
                         let mut buf = [0u8; 4096];
                         let n = reader.read_at("stream.dat", 0, &mut buf).unwrap();
                         if n == 4096 {
-                            for j in 0..4096 {
-                                assert_eq!(buf[j], (j % 251) as u8, "reader saw corruption at byte {}", j);
+                            for (j, byte) in buf.iter().enumerate() {
+                                assert_eq!(*byte, (j % 251) as u8, "reader saw corruption at byte {}", j);
                             }
                         }
                         reads_done += 1;
@@ -486,7 +486,7 @@ mod tests {
             total_written += 4096;
 
             // Periodically flush so the reader can see progress
-            if total_written % (4096 * 16) == 0 {
+            if total_written.is_multiple_of(4096 * 16) {
                 fw.flush(&writer).unwrap();
             }
         }
@@ -507,8 +507,8 @@ mod tests {
         let mut reader = CtfsReader::open(&path).unwrap();
         let data = reader.read_file("stream.dat").unwrap();
         assert_eq!(data.len(), total_written);
-        for j in 0..data.len() {
-            assert_eq!(data[j], (j % 251) as u8, "corruption at byte {}", j);
+        for (j, byte) in data.iter().enumerate() {
+            assert_eq!(*byte, (j % 251) as u8, "corruption at byte {}", j);
         }
     }
 
@@ -587,7 +587,10 @@ mod tests {
 
         assert_eq!(&buf[0..5], &[0xC0, 0xDE, 0x72, 0xAC, 0xE2]);
         assert_eq!(buf[5], 4, "ctfs-container.md section 1: header byte 5 is 4");
-        assert_eq!(buf[6], 0, "byte 6 under v4 is Encryption; a compression tag here would read as AES-256-GCM");
+        assert_eq!(
+            buf[6], 0,
+            "byte 6 under v4 is Encryption; a compression tag here would read as AES-256-GCM"
+        );
         assert_eq!(buf[7], 0, "byte 7 under v4 is MaxShards; this container is not sharded");
 
         let r = CtfsReader::open(&path).unwrap();
@@ -760,8 +763,8 @@ mod tests {
         }
 
         // Write initial data and flush so readers can find the files
-        for i in 0..num_writers {
-            let fw = file_writers[i].as_mut().unwrap();
+        for slot in &mut file_writers {
+            let fw = slot.as_mut().unwrap();
             let data = vec![0u8; 4096];
             fw.write(&writer, &data).unwrap();
             fw.flush(&writer).unwrap();
@@ -771,10 +774,10 @@ mod tests {
         let mut reader_handles = Vec::new();
 
         // Spawn writer threads
-        for i in 0..num_writers {
+        for slot in &mut file_writers {
             let writer_ref = Arc::clone(&writer);
             let done_ref = Arc::clone(&done);
-            let mut fw = file_writers[i].take().unwrap();
+            let mut fw = slot.take().unwrap();
             let handle = thread::spawn(move || {
                 let start = Instant::now();
                 let duration = Duration::from_secs(5);
@@ -786,7 +789,7 @@ mod tests {
                     total_written += 1024;
 
                     // Periodic flush
-                    if total_written % (1024 * 32) == 0 {
+                    if total_written.is_multiple_of(1024 * 32) {
                         fw.flush(&writer_ref).unwrap();
                     }
                 }
@@ -850,15 +853,15 @@ mod tests {
         let files = reader.list_files();
         assert_eq!(files.len(), num_writers);
 
-        for i in 0..num_writers {
+        for (i, expected_size) in writer_sizes.iter().enumerate() {
             let name = format!("f{:011}", i);
             let data = reader.read_file(&name).unwrap();
             assert_eq!(
                 data.len(),
-                writer_sizes[i],
+                *expected_size,
                 "file {} size mismatch: expected {}, got {}",
                 name,
-                writer_sizes[i],
+                expected_size,
                 data.len()
             );
         }

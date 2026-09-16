@@ -234,7 +234,7 @@ fn nim_and_rust_decoders_agree_on_every_step_in_fixture() {
     // with the Rust decoder is unambiguously a Rust bug rather than
     // a writer/reader mismatch.
     for (i, exp) in expected.iter().enumerate() {
-        assert_eq!(nim_path_ids[i] as u64, exp.file as u64, "step {i}: writer→Nim path_id mismatch");
+        assert_eq!(nim_path_ids[i] as u64, exp.file, "step {i}: writer→Nim path_id mismatch");
         assert_eq!(nim_lines[i] as u32, exp.line, "step {i}: writer→Nim line mismatch");
         assert_eq!(nim_columns[i] as u32, exp.column, "step {i}: writer→Nim column mismatch");
     }
@@ -263,7 +263,7 @@ fn nim_and_rust_decoders_agree_on_every_step_in_fixture() {
         // And the Rust decoder MUST agree byte-for-byte with the Nim
         // decoder's answer (the actual cross-reader consistency
         // assertion the M4 plan demands).
-        assert_eq!(u64::from(pos.file), nim_path_ids[i], "step {i}: Rust↔Nim file disagreement at GLI {gli}",);
+        assert_eq!(pos.file, nim_path_ids[i], "step {i}: Rust↔Nim file disagreement at GLI {gli}",);
         assert_eq!(u64::from(pos.line), nim_lines[i], "step {i}: Rust↔Nim line disagreement at GLI {gli}",);
         assert_eq!(
             u64::from(pos.column),

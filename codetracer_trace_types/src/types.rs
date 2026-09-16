@@ -281,9 +281,9 @@ fn mint_recording_id() -> String {
 #[serde(transparent)]
 pub struct CallKey(pub i64);
 
-impl Into<usize> for CallKey {
-    fn into(self) -> usize {
-        self.0 as usize
+impl From<CallKey> for usize {
+    fn from(val: CallKey) -> Self {
+        val.0 as usize
     }
 }
 
@@ -309,15 +309,15 @@ pub const NO_KEY: CallKey = CallKey(-1);
 #[serde(transparent)]
 pub struct Line(pub i64);
 
-impl Into<usize> for Line {
-    fn into(self) -> usize {
-        self.0 as usize
+impl From<Line> for usize {
+    fn from(val: Line) -> Self {
+        val.0 as usize
     }
 }
 
-impl Into<i64> for Line {
-    fn into(self) -> i64 {
-        self.0
+impl From<Line> for i64 {
+    fn from(val: Line) -> Self {
+        val.0
     }
 }
 
@@ -325,9 +325,9 @@ impl Into<i64> for Line {
 #[serde(transparent)]
 pub struct PathId(pub usize);
 
-impl Into<usize> for PathId {
-    fn into(self) -> usize {
-        self.0
+impl From<PathId> for usize {
+    fn from(val: PathId) -> Self {
+        val.0
     }
 }
 
@@ -335,9 +335,9 @@ impl Into<usize> for PathId {
 #[serde(transparent)]
 pub struct StepId(pub i64);
 
-impl Into<usize> for StepId {
-    fn into(self) -> usize {
-        self.0 as usize
+impl From<StepId> for usize {
+    fn from(val: StepId) -> Self {
+        val.0 as usize
     }
 }
 
@@ -360,27 +360,27 @@ impl ops::Sub<usize> for StepId {
 #[derive(Hash, Debug, Default, Copy, Clone, Serialize, Deserialize, Ord, PartialOrd, Eq, PartialEq)]
 pub struct VariableId(pub usize);
 
-impl Into<usize> for VariableId {
-    fn into(self) -> usize {
-        self.0
+impl From<VariableId> for usize {
+    fn from(val: VariableId) -> Self {
+        val.0
     }
 }
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FunctionId(pub usize);
 
-impl Into<usize> for FunctionId {
-    fn into(self) -> usize {
-        self.0
+impl From<FunctionId> for usize {
+    fn from(val: FunctionId) -> Self {
+        val.0
     }
 }
 
 #[derive(Hash, Debug, Default, Copy, Clone, Serialize, Deserialize, Ord, PartialOrd, Eq, PartialEq)]
 pub struct ThreadId(pub u64);
 
-impl Into<u64> for ThreadId {
-    fn into(self) -> u64 {
-        self.0
+impl From<ThreadId> for u64 {
+    fn from(val: ThreadId) -> Self {
+        val.0
     }
 }
 
@@ -473,9 +473,9 @@ pub struct RecordEvent {
 #[serde(transparent)]
 pub struct TypeId(pub usize);
 
-impl Into<usize> for TypeId {
-    fn into(self) -> usize {
-        self.0
+impl From<TypeId> for usize {
+    fn from(val: TypeId) -> Self {
+        val.0
     }
 }
 

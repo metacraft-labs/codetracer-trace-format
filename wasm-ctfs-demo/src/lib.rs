@@ -59,7 +59,10 @@ pub extern "C" fn ct_demo_build(steps: u32) -> *const u8 {
 /// Length in bytes of the container `ct_demo_build` last produced.
 #[unsafe(no_mangle)]
 pub extern "C" fn ct_demo_len() -> usize {
-    unsafe { (*(&raw const CONTAINER)).len() }
+    unsafe {
+        let slot = &raw const CONTAINER;
+        (*slot).len()
+    }
 }
 
 /// Reserve `len` bytes of linear memory and return a pointer to them, so a
@@ -122,7 +125,9 @@ pub fn build_container(steps: u32) -> Result<Vec<u8>, Box<dyn std::error::Error>
     TraceWriter::register_return(&mut writer, ValueRecord::Int { i: acc, type_id: int_type });
 
     writer.finish_writing_trace_events()?;
-    writer.take_container_bytes().ok_or_else(|| "the in-memory writer produced no container".into())
+    writer
+        .take_container_bytes()
+        .ok_or_else(|| "the in-memory writer produced no container".into())
 }
 
 #[cfg(test)]

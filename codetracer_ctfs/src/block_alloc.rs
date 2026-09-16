@@ -7,6 +7,12 @@ pub struct BlockAllocator {
     next_block: u64,
 }
 
+impl Default for BlockAllocator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl BlockAllocator {
     pub fn new() -> Self {
         BlockAllocator { next_block: 1 }

@@ -84,19 +84,12 @@ pub struct FilterMeta {
 
 /// IO capture configuration.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Default)]
 pub struct IoConfig {
     pub capture: bool,
     pub streams: Vec<IoStream>,
 }
 
-impl Default for IoConfig {
-    fn default() -> Self {
-        IoConfig {
-            capture: false,
-            streams: Vec::new(),
-        }
-    }
-}
 
 /// Value pattern applied within a scope rule (§ 4 `[[scope.rules.value_patterns]]`).
 #[derive(Debug, Clone)]

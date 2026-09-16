@@ -277,8 +277,8 @@ pub fn read_window(reader: &mut CtfsReader, start_step: u64, max_steps: u64) -> 
             StepStreamRecord::Raise { .. } | StepStreamRecord::Catch { .. } => {}
         }
 
-        if let Some(ref mut v) = values {
-            if i < v.count() {
+        if let Some(ref mut v) = values
+            && i < v.count() {
                 let entry = v
                     .read(i)
                     .map_err(|e| format!("split-stream reader: values for step {i} are unreadable: {e}"))?;
@@ -286,7 +286,6 @@ pub fn read_window(reader: &mut CtfsReader, start_step: u64, max_steps: u64) -> 
                     push_value_event(&mut out, ev)?;
                 }
             }
-        }
 
         if let Some(events) = io_by_step.get(&i) {
             for (kind, metadata, content) in events {

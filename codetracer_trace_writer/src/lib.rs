@@ -70,7 +70,7 @@ mod tests {
 
     #[test]
     fn test_simple_trace() {
-        let mut tracer = NonStreamingTraceWriter::new("path.small", &vec![]);
+        let mut tracer = NonStreamingTraceWriter::new("path.small", &[]);
         let path = Path::new("/test/path.small");
         tracer.start(path, Line(1));
         tracer.register_step(path, Line(1));
@@ -80,10 +80,10 @@ mod tests {
         tracer.register_special_event(EventLogKind::Write, "", "test2");
         tracer.register_special_event(EventLogKind::Error, "", "testError");
 
-        let function_path_id = tracer.ensure_path_id(&path);
+        let function_path_id = tracer.ensure_path_id(path);
         let function_line = Line(3);
         // -> function_id 1 after top level;
-        let function_id = tracer.ensure_function_id("function", &path, function_line);
+        let function_id = tracer.ensure_function_id("function", path, function_line);
         assert!(function_id == FunctionId(1));
 
         let before_temp_step = tracer.events.len();
@@ -106,7 +106,7 @@ mod tests {
             assert_eq!(*path_id, function_path_id);
             assert_eq!(*line, function_line);
         } else {
-            assert!(false, "expected a auto-registered step event before the last call one");
+            panic!("expected an auto-registered step event before the last call one");
         }
         assert!(matches!(should_be_call, TraceLowLevelEvent::Call(CallRecord { .. })));
 

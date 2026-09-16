@@ -349,7 +349,7 @@ fn event_byte_size(data: &[u8], offset: usize) -> usize {
     let tag = data[offset];
     match tag {
         0 => 17, // Step: tag(1) + path_id(8) + line(8)
-        1 | 2 | 3 => {
+        1..=3 => {
             // Path, VariableName, Variable: tag(1) + str_len(4) + string
             let str_len = u32::from_le_bytes(data[offset + 1..offset + 5].try_into().unwrap()) as usize;
             5 + str_len
@@ -417,10 +417,10 @@ fn event_byte_size(data: &[u8], offset: usize) -> usize {
             let cbor_len = u32::from_le_bytes(data[offset + 9..offset + 13].try_into().unwrap()) as usize;
             13 + cbor_len
         }
-        18 => 17,          // VariableCell: tag(1) + var_id(8) + place(8)
-        19 => 9,           // DropVariable: tag(1) + var_id(8)
-        20 | 21 | 22 => 9, // ThreadStart/Exit/Switch: tag(1) + thread_id(8)
-        23 => 1,           // DropLastStep: tag(1)
+        18 => 17,     // VariableCell: tag(1) + var_id(8) + place(8)
+        19 => 9,      // DropVariable: tag(1) + var_id(8)
+        20..=22 => 9, // ThreadStart/Exit/Switch: tag(1) + thread_id(8)
+        23 => 1,      // DropLastStep: tag(1)
         _ => panic!("unknown split-binary event tag: {}", tag),
     }
 }

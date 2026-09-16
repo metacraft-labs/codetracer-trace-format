@@ -128,7 +128,7 @@ pub fn parse_meta(raw: &RawMeta, path: &Path) -> FilterResult<FilterMeta> {
     // Spec § 11: refuse to load filter files whose schema version exceeds
     // what this crate understands.  Forward-compat: a future v2 schema is
     // rejected here rather than misinterpreted under v1 semantics.
-    if raw.version as u32 > MAX_SCHEMA_VERSION {
+    if raw.version > MAX_SCHEMA_VERSION {
         return Err(crate::error::FilterError::new(
             crate::error::ErrorCode::UnsupportedSchemaVersion,
             format!(
@@ -150,7 +150,7 @@ pub fn parse_meta(raw: &RawMeta, path: &Path) -> FilterResult<FilterMeta> {
 
     Ok(FilterMeta {
         name: raw.name.clone(),
-        version: raw.version as u32,
+        version: raw.version,
         description: raw.description.clone(),
         labels,
     })
@@ -299,8 +299,7 @@ pub fn normalize_scope_selector(selector: Selector, project_root: &Path, locatio
     match selector.kind() {
         SelectorKind::File => {
             let pattern = selector.pattern();
-            if pattern.starts_with("glob:") {
-                let glob_pattern = &pattern["glob:".len()..];
+            if let Some(glob_pattern) = pattern.strip_prefix("glob:") {
                 let normalized = normalize_glob_pattern(glob_pattern, project_root)?;
                 rebuild_selector(selector.kind(), selector.match_type(), &normalized)
             } else {

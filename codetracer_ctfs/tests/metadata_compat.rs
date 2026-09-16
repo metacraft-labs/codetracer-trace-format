@@ -59,36 +59,34 @@ fn build_compat_mmap() -> MmapTable {
 }
 
 fn build_compat_filemap() -> Filemap {
-    let mut entries = Vec::new();
-
-    entries.push(FilemapEntry {
-        ctfs_name: base40_encode("myapp").unwrap(),
-        entry_type: FilemapEntryType::Binary,
-        flags: 0x01,
-        build_id: (1u8..=20).collect(),
-        real_path: "/usr/bin/myapp".to_string(),
-        ..Default::default()
-    });
-
-    entries.push(FilemapEntry {
-        ctfs_name: base40_encode("myapp.dbg").unwrap(),
-        entry_type: FilemapEntryType::DebugSymbol,
-        flags: 0,
-        build_id: (1u8..=20).collect(),
-        real_path: "/usr/lib/debug/myapp.debug".to_string(),
-        binary_ref: base40_encode("myapp").unwrap(),
-        ..Default::default()
-    });
-
-    entries.push(FilemapEntry {
-        ctfs_name: base40_encode("main.c").unwrap(),
-        entry_type: FilemapEntryType::SourceFile,
-        flags: 0,
-        build_id: vec![],
-        real_path: "/home/user/src/main.c".to_string(),
-        compilation_dir: "/home/user/build".to_string(),
-        ..Default::default()
-    });
+    let entries = vec![
+        FilemapEntry {
+            ctfs_name: base40_encode("myapp").unwrap(),
+            entry_type: FilemapEntryType::Binary,
+            flags: 0x01,
+            build_id: (1u8..=20).collect(),
+            real_path: "/usr/bin/myapp".to_string(),
+            ..Default::default()
+        },
+        FilemapEntry {
+            ctfs_name: base40_encode("myapp.dbg").unwrap(),
+            entry_type: FilemapEntryType::DebugSymbol,
+            flags: 0,
+            build_id: (1u8..=20).collect(),
+            real_path: "/usr/lib/debug/myapp.debug".to_string(),
+            binary_ref: base40_encode("myapp").unwrap(),
+            ..Default::default()
+        },
+        FilemapEntry {
+            ctfs_name: base40_encode("main.c").unwrap(),
+            entry_type: FilemapEntryType::SourceFile,
+            flags: 0,
+            build_id: vec![],
+            real_path: "/home/user/src/main.c".to_string(),
+            compilation_dir: "/home/user/build".to_string(),
+            ..Default::default()
+        },
+    ];
 
     Filemap { version: 1, entries }
 }

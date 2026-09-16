@@ -247,8 +247,20 @@ mod tests {
         assert!(res.unwrap_err().contains("truncated"));
     }
 
+    /// The canonical compat mmap table is the fixture the Nim compat test
+    /// serializes on its side, so Rust must at minimum round-trip it byte for
+    /// byte. Cross-language byte equality is asserted by the `metadata_compat`
+    /// integration test against a Nim-generated golden file.
+    #[test]
+    fn test_mmap_compat_roundtrip() {
+        let t = build_compat_mmap();
+        let data = t.serialize();
+        let t2 = MmapTable::deserialize(&data).unwrap();
+        assert_eq!(t, t2, "Rust roundtrip mismatch");
+    }
+
     /// Build the canonical compat mmap table used by both Nim and Rust compat tests.
-    pub(crate) fn build_compat_mmap() -> MmapTable {
+    fn build_compat_mmap() -> MmapTable {
         use crate::base40_encode;
 
         MmapTable {

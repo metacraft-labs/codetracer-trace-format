@@ -399,7 +399,7 @@ fn test_ctfs_container_has_format_file() {
         TraceWriter::start(writer, path, Line(1));
     });
 
-    let mut r = codetracer_ctfs::CtfsReader::open(&ct_path).unwrap();
+    let r = codetracer_ctfs::CtfsReader::open(&ct_path).unwrap();
     let files = r.list_files();
     // `events.fmt` described how to decode `events.log`; with the stream gone
     // the marker describes nothing and is not written either.

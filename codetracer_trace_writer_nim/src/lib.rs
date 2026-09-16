@@ -56,6 +56,10 @@ extern "C" {
     fn trace_writer_register_call_arg(handle: *mut std::ffi::c_void, name: *const std::os::raw::c_char, cbor_data: *const u8, cbor_len: usize);
     fn trace_writer_register_return(handle: *mut std::ffi::c_void);
 
+    // Kept for ABI compatibility — the `_by_type_id` form below replaced this
+    // one at every call site in this binding, but the C ABI still exports it
+    // for callers that have a type NAME rather than an interned id.
+    #[allow(dead_code)]
     fn trace_writer_register_return_int(handle: *mut std::ffi::c_void, value: i64, type_kind: i32, type_name: *const std::os::raw::c_char);
     // THE `_by_type_id` FORMS EXIST SO THIS WRAPPER DOES NOT HAVE TO INVENT A
     // TYPE NAME. A `ValueRecord::{Int,Float,Bool}` carries a TypeId and no name;
@@ -78,6 +82,8 @@ extern "C" {
         type_name: *const std::os::raw::c_char,
     );
 
+    // Kept for ABI compatibility — see `trace_writer_register_return_int`.
+    #[allow(dead_code)]
     fn trace_writer_register_variable_int(
         handle: *mut std::ffi::c_void,
         name: *const std::os::raw::c_char,
@@ -1075,6 +1081,12 @@ pub struct StreamingValueEncoder {
     handle: *mut std::ffi::c_void,
 }
 
+impl Default for StreamingValueEncoder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl StreamingValueEncoder {
     /// Create a new streaming value encoder.
     pub fn new() -> Self {
@@ -1608,13 +1620,13 @@ impl NimTraceWriter {
 
     pub fn start(&mut self, path: &Path, line: Line) {
         let c_path = path_to_cstring(path);
-        unsafe { trace_writer_start(self.handle, c_path.as_ptr(), line.0 as i64) }
+        unsafe { trace_writer_start(self.handle, c_path.as_ptr(), line.0) }
     }
 
     pub fn ensure_function_id(&mut self, function_name: &str, path: &Path, line: Line) -> FunctionId {
         let c_name = str_to_cstring(function_name);
         let c_path = path_to_cstring(path);
-        let id = unsafe { trace_writer_ensure_function_id(self.handle, c_name.as_ptr(), c_path.as_ptr(), line.0 as i64) };
+        let id = unsafe { trace_writer_ensure_function_id(self.handle, c_name.as_ptr(), c_path.as_ptr(), line.0) };
         FunctionId(id)
     }
 
@@ -1626,7 +1638,7 @@ impl NimTraceWriter {
 
     pub fn register_step(&mut self, path: &Path, line: Line) {
         let c_path = path_to_cstring(path);
-        unsafe { trace_writer_register_step(self.handle, c_path.as_ptr(), line.0 as i64) }
+        unsafe { trace_writer_register_step(self.handle, c_path.as_ptr(), line.0) }
     }
 
     /// C1: column-aware register_step.  The Nim multi-stream FFI accepts
@@ -3385,6 +3397,15 @@ fn read_nim_buffer(ptr: *mut u8, len: usize) -> String {
     s
 }
 
+
+/// The scalar fields of one call record, in `calls.dat` order:
+/// `(function_id, parent_key, entry_step, exit_step, depth, children_count)`.
+///
+/// Named because the tuple is returned across a public API and six positional
+/// values are indistinguishable at the call site — `.3` says nothing about
+/// whether it is the exit step or the depth.
+pub type CallFields = (u64, i64, u64, u64, u32, u64);
+
 impl NimTraceReaderHandle {
     /// Open a `.ct` trace file for reading.
     pub fn open(path: &str) -> Result<Self, Box<dyn Error>> {
@@ -3719,7 +3740,7 @@ impl NimTraceReaderHandle {
 
     /// Get the scalar fields of a call record.
     /// Returns (function_id, parent_key, entry_step, exit_step, depth, children_count).
-    pub fn call_fields(&self, key: u64) -> Result<(u64, i64, u64, u64, u32, u64), Box<dyn Error>> {
+    pub fn call_fields(&self, key: u64) -> Result<CallFields, Box<dyn Error>> {
         let mut function_id: u64 = 0;
         let mut parent_key: i64 = 0;
         let mut entry_step: u64 = 0;
@@ -3953,7 +3974,7 @@ fn cbor_value_to_record(value: &ciborium::value::Value) -> Option<ValueRecord> {
     // The non-streaming writer has no compound-value table, so surface it as a
     // descriptive Raw rather than dropping it.
     if let V::Tag(256, inner) = value {
-        let id = inner.as_integer().and_then(|i| i128::try_from(i).ok());
+        let id = inner.as_integer().map(i128::from);
         return Some(ValueRecord::Raw {
             r: format!("<ref {}>", id.unwrap_or_default()),
             type_id: TypeId(0),

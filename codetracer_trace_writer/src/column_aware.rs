@@ -366,19 +366,18 @@ impl PositionSpace {
         }
         let idx = path_id as usize;
         let base = self.prefix_sum.get(idx).copied().unwrap_or(0);
-        if self.column_aware {
-            if let Some(lls) = self.line_lengths.get(idx) {
-                if !lls.is_empty() {
-                    // `line` is 1-based, so line 1 sits at offset 0. Nim clamps
-                    // `upTo` to the known line count and lets the reader's
-                    // decoder handle a past-end address the same way.
-                    let up_to = ((line.max(1) - 1) as usize).min(lls.len());
-                    let line_offset: u64 = lls[..up_to].iter().map(|l| u64::from(*l)).sum();
-                    return base + line_offset;
-                }
-            }
+        if self.column_aware
+            && let Some(lls) = self.line_lengths.get(idx)
+            && !lls.is_empty()
+        {
+            // `line` is 1-based, so line 1 sits at offset 0. Nim clamps
+            // `upTo` to the known line count and lets the reader's
+            // decoder handle a past-end address the same way.
+            let up_to = ((line.max(1) - 1) as usize).min(lls.len());
+            let line_offset: u64 = lls[..up_to].iter().map(|l| u64::from(*l)).sum();
+            return base + line_offset;
         }
-        base + if line <= 1 { 0 } else { line - 1 }
+        base + line.saturating_sub(1)
     }
 }
 

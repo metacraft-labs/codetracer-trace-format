@@ -814,11 +814,11 @@ impl CtfsTraceWriter {
 
     /// Write the HEADERV1 prefix to the CTFS events.log if not already done.
     fn ensure_header_written(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        if !self.header_written {
-            if let (Some(writer), Some(handle)) = (&mut self.ctfs_writer, self.events_handle) {
-                writer.write(handle, HEADERV1)?;
-                self.header_written = true;
-            }
+        if !self.header_written
+            && let (Some(writer), Some(handle)) = (&mut self.ctfs_writer, self.events_handle)
+        {
+            writer.write(handle, HEADERV1)?;
+            self.header_written = true;
         }
         Ok(())
     }

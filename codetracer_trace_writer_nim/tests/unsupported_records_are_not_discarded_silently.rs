@@ -5,7 +5,7 @@
 //!
 //! Guard one defect class: **silent incompleteness.**  A dozen
 //! [`NimTraceWriter`] operations have no counterpart in the Nim C API —
-//! `drop_variables` (since fixed, see below), `drop_variable`,
+//! `drop_variables` and `drop_variable` (both since fixed, see below),
 //! `register_compound_value`, `register_cell_value`, `assign_compound_item`,
 //! `assign_cell`, `register_variable`, `bind_variable`,
 //! `assign` (since fixed, see below), `register_asm`,
@@ -42,12 +42,14 @@
 //! C API and matching encoder support on the Nim side.  What changed here is
 //! that the loss is stated instead of hidden.
 //!
-//! **`assign` and `drop_variables` are no longer among them.**  `assign`'s
-//! entry point (`trace_writer_register_assignment`) landed on 2026-09-11 and
-//! assignments now reach the container as tag-9 value-stream events, asserted
-//! end to end by `tests/assignments_reach_the_trace.rs`.  `drop_variables`
-//! followed via `trace_writer_register_drop_variables`, reaching the container
-//! as tag-3 value-stream events, asserted by
+//! **`assign`, `drop_variables` and `drop_variable` are no longer among
+//! them.**  `assign`'s entry point (`trace_writer_register_assignment`)
+//! landed on 2026-09-11 and assignments now reach the container as tag-9
+//! value-stream events, asserted end to end by
+//! `tests/assignments_reach_the_trace.rs`.  The two drop forms followed via
+//! `trace_writer_register_drop_variables` and
+//! `trace_writer_register_drop_variable`, reaching the container as tag-3 and
+//! tag-2 value-stream events respectively, both asserted by
 //! `tests/drop_variables_reach_the_trace.rs`.
 //!
 //! The tests below therefore use `bind_variable` — still genuinely
@@ -161,7 +163,7 @@ fn discard_is_counted_and_named() {
     );
 
     writer.bind_variable("a", Place(0));
-    writer.drop_variable("c");
+    writer.register_variable("c", Place(1));
     // THE TYPE IS REGISTERED, because a bare `TypeId(0)` is a DANGLING id and
     // the writer now refuses one by name. There is no auto-registration rule in
     // the spec, no reserved ids, and no defined behaviour for an id nobody
@@ -177,7 +179,7 @@ fn discard_is_counted_and_named() {
         "a `bind_variable` call that persists nothing must be counted; \
          counts were {counts:?}"
     );
-    assert_eq!(counts.get("drop_variable").copied(), Some(1), "{counts:?}");
+    assert_eq!(counts.get("register_variable").copied(), Some(1), "{counts:?}");
     assert_eq!(counts.get("register_compound_value").copied(), Some(1), "{counts:?}");
     assert_eq!(writer.discarded_record_total(), 3);
 }

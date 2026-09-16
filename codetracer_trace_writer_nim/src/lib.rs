@@ -113,6 +113,7 @@ extern "C" {
         rvalue_cbor_len: usize,
     ) -> i32;
     fn trace_writer_register_drop_variables(handle: *mut std::ffi::c_void, names: *const *const std::os::raw::c_char, count: usize) -> i32;
+    fn trace_writer_register_drop_variable(handle: *mut std::ffi::c_void, name: *const std::os::raw::c_char) -> i32;
 
     // ----- Streaming value encoder -----
 
@@ -2394,8 +2395,25 @@ impl NimTraceWriter {
         self.discard_unsupported("register_variable");
     }
 
-    pub fn drop_variable(&mut self, _variable_name: &str) {
-        self.discard_unsupported("drop_variable");
+    /// Record that one variable has ended its life.
+    ///
+    /// Reaches the trace as a tag-2 `DropVariable` value-stream event in the
+    /// current step's value record (`trace-events.md` §"Value Stream Events":
+    /// `variable_id: varint`).
+    ///
+    /// Distinct from [`Self::drop_variables`] in what it claims, not just in
+    /// arity: tag 2 says a variable ended, tag 3 says a scope ended and took
+    /// its bindings with it. Routing a lone drop through the plural form would
+    /// assert a scope boundary the program never had.
+    pub fn drop_variable(&mut self, variable_name: &str) {
+        let c_name = str_to_cstring(variable_name);
+        let rc = unsafe { trace_writer_register_drop_variable(self.handle, c_name.as_ptr()) };
+        if rc != 0 {
+            // The record did not reach the trace. Do NOT stay silent about it:
+            // the counter is the only thing standing between a partial
+            // recording and one that looks complete.
+            self.discard_with_reason("drop_variable", "trace_writer_register_drop_variable reported a failure");
+        }
     }
 
     /// Record `variable_name = <rvalue>`.

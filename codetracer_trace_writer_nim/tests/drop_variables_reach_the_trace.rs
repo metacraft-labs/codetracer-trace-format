@@ -132,6 +132,113 @@ fn record_and_decode(
     (discards, decoded)
 }
 
+/// As [`record_and_decode`], but collecting the tag-2 `DropVariable` events —
+/// one name each — instead of the tag-3 scope exits.
+fn record_and_decode_singular(
+    program: &str,
+    emit: impl FnOnce(&mut NimTraceWriter, &Path),
+) -> (std::collections::BTreeMap<&'static str, u64>, Vec<String>) {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let events_path = dir.path().join("trace.json");
+    let metadata_path = dir.path().join("trace_metadata.json");
+    let paths_path = dir.path().join("trace_paths.json");
+
+    let mut writer = NimTraceWriter::new(program, &[], TraceEventsFileFormat::Ctfs);
+    writer.begin_writing_trace_events(&events_path).expect("begin_events");
+    writer.begin_writing_trace_metadata(&metadata_path).expect("begin_metadata");
+    writer.begin_writing_trace_paths(&paths_path).expect("begin_paths");
+
+    let source_path = dir.path().join(format!("{program}.ex"));
+    writer
+        .register_path_with_line_count(&source_path, 16)
+        .expect("register_path_with_line_count");
+    writer.register_step(&source_path, Line(1));
+
+    emit(&mut writer, &source_path);
+
+    writer.finish_writing_trace_events().expect("finish_events");
+    writer.finish_writing_trace_metadata().expect("finish_metadata");
+    writer.finish_writing_trace_paths().expect("finish_paths");
+    writer.close().expect("close");
+
+    let discards = writer.discarded_record_counts().clone();
+    drop(writer);
+
+    let ct_path = dir.path().join(format!("{program}.ct"));
+    let tables = codetracer_trace_reader::interning_tables_reader::open_interning_tables(&ct_path)
+        .expect("interning tables open")
+        .expect("interning tables present");
+    let mut reader = open_value_stream(&ct_path).expect("values.dat opens").expect("values.dat present");
+    let records = reader.read_all().expect("values.dat decodes");
+
+    let mut decoded = Vec::new();
+    for record in &records {
+        for event in &record.events {
+            if let ValueStreamEvent::DropVariable { variable_id } = event {
+                decoded.push(tables.varname_str(*variable_id).expect("dropped id resolves in varnames.dat"));
+            }
+        }
+    }
+
+    drop(dir);
+
+    (discards, decoded)
+}
+
+/// Tag 2 and tag 3 mean different things, so one must never be recorded as the
+/// other.
+///
+/// This is the failure that would not crash anything: a lone variable ending
+/// its life, written as a one-element scope exit, reads back as a scope
+/// boundary the program never had — and a test that only counted drop events
+/// would pass either way. Both accessors run against the SAME container, and
+/// each must see only its own tag.
+#[test]
+fn a_single_drop_and_a_scope_exit_stay_distinct_in_the_container() {
+    let _guard = NIM_TEST_LOCK.lock().unwrap();
+
+    let emit = |writer: &mut NimTraceWriter, _source: &Path| {
+        writer.drop_variable("solo");
+        writer.drop_variables(&["scoped_a".to_string(), "scoped_b".to_string()]);
+        writer.drop_variable("solo_again");
+    };
+
+    let (discards, plural) = record_and_decode("nim_writer_drop_kinds_plural", emit);
+    assert!(discards.is_empty(), "neither drop form may be discarded; got {discards:?}");
+    assert_eq!(
+        plural,
+        vec![vec!["scoped_a".to_string(), "scoped_b".to_string()]],
+        "the tag-3 accessor must see ONLY the scope exit, not the two singular drops"
+    );
+
+    let (discards, singular) = record_and_decode_singular("nim_writer_drop_kinds_singular", emit);
+    assert!(discards.is_empty(), "neither drop form may be discarded; got {discards:?}");
+    assert_eq!(
+        singular,
+        vec!["solo".to_string(), "solo_again".to_string()],
+        "the tag-2 accessor must see ONLY the singular drops, in wire order, \
+         not the scope exit between them"
+    );
+}
+
+/// Negative control for the tag-2 half: a writer that only closes a scope must
+/// produce no singular drops, so the assertion above cannot pass by finding
+/// tag-2 events that the plural call emitted.
+#[test]
+fn a_scope_exit_does_not_emit_singular_drop_events() {
+    let _guard = NIM_TEST_LOCK.lock().unwrap();
+
+    let (discards, singular) = record_and_decode_singular("nim_writer_drop_singular_control", |writer, _s| {
+        writer.drop_variables(&["a".to_string(), "b".to_string()]);
+    });
+
+    assert!(discards.is_empty(), "the control writer must not discard anything; got {discards:?}");
+    assert!(
+        singular.is_empty(),
+        "a scope exit must not decompose into singular drops; got {singular:?}"
+    );
+}
+
 #[test]
 fn drop_variables_is_persisted_and_no_longer_counted_as_a_discard() {
     let _guard = NIM_TEST_LOCK.lock().unwrap();

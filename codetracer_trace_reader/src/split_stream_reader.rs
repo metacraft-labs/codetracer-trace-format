@@ -411,6 +411,15 @@ fn push_value_event(out: &mut Vec<TraceLowLevelEvent>, ev: ValueStreamEvent) -> 
                 }));
             }
         }
+        // Forward compatibility, and the reason it is a skip rather than an
+        // error: `ValueStreamEvent::Unknown` is what the decoder produces for a
+        // tag >= 10, and those records are self-delimited by a varint length
+        // prefix (`value_stream.rs`). A reader that meets one has therefore
+        // already parsed past it correctly and knows only that a NEWER writer
+        // emitted something this build has no type for. There is no low-level
+        // event to push, and refusing the whole trace over a record the format
+        // deliberately made skippable would defeat the mechanism.
+        ValueStreamEvent::Unknown { .. } => {}
     }
     Ok(())
 }

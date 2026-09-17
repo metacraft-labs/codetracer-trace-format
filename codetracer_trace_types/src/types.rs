@@ -11,7 +11,99 @@ use num_derive::FromPrimitive;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_repr::*;
-use serde_with::{DisplayFromStr, serde_as};
+
+/// How a `ValueRecord::Float`'s value is represented, per output format.
+///
+/// A float is written as a NATIVE number in binary formats and as a DECIMAL
+/// STRING in human-readable ones, because the two have different capabilities
+/// and only one of them is short of what a float needs:
+///
+/// * JSON cannot express infinities or NaN at all — `trace.json` fixtures pin
+///   `"inf"`, `"+inf"`, `"-inf"` and `"nan"` — so the value goes through
+///   `Display`/`FromStr`, which round-trips all four.
+/// * CBOR encodes IEEE-754 directly, including the non-finites, so a string
+///   there would be a text format's limitation imported into a binary one for
+///   no gain. It also made `Float` the only variant not written natively:
+///   `Int` and `Bool` already go out as a CBOR integer and a CBOR bool.
+///
+/// The split is made by `serde`'s own `is_human_readable`, which JSON reports
+/// as true and `cbor4ii` as false — not by inspecting the value or guessing
+/// from the bytes. A decoder that accepted EITHER form would be unable to say
+/// which the producer meant, which is the ambiguity this format keeps paying
+/// for elsewhere.
+mod float_repr {
+    use serde::{Deserializer, Serializer, de::Error as _};
+
+    /// Write the value the way the target format represents a float best.
+    ///
+    /// `is_human_readable` is reliable HERE: every serializer in use reports
+    /// it correctly (`serde_json` true, `cbor4ii` and `ciborium` false), and
+    /// it is consulted on the top-level serializer before any field is
+    /// reached.
+    pub fn serialize<S: Serializer>(value: &f64, serializer: S) -> Result<S::Ok, S::Error> {
+        if serializer.is_human_readable() {
+            serializer.collect_str(value)
+        } else {
+            serializer.serialize_f64(*value)
+        }
+    }
+
+    /// Accept whichever of the two forms the data actually carries.
+    ///
+    /// The read side CANNOT mirror the write side's `is_human_readable` test.
+    /// Measured: `cbor4ii` serializes a `ValueRecord::Float` to
+    /// `FB 40 04 …` — a native float64, so its SERIALIZER reports
+    /// non-human-readable — and then fails to read its own output back with
+    /// *"invalid type: floating point `2.5`, expected a string"*, because the
+    /// deserializer handed to a struct FIELD does not carry the flag and falls
+    /// back to serde's default of `true`. A field-level `is_human_readable`
+    /// test is therefore not a test of the format at all.
+    ///
+    /// This is NOT the "accept either and guess" pattern that the
+    /// `events.log`-absence discriminator was. There, two encodings meant
+    /// different things and the container could not say which; here both
+    /// encodings denote the SAME real number, so there is nothing to guess and
+    /// no way to be wrong about intent. What is accepted is a data model —
+    /// "a number, or text naming one" — not a format inferred from a payload's
+    /// shape.
+    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<f64, D::Error> {
+        struct FloatVisitor;
+
+        impl serde::de::Visitor<'_> for FloatVisitor {
+            type Value = f64;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a float, or a decimal string such as \"2.5\", \"inf\" or \"nan\"")
+            }
+
+            fn visit_f64<E: serde::de::Error>(self, v: f64) -> Result<f64, E> {
+                Ok(v)
+            }
+
+            fn visit_f32<E: serde::de::Error>(self, v: f32) -> Result<f64, E> {
+                Ok(f64::from(v))
+            }
+
+            // An integral CBOR encoding of a whole-numbered float is still
+            // that float; refusing it would make `1.0` unreadable depending on
+            // how the producer chose to encode it.
+            fn visit_i64<E: serde::de::Error>(self, v: i64) -> Result<f64, E> {
+                Ok(v as f64)
+            }
+
+            fn visit_u64<E: serde::de::Error>(self, v: u64) -> Result<f64, E> {
+                Ok(v as f64)
+            }
+
+            fn visit_str<E: serde::de::Error>(self, v: &str) -> Result<f64, E> {
+                v.parse::<f64>()
+                    .map_err(|e| E::custom(format!("a Float's `f` is not a decimal: {v:?}: {e}")))
+            }
+        }
+
+        deserializer.deserialize_any(FloatVisitor).map_err(D::Error::custom)
+    }
+}
 
 // currently, we do assume that we record the whole program
 // so, we try to include minimal amount of data,
@@ -281,9 +373,9 @@ fn mint_recording_id() -> String {
 #[serde(transparent)]
 pub struct CallKey(pub i64);
 
-impl Into<usize> for CallKey {
-    fn into(self) -> usize {
-        self.0 as usize
+impl From<CallKey> for usize {
+    fn from(val: CallKey) -> Self {
+        val.0 as usize
     }
 }
 
@@ -309,15 +401,15 @@ pub const NO_KEY: CallKey = CallKey(-1);
 #[serde(transparent)]
 pub struct Line(pub i64);
 
-impl Into<usize> for Line {
-    fn into(self) -> usize {
-        self.0 as usize
+impl From<Line> for usize {
+    fn from(val: Line) -> Self {
+        val.0 as usize
     }
 }
 
-impl Into<i64> for Line {
-    fn into(self) -> i64 {
-        self.0
+impl From<Line> for i64 {
+    fn from(val: Line) -> Self {
+        val.0
     }
 }
 
@@ -325,9 +417,9 @@ impl Into<i64> for Line {
 #[serde(transparent)]
 pub struct PathId(pub usize);
 
-impl Into<usize> for PathId {
-    fn into(self) -> usize {
-        self.0
+impl From<PathId> for usize {
+    fn from(val: PathId) -> Self {
+        val.0
     }
 }
 
@@ -335,9 +427,9 @@ impl Into<usize> for PathId {
 #[serde(transparent)]
 pub struct StepId(pub i64);
 
-impl Into<usize> for StepId {
-    fn into(self) -> usize {
-        self.0 as usize
+impl From<StepId> for usize {
+    fn from(val: StepId) -> Self {
+        val.0 as usize
     }
 }
 
@@ -360,27 +452,27 @@ impl ops::Sub<usize> for StepId {
 #[derive(Hash, Debug, Default, Copy, Clone, Serialize, Deserialize, Ord, PartialOrd, Eq, PartialEq)]
 pub struct VariableId(pub usize);
 
-impl Into<usize> for VariableId {
-    fn into(self) -> usize {
-        self.0
+impl From<VariableId> for usize {
+    fn from(val: VariableId) -> Self {
+        val.0
     }
 }
 
 #[derive(Debug, Copy, Clone, Serialize, Deserialize, PartialEq)]
 pub struct FunctionId(pub usize);
 
-impl Into<usize> for FunctionId {
-    fn into(self) -> usize {
-        self.0
+impl From<FunctionId> for usize {
+    fn from(val: FunctionId) -> Self {
+        val.0
     }
 }
 
 #[derive(Hash, Debug, Default, Copy, Clone, Serialize, Deserialize, Ord, PartialOrd, Eq, PartialEq)]
 pub struct ThreadId(pub u64);
 
-impl Into<u64> for ThreadId {
-    fn into(self) -> u64 {
-        self.0
+impl From<ThreadId> for u64 {
+    fn from(val: ThreadId) -> Self {
+        val.0
     }
 }
 
@@ -473,9 +565,9 @@ pub struct RecordEvent {
 #[serde(transparent)]
 pub struct TypeId(pub usize);
 
-impl Into<usize> for TypeId {
-    fn into(self) -> usize {
-        self.0
+impl From<TypeId> for usize {
+    fn from(val: TypeId) -> Self {
+        val.0
     }
 }
 
@@ -484,7 +576,6 @@ impl Into<usize> for TypeId {
 // TODO: convert between them or
 // serialize ValueRecord in a compatible way?
 /// Representation of a runtime value captured in a trace.
-#[serde_as]
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "kind")]
 pub enum ValueRecord {
@@ -493,7 +584,7 @@ pub enum ValueRecord {
         type_id: TypeId,
     },
     Float {
-        #[serde_as(as = "DisplayFromStr")]
+        #[serde(with = "float_repr")]
         f: f64,
         type_id: TypeId,
     },

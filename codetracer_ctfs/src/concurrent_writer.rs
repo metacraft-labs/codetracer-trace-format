@@ -207,6 +207,20 @@ impl ConcurrentCtfsWriter {
     }
 }
 
+/// What a mapping insert is placing, as opposed to where it is placing it.
+///
+/// These four are invariant across the descent: the file and allocator being
+/// written to, the data block being pointed at, and the block geometry. Only
+/// the position — mapping block, level, index within it — changes per level,
+/// so keeping them apart makes each recursive call state where it is going
+/// rather than restate what it is carrying.
+struct MappingInsert<'a> {
+    parent: &'a ConcurrentCtfsWriter,
+    data_block: u64,
+    usable: u64,
+    bs: u32,
+}
+
 impl FileWriter {
     /// Write data to this file (appends to end).
     pub fn write(&mut self, parent: &ConcurrentCtfsWriter, data: &[u8]) -> Result<usize, CtfsError> {
@@ -364,20 +378,33 @@ impl FileWriter {
             }
         }
 
-        self.navigate_and_insert(parent, current_level_block, level, idx, data_block, usable, bs)
+        let insert = MappingInsert {
+            parent,
+            data_block,
+            usable,
+            bs,
+        };
+        self.navigate_and_insert(&insert, current_level_block, level, idx)
     }
 
     /// Navigate within a level-k block to insert a data block pointer.
+    ///
+    /// `insert` carries what is being placed; the three loose parameters carry
+    /// where the descent currently is, and are the only things that change per
+    /// level.
     fn navigate_and_insert(
         &self,
-        parent: &ConcurrentCtfsWriter,
+        insert: &MappingInsert<'_>,
         mapping_block: u64,
         level: u32,
         idx_within_level: u64,
-        data_block: u64,
-        usable: u64,
-        bs: u32,
     ) -> Result<(), CtfsError> {
+        let MappingInsert {
+            parent,
+            data_block,
+            usable,
+            bs,
+        } = *insert;
         if level == 1 {
             debug_assert!(idx_within_level < usable, "idx {} >= usable {} at level 1", idx_within_level, usable);
             write_ptr_at(&parent.file, mapping_block, idx_within_level as usize, data_block, bs)?;
@@ -412,6 +439,6 @@ impl FileWriter {
             child_block
         };
 
-        self.navigate_and_insert(parent, target_block, level - 1, sub_idx, data_block, usable, bs)
+        self.navigate_and_insert(insert, target_block, level - 1, sub_idx)
     }
 }

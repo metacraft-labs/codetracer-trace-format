@@ -635,7 +635,12 @@ const NIM_ONLY: [&str; 0] = [];
 /// it claims to explain, and the file must then be IDENTICAL. A cause that
 /// stops being true leaves a residue, and the residue fails the test — the same
 /// way `funcs.dat` and `types.dat` failed theirs, rather than rotting quietly.
-const KNOWN_DIVERGENCES: [(&str, &str, fn(&mut Vec<u8>)); 1] = [(
+/// One accepted difference between the two writers' output for a stream:
+/// the file name, why it may differ, and a normaliser that removes exactly
+/// that cause so the residue can still be compared byte for byte.
+type KnownDivergence = (&'static str, &'static str, fn(&mut [u8]));
+
+const KNOWN_DIVERGENCES: [KnownDivergence; 1] = [(
     "meta.dat",
     "the recording_id is a freshly minted UUIDv7 on each side and can never match.      EVERY OTHER BYTE MUST BE IDENTICAL — the normaliser blanks both ids and the residue is      compared, so a second cause appearing here fails rather than hiding behind this one.",
     blank_recording_id,
@@ -646,7 +651,7 @@ const KNOWN_DIVERGENCES: [(&str, &str, fn(&mut Vec<u8>)); 1] = [(
 /// Found by shape rather than by offset: `8-4-4-4-12` hex with hyphens is a
 /// pattern nothing else in the image matches, and locating it that way keeps
 /// this working if a field before it changes width.
-fn blank_recording_id(buf: &mut Vec<u8>) {
+fn blank_recording_id(buf: &mut [u8]) {
     fn looks_like_uuid(w: &[u8]) -> bool {
         w.len() == 36
             && w.iter().enumerate().all(|(i, c)| match i {
@@ -983,7 +988,7 @@ fn the_two_writers_meta_dat_agrees_on_every_field_except_the_minted_recording_id
     // funcs/types/paths/varnames tables; only the Rust one says so.
     use codetracer_trace_writer::meta_dat::FLAG_HAS_INTERNING_TABLES;
     for (label, ct) in [("nim", &nim_ct), ("rust", &rust_ct)] {
-        let mut reader = CtfsReader::open(ct).expect("open");
+        let reader = CtfsReader::open(ct).expect("open");
         for t in ["paths.dat", "funcs.dat", "types.dat", "varnames.dat"] {
             assert!(
                 reader.list_files().contains(&t.to_string()),

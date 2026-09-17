@@ -350,8 +350,20 @@ mod tests {
         assert_eq!(p2.kernel_version, "");
     }
 
+    /// The canonical compat platform is the fixture the Nim compat test
+    /// serializes on its side, so Rust must at minimum round-trip it byte for
+    /// byte. Cross-language byte equality is asserted by the `metadata_compat`
+    /// integration test against a Nim-generated golden file.
+    #[test]
+    fn test_platform_compat_roundtrip() {
+        let p = build_compat_platform();
+        let data = p.serialize();
+        let p2 = PlatformInfo::deserialize(&data).unwrap();
+        assert_eq!(p, p2, "Rust roundtrip mismatch");
+    }
+
     /// Build the canonical compat platform used by both Nim and Rust compat tests.
-    pub(crate) fn build_compat_platform() -> PlatformInfo {
+    fn build_compat_platform() -> PlatformInfo {
         PlatformInfo {
             os: PlatformOs::Linux,
             arch: PlatformArch::X86_64,

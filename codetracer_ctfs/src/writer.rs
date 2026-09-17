@@ -2,11 +2,11 @@ use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Cursor, Read as IoRead, Seek, SeekFrom, Write};
 use std::path::Path;
 
+use crate::CtfsError;
 use crate::base40::base40_encode;
 use crate::block_alloc::BlockAllocator;
-use crate::file_entry::{FileEntry, FILE_ENTRY_SIZE};
-use crate::header::{CompressionMethod, ExtendedHeader, Header, EXTENDED_HEADER_SIZE, HEADER_SIZE};
-use crate::CtfsError;
+use crate::file_entry::{FILE_ENTRY_SIZE, FileEntry};
+use crate::header::{CompressionMethod, EXTENDED_HEADER_SIZE, ExtendedHeader, HEADER_SIZE, Header};
 
 /// The random-access byte store a [`CtfsWriter`] lays its container out in.
 ///
@@ -83,7 +83,9 @@ pub struct MemoryStore {
 
 impl MemoryStore {
     pub fn new() -> Self {
-        MemoryStore { inner: Cursor::new(Vec::new()) }
+        MemoryStore {
+            inner: Cursor::new(Vec::new()),
+        }
     }
 
     /// Borrow the bytes written so far.
@@ -243,7 +245,12 @@ impl CtfsWriter {
     }
 
     /// Create a new CTFS container in an arbitrary [`CtfsStore`].
-    pub fn create_in_store(store: Box<dyn CtfsStore>, block_size: u32, max_root_entries: u32, compression: CompressionMethod) -> Result<Self, CtfsError> {
+    pub fn create_in_store(
+        store: Box<dyn CtfsStore>,
+        block_size: u32,
+        max_root_entries: u32,
+        compression: CompressionMethod,
+    ) -> Result<Self, CtfsError> {
         let ext_header = ExtendedHeader::new(block_size, max_root_entries)?;
         let mut writer = store;
 
@@ -302,7 +309,7 @@ impl CtfsWriter {
 
         // Determine the highest block in use by scanning the file size
         let file_len = file.seek(SeekFrom::End(0))?;
-        let next_block = (file_len + ext_header.block_size as u64 - 1) / ext_header.block_size as u64;
+        let next_block = file_len.div_ceil(ext_header.block_size as u64);
 
         let mut allocator = BlockAllocator::new();
         // Advance allocator to the next free block
@@ -315,7 +322,7 @@ impl CtfsWriter {
         let mut files = Vec::new();
         for (i, entry) in entries.iter().enumerate() {
             if !entry.is_empty() {
-                let total_blocks = if entry.size == 0 { 0 } else { (entry.size + bs - 1) / bs };
+                let total_blocks = if entry.size == 0 { 0 } else { entry.size.div_ceil(bs) };
                 let partial_bytes = entry.size % bs;
                 let has_partial = partial_bytes != 0 && entry.size > 0;
 
@@ -623,7 +630,7 @@ impl CtfsWriter {
 
             // Write current buffer contents to the pending block (padded).
             let data_block = self.files[file_idx].pending_block.unwrap();
-            let offset = data_block as u64 * bs as u64;
+            let offset = data_block * bs as u64;
             self.writer.seek(SeekFrom::Start(offset))?;
             let mut padded = self.files[file_idx].buffer.clone();
             padded.resize(bs, 0);
@@ -679,9 +686,11 @@ impl CtfsWriter {
     /// container, whose bytes live on disk rather than in the writer.
     pub fn finish_to_bytes(mut self) -> Result<Vec<u8>, CtfsError> {
         self.close_inner()?;
-        self.writer
-            .take_bytes()
-            .ok_or_else(|| CtfsError::Io(std::io::Error::other("finish_to_bytes: this CTFS container is file-backed; use close() instead")))
+        self.writer.take_bytes().ok_or_else(|| {
+            CtfsError::Io(std::io::Error::other(
+                "finish_to_bytes: this CTFS container is file-backed; use close() instead",
+            ))
+        })
     }
 
     /// Close the container, flushing all buffered data and writing metadata.

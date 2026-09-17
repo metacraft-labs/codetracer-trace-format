@@ -46,7 +46,7 @@
 use codetracer_ctfs::CtfsReader;
 use codetracer_trace_types::{TypeKind, TypeSpecificInfo};
 use codetracer_trace_writer::line_position::{LinePositionError, LinePositionSpace};
-use codetracer_trace_writer::meta_dat::{meta_dat_has_interning_tables, meta_dat_has_line_count_table};
+use codetracer_trace_writer::meta_dat::{meta_dat_has_column_aware_steps, meta_dat_has_interning_tables, meta_dat_has_line_count_table};
 use num_traits::FromPrimitive;
 
 /// A decoded `funcs.dat` record: the `global_line_index` and the function name.
@@ -130,7 +130,7 @@ fn decode_varint(data: &[u8], pos: &mut usize) -> Result<u64, String> {
 /// spaces of the three layouts overlap, so a bare record whose first byte
 /// happens to equal its own remaining length decodes cleanly here and would
 /// yield a truncated path and a fabricated count with no error.
-fn decode_line_count_path_record(raw: &[u8], id: usize) -> Result<(&[u8], u64), String> {
+fn decode_framed_path_record(raw: &[u8], id: usize) -> Result<(&[u8], u64, usize), String> {
     let mut pos = 0usize;
     let payload_len = usize::try_from(decode_varint(raw, &mut pos)?).map_err(|_| format!("paths.dat: record {id} payload_len exceeds usize"))?;
     let start = pos;
@@ -145,6 +145,11 @@ fn decode_line_count_path_record(raw: &[u8], id: usize) -> Result<(&[u8], u64), 
     }
     pos = end;
     let count = decode_varint(raw, &mut pos)?;
+    Ok((&raw[start..end], count, pos))
+}
+
+fn decode_line_count_path_record(raw: &[u8], id: usize) -> Result<(&[u8], u64), String> {
+    let (payload, count, pos) = decode_framed_path_record(raw, id)?;
     if count == 0 {
         return Err(format!(
             "paths.dat: record {id} states line_count 0. A container setting              FLAG_HAS_LINE_COUNT_TABLE states every file's size, and a file sized 0 shares its              base with the next one — the two would be indistinguishable at decode"
@@ -156,7 +161,7 @@ fn decode_line_count_path_record(raw: &[u8], id: usize) -> Result<(&[u8], u64), 
             raw.len() - pos
         ));
     }
-    Ok((&raw[start..end], count))
+    Ok((payload, count))
 }
 
 /// A single Variable-Size Record Table: the `.dat` data file plus its parsed
@@ -237,6 +242,9 @@ pub struct InterningTablesReader {
     /// How `funcs.dat` / `types.dat` records are decoded (bit 12 layout
     /// selector; `varnames.dat` is raw bytes in both layouts).
     layout: RecordLayout,
+    /// Whether `paths.dat` records carry the column-aware Layout A framing
+    /// (`meta.dat` bit 4), independently of the bit-14 line-count table.
+    column_aware: bool,
     /// Per-file line counts decoded out of `paths.dat`, one per record, when
     /// the container declares `meta.dat` bit 14. Empty when it does not.
     ///
@@ -273,6 +281,16 @@ impl InterningTablesReader {
             Ok(meta) => meta_dat_has_line_count_table(&meta),
             Err(_) => false,
         };
+        // Bit 4 frames `paths.dat` too. A column-aware trace writes Layout A —
+        // `path_len, path, line_count, line_lengths…` — for EVERY path,
+        // including one whose recorder surfaced no per-line counts, where the
+        // record is still framed and simply states `line_count = 0`. Reading
+        // that as a bare record hands the caller its own length prefix and a
+        // trailing NUL as part of the file name.
+        let column_aware = match reader.read_file("meta.dat") {
+            Ok(meta) => meta_dat_has_column_aware_steps(&meta),
+            Err(_) => false,
+        };
         // `paths.dat` is written first and unconditionally by both writers, so
         // its presence is the container's own answer to "do I carry interning
         // tables". Absent ⇒ no binary tables (legacy path).
@@ -305,6 +323,7 @@ impl InterningTablesReader {
             types,
             varnames,
             layout,
+            column_aware,
             line_counts,
         }))
     }
@@ -347,12 +366,14 @@ impl InterningTablesReader {
     /// Resolve a path id to its file path (raw bytes; UTF-8 for the recorders).
     pub fn path(&self, path_id: u64) -> Result<Vec<u8>, String> {
         let raw = self.paths.record(path_id as usize)?;
-        if self.line_counts.is_empty() {
+        if self.line_counts.is_empty() && !self.column_aware {
             return Ok(raw.to_vec());
         }
-        // Bit 14: the record is `payload_len + payload + line_count`, so the
-        // path is the framed payload and not the whole record.
-        Ok(decode_line_count_path_record(raw, path_id as usize)?.0.to_vec())
+        // Layout A: the record is `path_len + path + line_count + …`, so the
+        // path is the framed payload and not the whole record. Bit 14 and bit 4
+        // both select this framing; bit 14 additionally forbids a zero count,
+        // which bit 4 alone permits.
+        Ok(decode_framed_path_record(raw, path_id as usize)?.0.to_vec())
     }
 
     /// Resolve a path id to its file path as a `String` (lossy UTF-8).

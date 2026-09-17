@@ -167,7 +167,7 @@ impl Catalog {
     }
 
     /// Build an empty catalog rooted at `catalog_path`.  Used by tests
-    /// + by code paths that want to surface "I tried to look up but
+    /// and by code paths that want to surface "I tried to look up but
     /// there's no catalog" without erroring (e.g. the replay-server's
     /// best-effort autoload path).
     pub fn empty(catalog_path: &Path) -> Self {

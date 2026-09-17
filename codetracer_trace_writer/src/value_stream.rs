@@ -163,7 +163,6 @@ pub enum ValueStreamEvent {
     Unknown { tag: u8, payload: Vec<u8> },
 }
 
-
 /// One value record: the (possibly empty) sequence of value-stream events
 /// attributed to a single step. Parallel-indexed — record `N` ↔ step `N`.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -399,7 +398,6 @@ impl ValueStreamEvent {
             other => Err(format!("values.dat: unknown value-event tag {other}")),
         }
     }
-
 }
 
 impl ValueRecordEntry {
@@ -777,9 +775,11 @@ mod tests {
         let trunc_buf = vec![42, 10, 1, 2];
         let mut pos2 = 0;
         let err = ValueStreamEvent::decode(&trunc_buf, &mut pos2).unwrap_err();
-        assert!(err.contains("truncated payload for unknown event tag 42"), "expected truncation error, got: {err}");
+        assert!(
+            err.contains("truncated payload for unknown event tag 42"),
+            "expected truncation error, got: {err}"
+        );
     }
-
 
     #[test]
     fn empty_record_is_one_zero_count_byte_after_step_values_absent() {

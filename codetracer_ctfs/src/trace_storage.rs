@@ -1155,7 +1155,7 @@ pub fn upload_materialized_artifacts_from_env(trace_dir: impl AsRef<Path>, langu
     let mut uploads = Vec::with_capacity(receipts.len());
     let mut placed = Vec::with_capacity(receipts.len());
 
-    for (artifact, receipt) in artifacts.into_iter().zip(receipts.into_iter()) {
+    for (artifact, receipt) in artifacts.into_iter().zip(receipts) {
         placed.push(placed_object_from_materialized_upload(
             &receipt,
             artifact.content_length,

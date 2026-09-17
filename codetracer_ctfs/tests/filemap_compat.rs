@@ -12,39 +12,37 @@ use codetracer_ctfs::filemap::*;
 /// Build the canonical compat filemap. Must match the Nim
 /// `buildCompatFilemap` function exactly.
 fn build_compat_filemap() -> Filemap {
-    let mut entries = Vec::new();
-
-    // Binary entry
-    entries.push(FilemapEntry {
-        ctfs_name: base40_encode("myapp").unwrap(),
-        entry_type: FilemapEntryType::Binary,
-        flags: 0x01,
-        build_id: (1u8..=20).collect(),
-        real_path: "/usr/bin/myapp".to_string(),
-        ..Default::default()
-    });
-
-    // Debug entry
-    entries.push(FilemapEntry {
-        ctfs_name: base40_encode("myapp.dbg").unwrap(),
-        entry_type: FilemapEntryType::DebugSymbol,
-        flags: 0,
-        build_id: (1u8..=20).collect(),
-        real_path: "/usr/lib/debug/myapp.debug".to_string(),
-        binary_ref: base40_encode("myapp").unwrap(),
-        ..Default::default()
-    });
-
-    // Source entry
-    entries.push(FilemapEntry {
-        ctfs_name: base40_encode("main.c").unwrap(),
-        entry_type: FilemapEntryType::SourceFile,
-        flags: 0,
-        build_id: vec![],
-        real_path: "/home/user/src/main.c".to_string(),
-        compilation_dir: "/home/user/build".to_string(),
-        ..Default::default()
-    });
+    let entries = vec![
+        // Binary entry
+        FilemapEntry {
+            ctfs_name: base40_encode("myapp").unwrap(),
+            entry_type: FilemapEntryType::Binary,
+            flags: 0x01,
+            build_id: (1u8..=20).collect(),
+            real_path: "/usr/bin/myapp".to_string(),
+            ..Default::default()
+        },
+        // Debug entry
+        FilemapEntry {
+            ctfs_name: base40_encode("myapp.dbg").unwrap(),
+            entry_type: FilemapEntryType::DebugSymbol,
+            flags: 0,
+            build_id: (1u8..=20).collect(),
+            real_path: "/usr/lib/debug/myapp.debug".to_string(),
+            binary_ref: base40_encode("myapp").unwrap(),
+            ..Default::default()
+        },
+        // Source entry
+        FilemapEntry {
+            ctfs_name: base40_encode("main.c").unwrap(),
+            entry_type: FilemapEntryType::SourceFile,
+            flags: 0,
+            build_id: vec![],
+            real_path: "/home/user/src/main.c".to_string(),
+            compilation_dir: "/home/user/build".to_string(),
+            ..Default::default()
+        },
+    ];
 
     Filemap { version: 1, entries }
 }

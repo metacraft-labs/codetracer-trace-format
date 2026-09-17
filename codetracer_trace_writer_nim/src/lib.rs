@@ -56,6 +56,10 @@ extern "C" {
     fn trace_writer_register_call_arg(handle: *mut std::ffi::c_void, name: *const std::os::raw::c_char, cbor_data: *const u8, cbor_len: usize);
     fn trace_writer_register_return(handle: *mut std::ffi::c_void);
 
+    // Kept for ABI compatibility — the `_by_type_id` form below replaced this
+    // one at every call site in this binding, but the C ABI still exports it
+    // for callers that have a type NAME rather than an interned id.
+    #[allow(dead_code)]
     fn trace_writer_register_return_int(handle: *mut std::ffi::c_void, value: i64, type_kind: i32, type_name: *const std::os::raw::c_char);
     // THE `_by_type_id` FORMS EXIST SO THIS WRAPPER DOES NOT HAVE TO INVENT A
     // TYPE NAME. A `ValueRecord::{Int,Float,Bool}` carries a TypeId and no name;
@@ -63,12 +67,7 @@ extern "C" {
     // synthesised `type_{id}` interned a type the recorder never declared. A
     // dangling id is refused and named through `trace_writer_last_error`.
     fn trace_writer_register_return_int_by_type_id(handle: *mut std::ffi::c_void, value: i64, type_id: usize);
-    fn trace_writer_register_variable_int_by_type_id(
-        handle: *mut std::ffi::c_void,
-        name: *const std::os::raw::c_char,
-        value: i64,
-        type_id: usize,
-    );
+    fn trace_writer_register_variable_int_by_type_id(handle: *mut std::ffi::c_void, name: *const std::os::raw::c_char, value: i64, type_id: usize);
     // Kept for ABI compatibility — the wrapper now routes every non-Int /
     // non-None return value through the streaming-encoder CBOR path so
     // typed variants (Bool, String, Float, Char, Struct, ...) survive
@@ -83,6 +82,8 @@ extern "C" {
         type_name: *const std::os::raw::c_char,
     );
 
+    // Kept for ABI compatibility — see `trace_writer_register_return_int`.
+    #[allow(dead_code)]
     fn trace_writer_register_variable_int(
         handle: *mut std::ffi::c_void,
         name: *const std::os::raw::c_char,
@@ -117,6 +118,8 @@ extern "C" {
         rvalue_cbor: *const u8,
         rvalue_cbor_len: usize,
     ) -> i32;
+    fn trace_writer_register_drop_variables(handle: *mut std::ffi::c_void, names: *const *const std::os::raw::c_char, count: usize) -> i32;
+    fn trace_writer_register_drop_variable(handle: *mut std::ffi::c_void, name: *const std::os::raw::c_char) -> i32;
 
     // ----- Streaming value encoder -----
 
@@ -922,11 +925,7 @@ mod tests {
 }
 
 fn check_result(code: i32) -> Result<(), Box<dyn Error>> {
-    if code == 0 {
-        Ok(())
-    } else {
-        Err(last_error().into())
-    }
+    if code == 0 { Ok(()) } else { Err(last_error().into()) }
 }
 
 // ---------------------------------------------------------------------------
@@ -1080,6 +1079,12 @@ pub fn read_span_stream_json(path: &Path, settled: bool) -> Result<String, Box<d
 /// between values to clear the buffer without deallocating.
 pub struct StreamingValueEncoder {
     handle: *mut std::ffi::c_void,
+}
+
+impl Default for StreamingValueEncoder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl StreamingValueEncoder {
@@ -1523,11 +1528,7 @@ impl NimTraceWriter {
     pub fn write_meta_dat(&mut self, recorder_id: &str) -> Result<(), Box<dyn Error>> {
         ensure_nim_initialized();
         let ret = unsafe { ct_write_meta_dat(self.handle, recorder_id.as_ptr(), recorder_id.len()) };
-        if ret != 0 {
-            Err(last_error().into())
-        } else {
-            Ok(())
-        }
+        if ret != 0 { Err(last_error().into()) } else { Ok(()) }
     }
 
     /// TF-M7: append one `(path, sha256)` entry to the trace-filter
@@ -1619,13 +1620,13 @@ impl NimTraceWriter {
 
     pub fn start(&mut self, path: &Path, line: Line) {
         let c_path = path_to_cstring(path);
-        unsafe { trace_writer_start(self.handle, c_path.as_ptr(), line.0 as i64) }
+        unsafe { trace_writer_start(self.handle, c_path.as_ptr(), line.0) }
     }
 
     pub fn ensure_function_id(&mut self, function_name: &str, path: &Path, line: Line) -> FunctionId {
         let c_name = str_to_cstring(function_name);
         let c_path = path_to_cstring(path);
-        let id = unsafe { trace_writer_ensure_function_id(self.handle, c_name.as_ptr(), c_path.as_ptr(), line.0 as i64) };
+        let id = unsafe { trace_writer_ensure_function_id(self.handle, c_name.as_ptr(), c_path.as_ptr(), line.0) };
         FunctionId(id)
     }
 
@@ -1637,7 +1638,7 @@ impl NimTraceWriter {
 
     pub fn register_step(&mut self, path: &Path, line: Line) {
         let c_path = path_to_cstring(path);
-        unsafe { trace_writer_register_step(self.handle, c_path.as_ptr(), line.0 as i64) }
+        unsafe { trace_writer_register_step(self.handle, c_path.as_ptr(), line.0) }
     }
 
     /// C1: column-aware register_step.  The Nim multi-stream FFI accepts
@@ -1706,9 +1707,7 @@ impl NimTraceWriter {
     pub fn register_return(&mut self, return_value: ValueRecord) {
         match &return_value {
             // Fast paths that bypass CBOR encoding for the most common shapes.
-            ValueRecord::Int { i, type_id } => unsafe {
-                trace_writer_register_return_int_by_type_id(self.handle, *i, type_id.0)
-            },
+            ValueRecord::Int { i, type_id } => unsafe { trace_writer_register_return_int_by_type_id(self.handle, *i, type_id.0) },
             ValueRecord::None { .. } => unsafe {
                 trace_writer_register_return(self.handle);
             },
@@ -1730,9 +1729,7 @@ impl NimTraceWriter {
         let c_name = str_to_cstring(name);
         match &value {
             // Fast paths that bypass CBOR encoding for the most common shapes.
-            ValueRecord::Int { i, type_id } => unsafe {
-                trace_writer_register_variable_int_by_type_id(self.handle, c_name.as_ptr(), *i, type_id.0)
-            },
+            ValueRecord::Int { i, type_id } => unsafe { trace_writer_register_variable_int_by_type_id(self.handle, c_name.as_ptr(), *i, type_id.0) },
             // Every other variant — Bool, String, Float, Char, Sequence,
             // Tuple, Struct, Variant, Reference, BigInt, None, Raw, Error,
             // Cell — is routed through the streaming encoder so the reader
@@ -1926,6 +1923,11 @@ impl NimTraceWriter {
     /// is visible with its history unreachable. Pass `""` for the defaults.
     ///
     /// No step is minted — the marker attaches to the enclosing step.
+    // The parameter list mirrors `trace_writer_mark_correlation_by_id`'s C signature one for one.
+    // Grouping them into a struct would let the two drift apart without
+    // anything failing at the call site, which is the whole reason this
+    // wrapper is shaped like the entry point it forwards to.
+    #[allow(clippy::too_many_arguments)]
     pub fn mark_correlation_by_id(
         &mut self,
         marker_id: u64,
@@ -1965,6 +1967,11 @@ impl NimTraceWriter {
 
     /// Declare a boundary crossing by label. A wrapper that interns and
     /// forwards to [`mark_correlation_by_id`](Self::mark_correlation_by_id).
+    // The parameter list mirrors `trace_writer_mark_correlation`'s C signature one for one.
+    // Grouping them into a struct would let the two drift apart without
+    // anything failing at the call site, which is the whole reason this
+    // wrapper is shaped like the entry point it forwards to.
+    #[allow(clippy::too_many_arguments)]
     pub fn mark_correlation(
         &mut self,
         direction: &str,
@@ -2410,8 +2417,25 @@ impl NimTraceWriter {
         self.discard_unsupported("register_variable");
     }
 
-    pub fn drop_variable(&mut self, _variable_name: &str) {
-        self.discard_unsupported("drop_variable");
+    /// Record that one variable has ended its life.
+    ///
+    /// Reaches the trace as a tag-2 `DropVariable` value-stream event in the
+    /// current step's value record (`trace-events.md` §"Value Stream Events":
+    /// `variable_id: varint`).
+    ///
+    /// Distinct from [`Self::drop_variables`] in what it claims, not just in
+    /// arity: tag 2 says a variable ended, tag 3 says a scope ended and took
+    /// its bindings with it. Routing a lone drop through the plural form would
+    /// assert a scope boundary the program never had.
+    pub fn drop_variable(&mut self, variable_name: &str) {
+        let c_name = str_to_cstring(variable_name);
+        let rc = unsafe { trace_writer_register_drop_variable(self.handle, c_name.as_ptr()) };
+        if rc != 0 {
+            // The record did not reach the trace. Do NOT stay silent about it:
+            // the counter is the only thing standing between a partial
+            // recording and one that looks complete.
+            self.discard_with_reason("drop_variable", "trace_writer_register_drop_variable reported a failure");
+        }
     }
 
     /// Record `variable_name = <rvalue>`.
@@ -2454,8 +2478,31 @@ impl NimTraceWriter {
         self.discard_unsupported("bind_variable");
     }
 
-    pub fn drop_variables(&mut self, _variable_names: &[String]) {
-        self.discard_unsupported("drop_variables");
+    /// Record a scope exit: `variable_names` are going out of scope together.
+    ///
+    /// Reaches the trace as a tag-3 `DropVariables` value-stream event in the
+    /// current step's value record (`trace-events.md` §"Value Stream Events":
+    /// `count: varint, ids: [varint]`).
+    ///
+    /// The names go across the FFI boundary as one array rather than one call
+    /// per name because which variables left together is what makes a drop a
+    /// scope boundary; `count` separate drops would describe the same
+    /// variables leaving independently, which is a different fact about the
+    /// program.
+    pub fn drop_variables(&mut self, variable_names: &[String]) {
+        // The `CString`s must outlive the call, so they are held in a binding
+        // rather than built inline in the pointer vector — a temporary would
+        // be dropped at the end of the `map` and the Nim side would read
+        // freed memory.
+        let c_names: Vec<std::ffi::CString> = variable_names.iter().map(|n| str_to_cstring(n)).collect();
+        let ptrs: Vec<*const std::os::raw::c_char> = c_names.iter().map(|c| c.as_ptr()).collect();
+        let rc = unsafe { trace_writer_register_drop_variables(self.handle, ptrs.as_ptr(), ptrs.len()) };
+        if rc != 0 {
+            // The record did not reach the trace. Do NOT stay silent about it:
+            // the counter is the only thing standing between a partial
+            // recording and one that looks complete.
+            self.discard_with_reason("drop_variables", "trace_writer_register_drop_variables reported a failure");
+        }
     }
 
     pub fn simple_rvalue(&mut self, _variable_name: &str) -> RValue {
@@ -3360,17 +3407,22 @@ fn read_nim_buffer(ptr: *mut u8, len: usize) -> String {
     s
 }
 
+
+/// The scalar fields of one call record, in `calls.dat` order:
+/// `(function_id, parent_key, entry_step, exit_step, depth, children_count)`.
+///
+/// Named because the tuple is returned across a public API and six positional
+/// values are indistinguishable at the call site — `.3` says nothing about
+/// whether it is the exit step or the depth.
+pub type CallFields = (u64, i64, u64, u64, u32, u64);
+
 impl NimTraceReaderHandle {
     /// Open a `.ct` trace file for reading.
     pub fn open(path: &str) -> Result<Self, Box<dyn Error>> {
         ensure_nim_initialized();
         let c_path = CString::new(path)?;
         let h = unsafe { ct_reader_open(c_path.as_ptr()) };
-        if h.is_null() {
-            Err(last_error().into())
-        } else {
-            Ok(Self { handle: h })
-        }
+        if h.is_null() { Err(last_error().into()) } else { Ok(Self { handle: h }) }
     }
 
     /// Refresh this handle from a growing `.ct` file, preserving the opaque
@@ -3378,11 +3430,7 @@ impl NimTraceReaderHandle {
     pub fn refresh(&mut self, path: &str) -> Result<(), Box<dyn Error>> {
         let c_path = CString::new(path)?;
         let rc = unsafe { ct_reader_refresh(self.handle, c_path.as_ptr()) };
-        if rc != 0 {
-            Err(last_error().into())
-        } else {
-            Ok(())
-        }
+        if rc != 0 { Err(last_error().into()) } else { Ok(()) }
     }
 
     // --- Counts ---
@@ -3466,11 +3514,7 @@ impl NimTraceReaderHandle {
     pub fn line_length(&self, file_id: u64, line_index0: u32) -> Option<u32> {
         let mut value: u32 = 0;
         let rc = unsafe { ct_reader_line_length(self.handle, file_id, line_index0, &mut value) };
-        if rc == 0 {
-            Some(value)
-        } else {
-            None
-        }
+        if rc == 0 { Some(value) } else { None }
     }
 
     // --- Data access (JSON) ---
@@ -3532,11 +3576,7 @@ impl NimTraceReaderHandle {
         let mut path_id: u64 = 0;
         let mut line: u64 = 0;
         let rc = unsafe { ct_reader_step_location(self.handle, n, &mut path_id, &mut line) };
-        if rc != 0 {
-            Err(last_error().into())
-        } else {
-            Ok((path_id, line))
-        }
+        if rc != 0 { Err(last_error().into()) } else { Ok((path_id, line)) }
     }
 
     /// Resolve steps `[start_n, start_n + count)` to `(path_id, line)`.
@@ -3560,11 +3600,7 @@ impl NimTraceReaderHandle {
         }
 
         let written = unsafe { ct_reader_step_locations(self.handle, start_n, count, path_ids.as_mut_ptr(), lines.as_mut_ptr()) };
-        if written == u64::MAX {
-            Err(last_error().into())
-        } else {
-            Ok(written)
-        }
+        if written == u64::MAX { Err(last_error().into()) } else { Ok(written) }
     }
 
     /// M1 — column-aware bulk step locations.
@@ -3608,11 +3644,7 @@ impl NimTraceReaderHandle {
                 columns.as_mut_ptr(),
             )
         };
-        if written == u64::MAX {
-            Err(last_error().into())
-        } else {
-            Ok(written)
-        }
+        if written == u64::MAX { Err(last_error().into()) } else { Ok(written) }
     }
 
     /// M1 — true when the trace declared `has_column_aware_steps` in
@@ -3646,11 +3678,7 @@ impl NimTraceReaderHandle {
             return Ok(0);
         }
         let written = unsafe { ct_reader_step_global_line_indices(self.handle, start_n, count, out.as_mut_ptr()) };
-        if written == u64::MAX {
-            Err(last_error().into())
-        } else {
-            Ok(written)
-        }
+        if written == u64::MAX { Err(last_error().into()) } else { Ok(written) }
     }
 
     /// Ungated counterpart of [`line_length`] — returns the addressable
@@ -3664,11 +3692,7 @@ impl NimTraceReaderHandle {
     pub fn line_length_raw(&self, file_id: u64, line_index0: u32) -> Option<u32> {
         let mut value: u32 = 0;
         let rc = unsafe { ct_reader_line_length_raw(self.handle, file_id, line_index0, &mut value) };
-        if rc == 0 {
-            Some(value)
-        } else {
-            None
-        }
+        if rc == 0 { Some(value) } else { None }
     }
 
     /// Number of lines in `file_id` per paths.dat Layout A.  Returns
@@ -3726,7 +3750,7 @@ impl NimTraceReaderHandle {
 
     /// Get the scalar fields of a call record.
     /// Returns (function_id, parent_key, entry_step, exit_step, depth, children_count).
-    pub fn call_fields(&self, key: u64) -> Result<(u64, i64, u64, u64, u32, u64), Box<dyn Error>> {
+    pub fn call_fields(&self, key: u64) -> Result<CallFields, Box<dyn Error>> {
         let mut function_id: u64 = 0;
         let mut parent_key: i64 = 0;
         let mut entry_step: u64 = 0;
@@ -3755,11 +3779,7 @@ impl NimTraceReaderHandle {
     /// Get the call_key of child at index within a call record.
     pub fn call_child(&self, key: u64, child_idx: u64) -> Result<u64, Box<dyn Error>> {
         let result = unsafe { ct_reader_call_child(self.handle, key, child_idx) };
-        if result == u64::MAX {
-            Err(last_error().into())
-        } else {
-            Ok(result)
-        }
+        if result == u64::MAX { Err(last_error().into()) } else { Ok(result) }
     }
 
     /// Number of arguments captured for the call at ``key``.
@@ -3964,7 +3984,7 @@ fn cbor_value_to_record(value: &ciborium::value::Value) -> Option<ValueRecord> {
     // The non-streaming writer has no compound-value table, so surface it as a
     // descriptive Raw rather than dropping it.
     if let V::Tag(256, inner) = value {
-        let id = inner.as_integer().and_then(|i| i128::try_from(i).ok());
+        let id = inner.as_integer().map(i128::from);
         return Some(ValueRecord::Raw {
             r: format!("<ref {}>", id.unwrap_or_default()),
             type_id: TypeId(0),

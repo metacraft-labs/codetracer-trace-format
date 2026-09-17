@@ -127,26 +127,80 @@ const char *trace_writer_last_error(void);
  * Returns a heap-allocated handle that **must** be freed with
  * [`trace_writer_free`].  Returns `NULL` on failure (check
  * [`trace_writer_last_error`]).
+ *
+ * # Safety
+ *
+ * `program` must satisfy the C-string invariant in the module-level
+ * "Safety" section. The returned handle is owned by the caller and must be
+ * released with [`trace_writer_free`] exactly once.
  */
 struct TraceWriterHandle *trace_writer_new(const char *program, enum Fmt format);
 
 /**
  * Free a trace writer handle.  Passing `NULL` is a no-op.
+ *
+ * # Safety
+ *
+ * `handle` must be a pointer [`trace_writer_new`] returned that has not
+ * already been freed. Freeing twice is undefined behaviour; passing NULL is
+ * not, and does nothing.
  */
 void trace_writer_free(struct TraceWriterHandle *handle);
 
+/**
+ * # Safety
+ *
+ * `handle` must satisfy the handle invariant and `path` the C-string
+ * invariant, both in the module-level "Safety" section.
+ */
 bool trace_writer_begin_metadata(struct TraceWriterHandle *handle, const char *path);
 
+/**
+ * # Safety
+ *
+ * `handle` must satisfy the handle invariant in the module-level "Safety"
+ * section.
+ */
 bool trace_writer_finish_metadata(struct TraceWriterHandle *handle);
 
+/**
+ * # Safety
+ *
+ * `handle` must satisfy the handle invariant and `path` the C-string
+ * invariant, both in the module-level "Safety" section.
+ */
 bool trace_writer_begin_events(struct TraceWriterHandle *handle, const char *path);
 
+/**
+ * # Safety
+ *
+ * `handle` must satisfy the handle invariant in the module-level "Safety"
+ * section.
+ */
 bool trace_writer_finish_events(struct TraceWriterHandle *handle);
 
+/**
+ * # Safety
+ *
+ * `handle` must satisfy the handle invariant and `path` the C-string
+ * invariant, both in the module-level "Safety" section.
+ */
 bool trace_writer_begin_paths(struct TraceWriterHandle *handle, const char *path);
 
+/**
+ * # Safety
+ *
+ * `handle` must satisfy the handle invariant in the module-level "Safety"
+ * section.
+ */
 bool trace_writer_finish_paths(struct TraceWriterHandle *handle);
 
+/**
+ * # Safety
+ *
+ * `handle` must satisfy the handle invariant and `path` the C-string
+ * invariant, both in the module-level "Safety" section.
+ */
 void trace_writer_start(struct TraceWriterHandle *handle, const char *path, int64_t line);
 
 /**
@@ -155,13 +209,30 @@ void trace_writer_start(struct TraceWriterHandle *handle, const char *path, int6
  * By default the workdir is set to the process's current directory at
  * the time [`trace_writer_new`] is called.  Call this before
  * [`trace_writer_finish_metadata`] to record a different directory.
+ *
+ * # Safety
+ *
+ * `handle` must satisfy the handle invariant and `workdir` the C-string
+ * invariant, both in the module-level "Safety" section.
  */
 void trace_writer_set_workdir(struct TraceWriterHandle *handle, const char *workdir);
 
+/**
+ * # Safety
+ *
+ * `handle` must satisfy the handle invariant and `path` the C-string
+ * invariant, both in the module-level "Safety" section.
+ */
 void trace_writer_register_step(struct TraceWriterHandle *handle, const char *path, int64_t line);
 
 /**
  * Register a function and return its ID.  Returns `usize::MAX` on error.
+ *
+ * # Safety
+ *
+ * `handle` must satisfy the handle invariant; `name` and `path` must each
+ * satisfy the C-string invariant. Both are in the module-level "Safety"
+ * section.
  */
 uintptr_t trace_writer_ensure_function_id(struct TraceWriterHandle *handle,
                                           const char *name,
@@ -170,6 +241,11 @@ uintptr_t trace_writer_ensure_function_id(struct TraceWriterHandle *handle,
 
 /**
  * Register a type and return its ID.  Returns `usize::MAX` on error.
+ *
+ * # Safety
+ *
+ * `handle` must satisfy the handle invariant and `lang_type` the C-string
+ * invariant, both in the module-level "Safety" section.
  */
 uintptr_t trace_writer_ensure_type_id(struct TraceWriterHandle *handle,
                                       enum Tk kind,
@@ -181,16 +257,31 @@ uintptr_t trace_writer_ensure_type_id(struct TraceWriterHandle *handle,
  * For simplicity the FFI does not expose argument passing — call
  * `trace_writer_register_variable_with_full_value` for each arg before
  * this function.
+ *
+ * # Safety
+ *
+ * `handle` must satisfy the handle invariant in the module-level "Safety"
+ * section.
  */
 void trace_writer_register_call(struct TraceWriterHandle *handle, uintptr_t function_id);
 
 /**
  * Register a function return with no explicit return value.
+ *
+ * # Safety
+ *
+ * `handle` must satisfy the handle invariant in the module-level "Safety"
+ * section.
  */
 void trace_writer_register_return(struct TraceWriterHandle *handle);
 
 /**
  * Register a function return with an integer return value.
+ *
+ * # Safety
+ *
+ * `handle` must satisfy the handle invariant and `type_name` the C-string
+ * invariant, both in the module-level "Safety" section.
  */
 void trace_writer_register_return_int(struct TraceWriterHandle *handle,
                                       int64_t value,
@@ -199,6 +290,12 @@ void trace_writer_register_return_int(struct TraceWriterHandle *handle,
 
 /**
  * Register a function return with a string (raw) return value.
+ *
+ * # Safety
+ *
+ * `handle` must satisfy the handle invariant; `value_repr` and `type_name`
+ * must each satisfy the C-string invariant. Both are in the module-level
+ * "Safety" section.
  */
 void trace_writer_register_return_raw(struct TraceWriterHandle *handle,
                                       const char *value_repr,
@@ -207,6 +304,12 @@ void trace_writer_register_return_raw(struct TraceWriterHandle *handle,
 
 /**
  * Register a variable with an integer value.
+ *
+ * # Safety
+ *
+ * `handle` must satisfy the handle invariant; `name` and `type_name` must
+ * each satisfy the C-string invariant. Both are in the module-level
+ * "Safety" section.
  */
 void trace_writer_register_variable_int(struct TraceWriterHandle *handle,
                                         const char *name,
@@ -216,6 +319,12 @@ void trace_writer_register_variable_int(struct TraceWriterHandle *handle,
 
 /**
  * Register a variable with a string (raw) value representation.
+ *
+ * # Safety
+ *
+ * `handle` must satisfy the handle invariant; `name`, `value_repr` and
+ * `type_name` must each satisfy the C-string invariant. Both are in the
+ * module-level "Safety" section.
  */
 void trace_writer_register_variable_raw(struct TraceWriterHandle *handle,
                                         const char *name,
@@ -229,6 +338,12 @@ void trace_writer_register_variable_raw(struct TraceWriterHandle *handle,
  * `metadata` is an arbitrary NUL-terminated string attached to the event
  * (for example a file descriptor or channel name).  Pass `NULL` or an empty
  * string when no metadata is needed.
+ *
+ * # Safety
+ *
+ * `handle` must satisfy the handle invariant; `metadata` and `content` must
+ * each satisfy the C-string invariant. Both are in the module-level
+ * "Safety" section.
  */
 void trace_writer_register_special_event(struct TraceWriterHandle *handle,
                                          enum Elk kind,

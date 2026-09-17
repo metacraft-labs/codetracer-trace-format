@@ -9,6 +9,29 @@
 //! Functions that can fail return `false` (or a sentinel value) and store a
 //! human-readable error string in a thread-local buffer. The caller retrieves
 //! it via `trace_writer_last_error()`.
+//!
+//! # Safety
+//!
+//! Every entry point here is `unsafe` because it dereferences pointers the
+//! caller owns and the compiler cannot check. Two invariants cover the whole
+//! surface, and each function's own `# Safety` section names which of its
+//! parameters they apply to.
+//!
+//! **Handles.** A `*mut TraceWriterHandle` must be one [`trace_writer_new`]
+//! returned and [`trace_writer_free`] has not yet been called on. NULL is
+//! detected and reported through [`trace_writer_last_error`] rather than
+//! dereferenced, so passing NULL is safe; passing a freed, foreign, or
+//! already-aliased pointer is not, and cannot be detected here. A handle must
+//! not be used from two threads concurrently — nothing in this layer
+//! synchronises access to the writer behind it.
+//!
+//! **C strings.** A `*const c_char` must be NULL, or point to a
+//! NUL-terminated string that stays valid and unmodified for the duration of
+//! the call. NULL and non-UTF-8 input are both accepted and read as the empty
+//! string rather than being undefined behaviour: a recorder that loses a name
+//! should produce a trace carrying an empty name, not abort the program it is
+//! recording. A pointer that is non-NULL but not NUL-terminated is undefined
+//! behaviour, because nothing can bound the read.
 
 use std::cell::RefCell;
 use std::ffi::{CStr, CString};
@@ -198,6 +221,12 @@ fn w(handle: &mut TraceWriterHandle) -> &mut dyn TraceWriter {
 /// Returns a heap-allocated handle that **must** be freed with
 /// [`trace_writer_free`].  Returns `NULL` on failure (check
 /// [`trace_writer_last_error`]).
+///
+/// # Safety
+///
+/// `program` must satisfy the C-string invariant in the module-level
+/// "Safety" section. The returned handle is owned by the caller and must be
+/// released with [`trace_writer_free`] exactly once.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_new(program: *const c_char, format: FfiTraceFormat) -> *mut TraceWriterHandle {
     let prog = unsafe { cstr_to_str(program) };
@@ -206,6 +235,12 @@ pub unsafe extern "C" fn trace_writer_new(program: *const c_char, format: FfiTra
 }
 
 /// Free a trace writer handle.  Passing `NULL` is a no-op.
+///
+/// # Safety
+///
+/// `handle` must be a pointer [`trace_writer_new`] returned that has not
+/// already been freed. Freeing twice is undefined behaviour; passing NULL is
+/// not, and does nothing.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_free(handle: *mut TraceWriterHandle) {
     if !handle.is_null() {
@@ -217,6 +252,10 @@ pub unsafe extern "C" fn trace_writer_free(handle: *mut TraceWriterHandle) {
 // File I/O — begin / finish
 // ---------------------------------------------------------------------------
 
+/// # Safety
+///
+/// `handle` must satisfy the handle invariant and `path` the C-string
+/// invariant, both in the module-level "Safety" section.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_begin_metadata(handle: *mut TraceWriterHandle, path: *const c_char) -> bool {
     if handle.is_null() {
@@ -233,6 +272,10 @@ pub unsafe extern "C" fn trace_writer_begin_metadata(handle: *mut TraceWriterHan
     }
 }
 
+/// # Safety
+///
+/// `handle` must satisfy the handle invariant in the module-level "Safety"
+/// section.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_finish_metadata(handle: *mut TraceWriterHandle) -> bool {
     if handle.is_null() {
@@ -249,6 +292,10 @@ pub unsafe extern "C" fn trace_writer_finish_metadata(handle: *mut TraceWriterHa
     }
 }
 
+/// # Safety
+///
+/// `handle` must satisfy the handle invariant and `path` the C-string
+/// invariant, both in the module-level "Safety" section.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_begin_events(handle: *mut TraceWriterHandle, path: *const c_char) -> bool {
     if handle.is_null() {
@@ -265,6 +312,10 @@ pub unsafe extern "C" fn trace_writer_begin_events(handle: *mut TraceWriterHandl
     }
 }
 
+/// # Safety
+///
+/// `handle` must satisfy the handle invariant in the module-level "Safety"
+/// section.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_finish_events(handle: *mut TraceWriterHandle) -> bool {
     if handle.is_null() {
@@ -281,6 +332,10 @@ pub unsafe extern "C" fn trace_writer_finish_events(handle: *mut TraceWriterHand
     }
 }
 
+/// # Safety
+///
+/// `handle` must satisfy the handle invariant and `path` the C-string
+/// invariant, both in the module-level "Safety" section.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_begin_paths(handle: *mut TraceWriterHandle, path: *const c_char) -> bool {
     if handle.is_null() {
@@ -297,6 +352,10 @@ pub unsafe extern "C" fn trace_writer_begin_paths(handle: *mut TraceWriterHandle
     }
 }
 
+/// # Safety
+///
+/// `handle` must satisfy the handle invariant in the module-level "Safety"
+/// section.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_finish_paths(handle: *mut TraceWriterHandle) -> bool {
     if handle.is_null() {
@@ -317,6 +376,10 @@ pub unsafe extern "C" fn trace_writer_finish_paths(handle: *mut TraceWriterHandl
 // Tracing primitives
 // ---------------------------------------------------------------------------
 
+/// # Safety
+///
+/// `handle` must satisfy the handle invariant and `path` the C-string
+/// invariant, both in the module-level "Safety" section.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_start(handle: *mut TraceWriterHandle, path: *const c_char, line: i64) {
     if handle.is_null() {
@@ -331,6 +394,11 @@ pub unsafe extern "C" fn trace_writer_start(handle: *mut TraceWriterHandle, path
 /// By default the workdir is set to the process's current directory at
 /// the time [`trace_writer_new`] is called.  Call this before
 /// [`trace_writer_finish_metadata`] to record a different directory.
+///
+/// # Safety
+///
+/// `handle` must satisfy the handle invariant and `workdir` the C-string
+/// invariant, both in the module-level "Safety" section.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_set_workdir(handle: *mut TraceWriterHandle, workdir: *const c_char) {
     if handle.is_null() {
@@ -340,6 +408,10 @@ pub unsafe extern "C" fn trace_writer_set_workdir(handle: *mut TraceWriterHandle
     TraceWriter::set_workdir(w(h), Path::new(unsafe { cstr_to_str(workdir) }));
 }
 
+/// # Safety
+///
+/// `handle` must satisfy the handle invariant and `path` the C-string
+/// invariant, both in the module-level "Safety" section.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_register_step(handle: *mut TraceWriterHandle, path: *const c_char, line: i64) {
     if handle.is_null() {
@@ -350,6 +422,12 @@ pub unsafe extern "C" fn trace_writer_register_step(handle: *mut TraceWriterHand
 }
 
 /// Register a function and return its ID.  Returns `usize::MAX` on error.
+///
+/// # Safety
+///
+/// `handle` must satisfy the handle invariant; `name` and `path` must each
+/// satisfy the C-string invariant. Both are in the module-level "Safety"
+/// section.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_ensure_function_id(
     handle: *mut TraceWriterHandle,
@@ -366,6 +444,11 @@ pub unsafe extern "C" fn trace_writer_ensure_function_id(
 }
 
 /// Register a type and return its ID.  Returns `usize::MAX` on error.
+///
+/// # Safety
+///
+/// `handle` must satisfy the handle invariant and `lang_type` the C-string
+/// invariant, both in the module-level "Safety" section.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_ensure_type_id(handle: *mut TraceWriterHandle, kind: FfiTypeKind, lang_type: *const c_char) -> usize {
     if handle.is_null() {
@@ -380,6 +463,11 @@ pub unsafe extern "C" fn trace_writer_ensure_type_id(handle: *mut TraceWriterHan
 /// For simplicity the FFI does not expose argument passing — call
 /// `trace_writer_register_variable_with_full_value` for each arg before
 /// this function.
+///
+/// # Safety
+///
+/// `handle` must satisfy the handle invariant in the module-level "Safety"
+/// section.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_register_call(handle: *mut TraceWriterHandle, function_id: usize) {
     if handle.is_null() {
@@ -390,6 +478,11 @@ pub unsafe extern "C" fn trace_writer_register_call(handle: *mut TraceWriterHand
 }
 
 /// Register a function return with no explicit return value.
+///
+/// # Safety
+///
+/// `handle` must satisfy the handle invariant in the module-level "Safety"
+/// section.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_register_return(handle: *mut TraceWriterHandle) {
     if handle.is_null() {
@@ -400,6 +493,11 @@ pub unsafe extern "C" fn trace_writer_register_return(handle: *mut TraceWriterHa
 }
 
 /// Register a function return with an integer return value.
+///
+/// # Safety
+///
+/// `handle` must satisfy the handle invariant and `type_name` the C-string
+/// invariant, both in the module-level "Safety" section.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_register_return_int(
     handle: *mut TraceWriterHandle,
@@ -416,6 +514,12 @@ pub unsafe extern "C" fn trace_writer_register_return_int(
 }
 
 /// Register a function return with a string (raw) return value.
+///
+/// # Safety
+///
+/// `handle` must satisfy the handle invariant; `value_repr` and `type_name`
+/// must each satisfy the C-string invariant. Both are in the module-level
+/// "Safety" section.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_register_return_raw(
     handle: *mut TraceWriterHandle,
@@ -438,6 +542,12 @@ pub unsafe extern "C" fn trace_writer_register_return_raw(
 }
 
 /// Register a variable with an integer value.
+///
+/// # Safety
+///
+/// `handle` must satisfy the handle invariant; `name` and `type_name` must
+/// each satisfy the C-string invariant. Both are in the module-level
+/// "Safety" section.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_register_variable_int(
     handle: *mut TraceWriterHandle,
@@ -455,6 +565,12 @@ pub unsafe extern "C" fn trace_writer_register_variable_int(
 }
 
 /// Register a variable with a string (raw) value representation.
+///
+/// # Safety
+///
+/// `handle` must satisfy the handle invariant; `name`, `value_repr` and
+/// `type_name` must each satisfy the C-string invariant. Both are in the
+/// module-level "Safety" section.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_register_variable_raw(
     handle: *mut TraceWriterHandle,
@@ -483,6 +599,12 @@ pub unsafe extern "C" fn trace_writer_register_variable_raw(
 /// `metadata` is an arbitrary NUL-terminated string attached to the event
 /// (for example a file descriptor or channel name).  Pass `NULL` or an empty
 /// string when no metadata is needed.
+///
+/// # Safety
+///
+/// `handle` must satisfy the handle invariant; `metadata` and `content` must
+/// each satisfy the C-string invariant. Both are in the module-level
+/// "Safety" section.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_register_special_event(
     handle: *mut TraceWriterHandle,
@@ -679,7 +801,7 @@ mod tests {
         // Verify trace.json is valid JSON with events
         let trace_content = fs::read_to_string(tmp.join("trace.json")).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&trace_content).unwrap();
-        assert!(parsed.as_array().map_or(false, |a| !a.is_empty()));
+        assert!(parsed.as_array().is_some_and(|a| !a.is_empty()));
 
         unsafe { trace_writer_free(handle) };
         fs::remove_dir_all(&tmp).ok();

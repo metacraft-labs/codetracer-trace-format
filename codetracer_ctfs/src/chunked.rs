@@ -1,5 +1,5 @@
-use crate::header::{ChunkIndexEntry, CompressionMethod, CHUNK_INDEX_ENTRY_SIZE};
 use crate::CtfsError;
+use crate::header::{CHUNK_INDEX_ENTRY_SIZE, ChunkIndexEntry, CompressionMethod};
 
 /// Default zstd compression level.
 const DEFAULT_ZSTD_LEVEL: i32 = 3;

@@ -9,6 +9,7 @@
 //!      trace: every `Step{path_id, line}` event is addressed through a
 //!      position space rebuilt from the trace's own `Path` events, the way a
 //!      reader rebuilds it from `paths.dat`.
+//!
 //! The two MUST agree — proving `steps.dat` decodes (incl. across a chunk
 //! boundary) to the exact step sequence the trace recorded.
 //!
@@ -203,7 +204,7 @@ fn fetching_one_step_decompresses_only_its_chunk() {
     );
 
     // Reading another step in the SAME chunk reuses the cache (still that chunk).
-    if target_index % chunk_size as u64 != 0 {
+    if !target_index.is_multiple_of(chunk_size as u64) {
         let sibling = target_index - 1;
         if (sibling as usize) / chunk_size == expected_chunk {
             let _ = ss.read(sibling).unwrap();

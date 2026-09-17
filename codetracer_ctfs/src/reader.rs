@@ -2,11 +2,11 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
 
+use crate::CtfsError;
 use crate::base40::base40_decode;
 use crate::block_bounds::BlockBound;
 use crate::file_entry::FileEntry;
 use crate::header::{CompressionMethod, EncryptionMethod, ExtendedHeader, Header};
-use crate::CtfsError;
 
 /// Reader for CTFS containers.
 pub struct CtfsReader {

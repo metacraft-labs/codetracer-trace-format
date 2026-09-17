@@ -334,6 +334,14 @@ pub struct CtfsTraceWriter {
     /// The `(line, column)` address space, built from the per-path
     /// `line_lengths` tables. Only consulted in column-aware mode.
     position_space: PositionSpace,
+    /// Path ids for which a column was offered and dropped because the file
+    /// has no per-line table, and so no column axis to place one on.
+    ///
+    /// The writer's diagnostic channel for that refusal — a channel rather
+    /// than an error because the step itself is kept. One entry per path, not
+    /// per step: a recorder whose source paths do not resolve on the recording
+    /// machine offers a column on every step of every file.
+    columns_dropped_for_paths: std::collections::BTreeSet<u64>,
     /// Nim's delta-vs-absolute policy and running cursor.
     step_encoder: StepEncoder,
     /// The column-aware `steps.dat` encoder. `Some` only while a column-aware
@@ -448,6 +456,7 @@ impl CtfsTraceWriter {
             column_breakpoints_requested: false,
             column_motions_requested: false,
             position_space: PositionSpace::new(false),
+            columns_dropped_for_paths: std::collections::BTreeSet::new(),
             step_encoder: StepEncoder::new(),
             exec_encoder: None,
             pending_line_lengths: None,
@@ -814,11 +823,11 @@ impl CtfsTraceWriter {
 
     /// Write the HEADERV1 prefix to the CTFS events.log if not already done.
     fn ensure_header_written(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        if !self.header_written {
-            if let (Some(writer), Some(handle)) = (&mut self.ctfs_writer, self.events_handle) {
-                writer.write(handle, HEADERV1)?;
-                self.header_written = true;
-            }
+        if !self.header_written
+            && let (Some(writer), Some(handle)) = (&mut self.ctfs_writer, self.events_handle)
+        {
+            writer.write(handle, HEADERV1)?;
+            self.header_written = true;
         }
         Ok(())
     }
@@ -959,7 +968,21 @@ impl AbstractTraceWriter for CtfsTraceWriter {
                     // behavioural rather than aesthetic: an intermediate
                     // column-1 step carries no variables, so a line-granular
                     // step-over lands on it and `variables_at` answers empty.
-                    let column_delta = std::mem::replace(&mut self.pending_column_delta, 0);
+                    let mut column_delta = std::mem::replace(&mut self.pending_column_delta, 0);
+                    // A file with no per-line table has no column axis: its
+                    // slot in the position space is sized by the line-only
+                    // fallback, so one address IS one line and a column delta
+                    // added to that address names a LATER LINE. The step is
+                    // kept at its line and the column is dropped, which is
+                    // what the spec requires of a column arriving as part of
+                    // a step (`trace-events.md` §"A column needs a file with
+                    // a column axis"); the line is a position the recorder
+                    // did observe, and a missing step is much harder to
+                    // notice than a missing column.
+                    if column_delta != 0 && !self.position_space.has_column_axis(step.path_id.0 as u64) {
+                        self.columns_dropped_for_paths.insert(step.path_id.0 as u64);
+                        column_delta = 0;
+                    }
                     let step_event = self.step_encoder.step_at(position, column_delta);
                     if let Some(encoder) = self.exec_encoder.as_mut() {
                         // A failure here is a zstd failure, which the

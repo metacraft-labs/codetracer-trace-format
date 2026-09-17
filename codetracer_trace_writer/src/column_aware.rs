@@ -334,6 +334,15 @@ impl PositionSpace {
         &self.line_lengths
     }
 
+    /// Whether `path_id` has a column axis — i.e. a non-empty per-line table.
+    ///
+    /// A file without one is sized by the [`DEFAULT_LINES_PER_FILE`] fallback,
+    /// where one address is one line, so a column delta added to its address
+    /// names a later line instead of a column.
+    pub fn has_column_axis(&self, path_id: u64) -> bool {
+        self.line_lengths.get(path_id as usize).is_some_and(|lls| !lls.is_empty())
+    }
+
     fn rebuild(&mut self) {
         let mut prefix = Vec::with_capacity(self.line_lengths.len());
         let mut running: u64 = 0;
@@ -366,19 +375,18 @@ impl PositionSpace {
         }
         let idx = path_id as usize;
         let base = self.prefix_sum.get(idx).copied().unwrap_or(0);
-        if self.column_aware {
-            if let Some(lls) = self.line_lengths.get(idx) {
-                if !lls.is_empty() {
-                    // `line` is 1-based, so line 1 sits at offset 0. Nim clamps
-                    // `upTo` to the known line count and lets the reader's
-                    // decoder handle a past-end address the same way.
-                    let up_to = ((line.max(1) - 1) as usize).min(lls.len());
-                    let line_offset: u64 = lls[..up_to].iter().map(|l| u64::from(*l)).sum();
-                    return base + line_offset;
-                }
-            }
+        if self.column_aware
+            && let Some(lls) = self.line_lengths.get(idx)
+            && !lls.is_empty()
+        {
+            // `line` is 1-based, so line 1 sits at offset 0. Nim clamps
+            // `upTo` to the known line count and lets the reader's
+            // decoder handle a past-end address the same way.
+            let up_to = ((line.max(1) - 1) as usize).min(lls.len());
+            let line_offset: u64 = lls[..up_to].iter().map(|l| u64::from(*l)).sum();
+            return base + line_offset;
         }
-        base + if line <= 1 { 0 } else { line - 1 }
+        base + line.saturating_sub(1)
     }
 }
 

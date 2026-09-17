@@ -1,8 +1,8 @@
-/// Filemap binary format for portable CTFS traces.
-/// Maps short CTFS names to real filesystem paths.
-///
-/// Wire format uses LEB128 varints for string lengths and little-endian
-/// fixed-width integers, consistent with the rest of the CTFS format.
+//! Filemap binary format for portable CTFS traces.
+//! Maps short CTFS names to real filesystem paths.
+//!
+//! Wire format uses LEB128 varints for string lengths and little-endian
+//! fixed-width integers, consistent with the rest of the CTFS format.
 
 /// LEB128 varint encoding (same as DWARF/protobuf).
 /// Each byte uses 7 data bits + 1 continuation bit (high bit set means more
@@ -489,39 +489,37 @@ mod tests {
     /// This function must produce identical logical entries to the Nim
     /// `buildCompatFilemap` function so the serialized bytes match.
     pub(crate) fn build_compat_filemap() -> Filemap {
-        let mut entries = Vec::new();
-
-        // Binary entry
-        entries.push(FilemapEntry {
-            ctfs_name: base40_encode("myapp").unwrap(),
-            entry_type: FilemapEntryType::Binary,
-            flags: 0x01,
-            build_id: (1u8..=20).collect(),
-            real_path: "/usr/bin/myapp".to_string(),
-            ..Default::default()
-        });
-
-        // Debug entry
-        entries.push(FilemapEntry {
-            ctfs_name: base40_encode("myapp.dbg").unwrap(),
-            entry_type: FilemapEntryType::DebugSymbol,
-            flags: 0,
-            build_id: (1u8..=20).collect(),
-            real_path: "/usr/lib/debug/myapp.debug".to_string(),
-            binary_ref: base40_encode("myapp").unwrap(),
-            ..Default::default()
-        });
-
-        // Source entry
-        entries.push(FilemapEntry {
-            ctfs_name: base40_encode("main.c").unwrap(),
-            entry_type: FilemapEntryType::SourceFile,
-            flags: 0,
-            build_id: vec![],
-            real_path: "/home/user/src/main.c".to_string(),
-            compilation_dir: "/home/user/build".to_string(),
-            ..Default::default()
-        });
+        let entries = vec![
+            // Binary entry
+            FilemapEntry {
+                ctfs_name: base40_encode("myapp").unwrap(),
+                entry_type: FilemapEntryType::Binary,
+                flags: 0x01,
+                build_id: (1u8..=20).collect(),
+                real_path: "/usr/bin/myapp".to_string(),
+                ..Default::default()
+            },
+            // Debug entry
+            FilemapEntry {
+                ctfs_name: base40_encode("myapp.dbg").unwrap(),
+                entry_type: FilemapEntryType::DebugSymbol,
+                flags: 0,
+                build_id: (1u8..=20).collect(),
+                real_path: "/usr/lib/debug/myapp.debug".to_string(),
+                binary_ref: base40_encode("myapp").unwrap(),
+                ..Default::default()
+            },
+            // Source entry
+            FilemapEntry {
+                ctfs_name: base40_encode("main.c").unwrap(),
+                entry_type: FilemapEntryType::SourceFile,
+                flags: 0,
+                build_id: vec![],
+                real_path: "/home/user/src/main.c".to_string(),
+                compilation_dir: "/home/user/build".to_string(),
+                ..Default::default()
+            },
+        ];
 
         Filemap { version: 1, entries }
     }

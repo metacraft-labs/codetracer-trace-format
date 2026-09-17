@@ -6,6 +6,7 @@
 //!   2. re-derived from the unchanged `events.log` (read with the normal
 //!      reader) by feeding its events through the SAME `ValueStreamBuilder` the
 //!      writer used.
+//!
 //! The two MUST agree — proving `values.dat` is consistent with the unified
 //! stream it was split from, that the parallel-index invariant holds (value
 //! record N ↔ step N, empty record for value-less steps), and that seeking
@@ -28,6 +29,7 @@ use codetracer_trace_writer::value_stream::{ValueRecordEntry, ValueStreamBuilder
 ///   * steps WITH variable values (StepValues),
 ///   * steps with NO values (the empty-record case in the parallel index),
 ///   * cell values / assign-cell / bind / drop events,
+///
 /// across enough steps to cross several small `values.dat` chunks. Returns the
 /// `.ct` path.
 fn write_trace(dir: &tempfile::TempDir, with_value_stream: bool, values_chunk_size: usize) -> std::path::PathBuf {
@@ -181,7 +183,7 @@ fn fetching_one_step_decompresses_only_its_chunk() {
     );
 
     // Reading another step in the SAME chunk reuses the cache.
-    if target_index % chunk_size as u64 != 0 {
+    if !target_index.is_multiple_of(chunk_size as u64) {
         let sibling = target_index - 1;
         if (sibling as usize) / chunk_size == expected_chunk {
             let _ = vs.read(sibling).unwrap();
@@ -250,4 +252,3 @@ fn forward_compat_chunk_records_decode_unknown_tags() {
     assert_eq!(decoded_records[0].events.len(), 2);
     assert_eq!(decoded_records[0].events, rec.events);
 }
-

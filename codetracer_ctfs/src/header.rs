@@ -103,6 +103,12 @@ pub struct Header {
     pub max_shards: u8,
 }
 
+impl Default for Header {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Header {
     pub fn new() -> Self {
         Header {

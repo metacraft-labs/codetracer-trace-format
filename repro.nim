@@ -1,3 +1,4 @@
+import repro_dsl_stdlib/foreign_env
 ## Reprobuild dev env + build recipe for codetracer-trace-format.
 ##
 ## Mirrors the dev shell declared in ``flake.nix`` (Linux/macOS).
@@ -62,6 +63,10 @@
 import repro_project_dsl
 
 package codetracer_trace_format:
+  devEnv:
+    when not defined(windows):
+      useFlakeDevShell()
+
   defaultToolProvisioning "path"
 
   uses:

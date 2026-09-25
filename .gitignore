@@ -7,3 +7,6 @@ target/
 
 # A nix-store symlink some dev shells drop here; not part of any crate.
 node_modules
+
+# Repro environment and build state
+/.repro/

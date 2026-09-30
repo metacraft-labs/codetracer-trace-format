@@ -329,6 +329,12 @@ extern "C" {
     // The id a bare step on `path` is attributed to now; `u64::MAX` on failure.
     fn trace_writer_current_path_id(handle: *mut std::ffi::c_void, path: *const std::os::raw::c_char) -> u64;
 
+    // Intern `path` in paths.dat now and return its id; `u64::MAX` on failure.
+    fn trace_writer_register_path(handle: *mut std::ffi::c_void, path: *const std::os::raw::c_char) -> u64;
+
+    // Intern `name` in varnames.dat now and return its id; `u64::MAX` on failure.
+    fn trace_writer_register_variable_name(handle: *mut std::ffi::c_void, name: *const std::os::raw::c_char) -> u64;
+
     // Write a SourceReload marker (tag 0x08); returns its 1-based ordinal, or
     // 0 on failure.
     fn trace_writer_register_source_reload(
@@ -2396,22 +2402,40 @@ impl NimTraceWriter {
 
     // --- Methods that are no-ops in the Nim backend ---
 
-    pub fn ensure_path_id(&mut self, _path: &Path) -> PathId {
-        // The Nim library manages path IDs internally
-        PathId(0)
+    /// Intern `path` and return the id the Nim writer gave it.
+    ///
+    /// A path is interned when it is registered, not when a step first
+    /// reaches it, so the ids — and `paths.dat`, `funcs.dat` and every step
+    /// address derived from them — follow the recorder's registrations, as
+    /// they do in the native Nim writer and the pure-Rust writer.
+    pub fn ensure_path_id(&mut self, path: &Path) -> PathId {
+        let c_path = path_to_cstring(path);
+        let id = unsafe { trace_writer_register_path(self.handle, c_path.as_ptr()) };
+        if id == u64::MAX {
+            self.discard_with_reason("register_path", "trace_writer_register_path reported a failure");
+        }
+        PathId(id as usize)
     }
 
     pub fn ensure_raw_type_id(&mut self, typ: TypeRecord) -> TypeId {
         self.ensure_type_id(typ.kind, &typ.lang_type)
     }
 
-    pub fn ensure_variable_id(&mut self, _variable_name: &str) -> VariableId {
-        // The Nim library manages variable IDs internally
-        VariableId(0)
+    /// Intern `variable_name` and return the id the Nim writer gave it; a
+    /// name is interned when it is registered, not when a value first uses
+    /// it.
+    pub fn ensure_variable_id(&mut self, variable_name: &str) -> VariableId {
+        let c_name = str_to_cstring(variable_name);
+        let id = unsafe { trace_writer_register_variable_name(self.handle, c_name.as_ptr()) };
+        if id == u64::MAX {
+            self.discard_with_reason("register_variable_name", "trace_writer_register_variable_name reported a failure");
+        }
+        VariableId(id as usize)
     }
 
-    pub fn register_path(&mut self, _path: &Path) {
-        // Handled internally by the Nim library
+    /// Intern `path` now (see [`Self::ensure_path_id`]).
+    pub fn register_path(&mut self, path: &Path) {
+        self.ensure_path_id(path);
     }
 
     pub fn register_function(&mut self, name: &str, path: &Path, line: Line) {
@@ -2482,9 +2506,9 @@ impl NimTraceWriter {
         self.discard_unsupported("register_asm");
     }
 
-    pub fn register_variable_name(&mut self, _variable_name: &str) {
-        // Genuinely handled inside Nim (every `register_*` call that takes a
-        // name interns it there), so nothing is lost — not a discard.
+    /// Intern `variable_name` now (see [`Self::ensure_variable_id`]).
+    pub fn register_variable_name(&mut self, variable_name: &str) {
+        self.ensure_variable_id(variable_name);
     }
 
     /// Persist a value by variable id.

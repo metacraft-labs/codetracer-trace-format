@@ -268,6 +268,11 @@ impl InterningTablesBuilder {
         }
     }
 
+    /// The `paths.dat` path strings in id order — the list `meta.dat` carries.
+    pub fn path_strings(&self) -> Vec<String> {
+        self.paths.iter().map(|p| String::from_utf8_lossy(p).into_owned()).collect()
+    }
+
     /// Number of path records accumulated so far.
     pub fn path_count(&self) -> usize {
         self.paths.len()

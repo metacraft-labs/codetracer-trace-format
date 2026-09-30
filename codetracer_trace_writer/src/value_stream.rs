@@ -39,9 +39,12 @@
 //! no tagged events). This 1:1 alignment is what lets the reader fetch a step's
 //! values by the same integer index it uses for the execution stream, with no
 //! separate cross-reference table. The writer guarantees the invariant by
-//! attributing every value-stream event that appears in `events.log` to the
-//! step that was most recently emitted (value events before the very first
-//! `Step` are attributed to step 0).
+//! attributing every value-stream event to the step that is open when it
+//! arrives. A call, a return, or an exec record that is not a step closes the
+//! open step, and events that arrive while none is open are staged for the
+//! next step; events still staged when the trace ends go to the last step
+//! (`trace-events.md` §"Recorder Integration — Staging Values"). Events before
+//! the very first `Step` belong to step 0.
 //!
 //! # Per-record wire format
 //!
@@ -493,6 +496,16 @@ impl ValueStreamBuilder {
         self.last_step_record = Some(self.records.len());
     }
 
+    /// Close the open step, if there is one: its record is final, and values
+    /// that follow are staged for the next step. Nothing is written to the
+    /// exec stream, so no value record is added for the closing event itself.
+    fn close_step(&mut self) {
+        if self.seen_step && !self.staging {
+            self.records.push(std::mem::take(&mut self.current));
+            self.staging = true;
+        }
+    }
+
     /// An exec record that is not a step (tags 4, 5, 6, 8): it owns one empty
     /// value record, and the values that follow it are staged for the next
     /// step, not written into it.
@@ -507,21 +520,11 @@ impl ValueStreamBuilder {
         self.staging = true;
     }
 
-    /// Append `FullValueRecord` values to the current step's `StepValues` event,
-    /// creating it on first use so there is at most one `StepValues` per record.
+    /// Append `FullValueRecord` values to the current step's `StepValues` event.
     fn push_step_value(&mut self, fv: &FullValueRecord) {
         let name_id = fv.variable_id.0 as u64;
         let cbor = cbor_bytes(&fv.value);
-        // Find or create the (single) StepValues event in the current record.
-        if let Some(ValueStreamEvent::StepValues { values }) =
-            self.current.events.iter_mut().find(|e| matches!(e, ValueStreamEvent::StepValues { .. }))
-        {
-            values.push((name_id, cbor));
-        } else {
-            self.current.events.push(ValueStreamEvent::StepValues {
-                values: vec![(name_id, cbor)],
-            });
-        }
+        add_step_values(&mut self.current, vec![(name_id, cbor)]);
     }
 
     /// Feed one event in stream order.
@@ -533,6 +536,10 @@ impl ValueStreamBuilder {
             TraceLowLevelEvent::ThreadSwitch(_) | TraceLowLevelEvent::ThreadStart(_) | TraceLowLevelEvent::ThreadExit(_) => {
                 self.note_non_step_record()
             }
+            // A call or a return closes the open step: values that follow it
+            // are staged for the next step (`trace-events.md` §"Recorder
+            // Integration — Staging Values").
+            TraceLowLevelEvent::Call(_) | TraceLowLevelEvent::Return(_) => self.close_step(),
             TraceLowLevelEvent::Value(fv) => self.push_step_value(fv),
             TraceLowLevelEvent::BindVariable(BindVariableRecord { variable_id, place }) => {
                 self.current.events.push(ValueStreamEvent::BindVariable {
@@ -627,12 +634,28 @@ impl ValueStreamBuilder {
             // carry them to: they attach to the last step emitted (the
             // terminus rule), which is where they were visible.
             if let Some(i) = self.last_step_record {
-                self.records[i].events.append(&mut self.current.events);
+                for event in std::mem::take(&mut self.current.events) {
+                    match event {
+                        ValueStreamEvent::StepValues { values } => add_step_values(&mut self.records[i], values),
+                        other => self.records[i].events.push(other),
+                    }
+                }
             }
         } else if self.seen_step {
             self.records.push(self.current);
         }
         self.records
+    }
+}
+
+/// Add `values` to `record`'s `StepValues` event. A record carries at most
+/// one, and it comes first, before any other event of the step — the layout
+/// the canonical Nim writer produces (`values`, then the step's other events).
+fn add_step_values(record: &mut ValueRecordEntry, mut values: Vec<(u64, Vec<u8>)>) {
+    if let Some(ValueStreamEvent::StepValues { values: existing }) = record.events.first_mut() {
+        existing.append(&mut values);
+    } else {
+        record.events.insert(0, ValueStreamEvent::StepValues { values });
     }
 }
 

@@ -244,6 +244,9 @@ pub struct CtfsTraceWriter {
     /// Builds the compact step records from the observed event sequence (present
     /// while a trace is being written).
     step_stream_builder: Option<StepStreamBuilder>,
+    /// The `step-map.ns` index, built alongside the line-only step stream (a
+    /// column-aware trace carries none).
+    step_map_builder: Option<crate::step_map::StepMapBuilder>,
     /// Records-per-chunk for `steps.dat`.
     steps_chunk_size: usize,
 
@@ -400,6 +403,7 @@ impl CtfsTraceWriter {
             call_stream_builder: None,
             calls_chunk_size: DEFAULT_CALLS_CHUNK_SIZE,
             step_stream_builder: None,
+            step_map_builder: None,
             steps_chunk_size: DEFAULT_STEPS_CHUNK_SIZE,
             value_stream_builder: None,
             values_chunk_size: DEFAULT_VALUES_CHUNK_SIZE,
@@ -1155,6 +1159,11 @@ impl AbstractTraceWriter for CtfsTraceWriter {
         // Armed only in line-only mode; the column-aware path above owns
         // `steps.dat` instead.
         if let Some(ref mut builder) = self.step_stream_builder {
+            // The step's id in `step-map.ns` is the exec-record index it is
+            // about to take, so it is read before the builder appends it.
+            if let (TraceLowLevelEvent::Step(step), Some(map)) = (&event, self.step_map_builder.as_mut()) {
+                map.record_step(step.path_id.0 as u64, step.line.0, builder.len() as u64);
+            }
             builder.observe(&event);
         }
         // M23b: feed the dedicated value-stream builder from the SAME event
@@ -1329,6 +1338,11 @@ impl TraceWriter for CtfsTraceWriter {
         } else {
             None
         };
+        self.step_map_builder = if !self.column_aware_active {
+            Some(crate::step_map::StepMapBuilder::new())
+        } else {
+            None
+        };
         self.value_stream_builder = Some(ValueStreamBuilder::new());
         self.io_event_stream_builder = Some(IoEventStreamBuilder::new());
         // In column-aware mode `paths.dat` records are spec Layout A.
@@ -1466,6 +1480,11 @@ impl TraceWriter for CtfsTraceWriter {
                 let steps_idx_handle = writer.add_file("steps.idx")?;
                 writer.write(steps_idx_handle, &idx)?;
                 stream_flags |= FLAG_HAS_STEP_STREAM;
+
+                if let Some(map) = self.step_map_builder.take() {
+                    let map_handle = writer.add_file(crate::step_map::STEP_MAP_FILE_NAME)?;
+                    writer.write(map_handle, &map.serialize())?;
+                }
             }
 
             // M23b: the dedicated parallel value stream + companion index.
@@ -1505,6 +1524,9 @@ impl TraceWriter for CtfsTraceWriter {
             // interning that feeds events.log / paths.json, so the i-th record in
             // each `.dat` resolves the id the event streams reference. ADDITIVE:
             // the existing paths.json interning above is untouched.
+            // `meta.dat` lists `paths.dat`'s paths, in id order, however they
+            // were interned (`internal-files.md` §"Metadata").
+            let meta_paths: Vec<String> = self.interning_tables_builder.as_ref().map(|b| b.path_strings()).unwrap_or_default();
             {
                 let tables = self
                     .interning_tables_builder
@@ -1571,7 +1593,7 @@ impl TraceWriter for CtfsTraceWriter {
                 &self.base.args,
                 &self.base.workdir.to_string_lossy(),
                 "",
-                &self.base.path_list.iter().map(|p| p.to_string_lossy().into_owned()).collect::<Vec<_>>(),
+                &meta_paths,
                 stream_flags,
                 ext_flags,
             );

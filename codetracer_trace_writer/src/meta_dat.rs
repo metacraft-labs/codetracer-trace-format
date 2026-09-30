@@ -134,6 +134,15 @@ pub fn read_meta_dat_ext_flags(data: &[u8]) -> Result<u32, String> {
     if unknown != 0 {
         return Err(format!("meta.dat: unknown extended flag bits set: 0x{unknown:08x}"));
     }
+    if ext == 0 {
+        // What an unconditional version bump produces; accepting it would make
+        // "no extended feature" and "extended machinery that recorded nothing"
+        // indistinguishable at the byte level.
+        return Err(format!(
+            "meta.dat: schema version {META_DAT_VERSION_EXTENDED_FLAGS} with an all-zero flags_ext word; \
+             a container with no extended flag must be written at version {META_DAT_VERSION}"
+        ));
+    }
     Ok(ext)
 }
 
@@ -351,7 +360,8 @@ fn decode_varint(data: &[u8], pos: &mut usize) -> Result<u64, String> {
 }
 
 /// Serialize a `meta.dat` byte buffer. `flags` carries the capability bitfield
-/// (e.g. [`FLAG_HAS_CALL_STREAM`]).
+/// (e.g. [`FLAG_HAS_CALL_STREAM`]). Always version 4; see
+/// [`encode_meta_dat_ext`] for a header that may carry extended flags.
 #[allow(clippy::too_many_arguments)]
 pub fn encode_meta_dat(
     recording_id: &str,
@@ -362,10 +372,38 @@ pub fn encode_meta_dat(
     paths: &[String],
     flags: u16,
 ) -> Vec<u8> {
+    encode_meta_dat_ext(recording_id, program, args, workdir, recorder_id, paths, flags, 0)
+}
+
+/// Serialize a `meta.dat` byte buffer that may carry extended flags.
+///
+/// Version 5, with the `flags_ext` word after `flags`, exactly when `ext_flags`
+/// is non-zero; otherwise version 4, byte-identical to [`encode_meta_dat`]
+/// (`internal-files.md` §"Extended flags (`flags_ext`, version 5)"). Mirrors the
+/// Nim writer's `writeMetaDat`.
+#[allow(clippy::too_many_arguments)]
+pub fn encode_meta_dat_ext(
+    recording_id: &str,
+    program: &str,
+    args: &[String],
+    workdir: &str,
+    recorder_id: &str,
+    paths: &[String],
+    flags: u16,
+    ext_flags: u32,
+) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend_from_slice(&META_DAT_MAGIC);
-    out.extend_from_slice(&META_DAT_VERSION.to_le_bytes());
+    let version = if ext_flags != 0 {
+        META_DAT_VERSION_EXTENDED_FLAGS
+    } else {
+        META_DAT_VERSION
+    };
+    out.extend_from_slice(&version.to_le_bytes());
     out.extend_from_slice(&flags.to_le_bytes());
+    if ext_flags != 0 {
+        out.extend_from_slice(&ext_flags.to_le_bytes());
+    }
     encode_varint_str(recording_id, &mut out);
     encode_varint_str(program, &mut out);
     encode_varint(args.len() as u64, &mut out);
@@ -741,6 +779,45 @@ mod tests {
         let buf = NIM_WRITTEN_V5_META_DAT[..11].to_vec();
         let err = read_meta_dat_ext_flags(&buf).expect_err("must refuse a truncated v5 header");
         assert!(err.contains("flags_ext"), "the refusal must name the missing word; got: {err}");
+    }
+
+    /// `internal-files.md` §"Extended flags": a version 5 header whose
+    /// `flags_ext` is zero is refused — it is what an unconditional version
+    /// bump produces, and the canonical Nim reader refuses it too.
+    #[test]
+    fn a_v5_header_with_a_zero_ext_word_is_refused() {
+        let mut buf = NIM_WRITTEN_V5_META_DAT.to_vec();
+        buf[8] = 0x00;
+        let err = read_meta_dat_ext_flags(&buf).expect_err("a v5 header with flags_ext == 0 must be refused");
+        assert!(err.contains("flags_ext"), "the refusal must name the word; got: {err}");
+        assert!(decode_meta_dat(&buf).is_err(), "decode_meta_dat must refuse it as well");
+    }
+
+    /// The writer emits version 5 exactly when an extended flag is set, and the
+    /// bytes it emits are the Nim writer's: the captured v5 header re-encodes
+    /// byte for byte from its own decoded fields.
+    #[test]
+    fn the_encoder_writes_v5_only_with_an_ext_flag_and_matches_the_nim_bytes() {
+        let m = decode_meta_dat(NIM_WRITTEN_V5_META_DAT).expect("v5 decodes");
+        let re = encode_meta_dat_ext(
+            &m.recording_id,
+            &m.program,
+            &m.args,
+            &m.workdir,
+            &m.recorder_id,
+            &m.paths,
+            m.flags,
+            m.ext_flags,
+        );
+        assert_eq!(re, NIM_WRITTEN_V5_META_DAT, "re-encoding the Nim v5 header must reproduce it");
+
+        let v4 = encode_meta_dat_ext(&m.recording_id, &m.program, &m.args, &m.workdir, &m.recorder_id, &m.paths, m.flags, 0);
+        assert_eq!(u16::from_le_bytes([v4[4], v4[5]]), META_DAT_VERSION, "no ext flag means version 4");
+        assert_eq!(
+            v4,
+            encode_meta_dat(&m.recording_id, &m.program, &m.args, &m.workdir, &m.recorder_id, &m.paths, m.flags),
+            "with no ext flag the header is byte-identical to the plain v4 encoder's"
+        );
     }
 
     #[test]

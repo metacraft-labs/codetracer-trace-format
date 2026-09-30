@@ -678,8 +678,9 @@ impl CtfsTraceWriter {
 
     /// Operations refused because honouring them would have written something
     /// the container cannot represent — a step at a path with no recorded
-    /// line count, or past the end of its file. The step is not written; the
-    /// Nim FFI reports the same refusals through `trace_writer_last_error`.
+    /// line count, or past the end of its file. The step is not written, and
+    /// `finish_writing_trace_events` fails naming the first refusal, as the
+    /// Nim writer's close does.
     pub fn refusals(&self) -> &[String] {
         &self.refusals
     }
@@ -1784,6 +1785,18 @@ impl TraceWriter for CtfsTraceWriter {
             }
         }
 
+        // The container is finalized either way, so what was recorded can be
+        // inspected; but a recording that refused an operation is missing
+        // what that operation carried, and finishing it as a success would
+        // hand the recorder an incomplete trace it believes is complete. The
+        // Nim writer's `trace_writer_close` fails for the same reason.
+        if let Some(first) = self.refusals.first() {
+            return Err(format!(
+                "the trace is incomplete: {} operation(s) were refused; the first: {first}",
+                self.refusals.len()
+            )
+            .into());
+        }
         Ok(())
     }
 }

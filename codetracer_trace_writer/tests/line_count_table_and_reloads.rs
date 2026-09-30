@@ -123,7 +123,9 @@ fn the_table_refuses_what_it_cannot_represent() {
     assert_eq!(w.refusals().len(), 2, "two refused steps; refusals: {:?}", w.refusals());
     assert!(w.refusals()[0].contains("line 6"), "{:?}", w.refusals());
     assert!(w.refusals()[1].contains("/uncounted"), "{:?}", w.refusals());
-    let bytes = finish(w);
+    let err = TraceWriter::finish_writing_trace_events(&mut w).expect_err("a recording with refused steps must not finish as a success");
+    assert!(err.to_string().contains("2 operation(s) were refused"), "got: {err}");
+    let bytes = w.take_container_bytes().expect("the container is still finalized");
     let dir = tempfile::tempdir().unwrap();
     let p = dir.path().join("r.ct");
     std::fs::write(&p, &bytes).unwrap();

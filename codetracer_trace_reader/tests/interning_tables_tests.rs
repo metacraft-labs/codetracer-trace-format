@@ -427,12 +427,18 @@ fn encode_line_count_record(payload: &[u8], line_count: u64) -> Vec<u8> {
 /// Build a container whose `paths.dat` holds the given `(path, line_count)`
 /// records, with bit 14 set unless `declare` is false.
 fn write_line_count_container(dir: &tempfile::TempDir, name: &str, records: &[Vec<u8>], declare: bool) -> std::path::PathBuf {
+    use codetracer_trace_writer::meta_dat::FLAG_HAS_LINE_COUNT_TABLE;
+    write_paths_container(dir, name, records, if declare { FLAG_HAS_LINE_COUNT_TABLE } else { 0 })
+}
+
+/// Build a container whose `paths.dat` holds `records` verbatim and whose
+/// `meta.dat` carries `flags`.
+fn write_paths_container(dir: &tempfile::TempDir, name: &str, records: &[Vec<u8>], flags: u16) -> std::path::PathBuf {
     use codetracer_ctfs::CtfsWriter;
-    use codetracer_trace_writer::meta_dat::{FLAG_HAS_LINE_COUNT_TABLE, encode_meta_dat};
+    use codetracer_trace_writer::meta_dat::encode_meta_dat;
 
     let ct_path = dir.path().join(name);
     let mut w = CtfsWriter::create(&ct_path, 4096, 31).unwrap();
-    let flags = if declare { FLAG_HAS_LINE_COUNT_TABLE } else { 0 };
     let meta = encode_meta_dat("01949fcc-7d92-7e9c-aaaa-bbbbbbbbbbbb", "prog", &[], "", "", &[], flags);
     let h = w.add_file("meta.dat").unwrap();
     w.write(h, &meta).unwrap();
@@ -577,4 +583,89 @@ fn a_truncated_line_count_record_fails_the_open() {
         Ok(_) => panic!("a truncated record must fail the open"),
     };
     assert!(err.contains("paths.dat: record 0"), "the refusal must name the record; got: {err}");
+}
+
+// ---------------------------------------------------------------------------
+// Layout A (`meta.dat` bit 4) is decoded whole, not just its prefix
+// ---------------------------------------------------------------------------
+//
+// Under bit 4 every `paths.dat` record is `path_len + path + line_count +
+// line_lengths × line_count` (`internal-files.md` §"`paths.dat` Layout A").
+// A reader that takes only the `path_len` prefix accepts any record whose first
+// byte happens to be no larger than what follows it — and a bare absolute path
+// starts with `/`, which is 47. So a bare record in a column-aware container
+// comes back as a path with its first byte eaten and its tail cut off, with no
+// error, whenever the path is longer than 48 bytes; and as an error only when it
+// is shorter. Which of the two a caller sees then depends on something as
+// incidental as `$TMPDIR`.
+
+/// A bare record under bit 4 is refused, whatever its length happens to be.
+#[test]
+fn a_bare_record_under_bit_4_is_refused_rather_than_truncated() {
+    use codetracer_trace_reader::interning_tables_reader::InterningTablesReader;
+    use codetracer_trace_writer::meta_dat::FLAG_HAS_COLUMN_AWARE_STEPS;
+
+    // 62 bytes: long enough that its first byte (`/`, 47) reads as a length
+    // that fits inside the record.
+    let bare = b"/tmp/nix-shell.jrLp9k/.tmpAbCdEf/nim_value_before_step_col.src".to_vec();
+    assert!(bare.len() > 48 && bare[0] == b'/');
+
+    let dir = tempfile::tempdir().unwrap();
+    let ct = write_paths_container(&dir, "bare-under-bit4.ct", &[bare], FLAG_HAS_COLUMN_AWARE_STEPS);
+
+    let mut reader = codetracer_ctfs::CtfsReader::open(&ct).unwrap();
+    let it = InterningTablesReader::open(&mut reader).expect("open ok").expect("paths.dat present");
+    match it.path_str(0) {
+        Err(e) => assert!(e.contains("paths.dat: record 0"), "the refusal must name the record; got: {e}"),
+        Ok(p) => panic!(
+            "a bare record in a column-aware container is not a Layout A record and must be refused; \
+             it decoded to {p:?}"
+        ),
+    }
+}
+
+/// The control: a well-formed Layout A record under bit 4 resolves to exactly
+/// its path, with and without a per-line table.
+#[test]
+fn a_layout_a_record_under_bit_4_resolves_to_its_path() {
+    use codetracer_trace_reader::interning_tables_reader::InterningTablesReader;
+    use codetracer_trace_writer::column_aware::encode_path_record_layout_a;
+    use codetracer_trace_writer::meta_dat::FLAG_HAS_COLUMN_AWARE_STEPS;
+
+    let long = "/tmp/nix-shell.jrLp9k/.tmpAbCdEf/nim_value_before_step_col.src";
+    let dir = tempfile::tempdir().unwrap();
+    let ct = write_paths_container(
+        &dir,
+        "layout-a.ct",
+        &[
+            encode_path_record_layout_a(long, &[]),
+            encode_path_record_layout_a("/src/b.nr", &[4, 12, 1, 30]),
+        ],
+        FLAG_HAS_COLUMN_AWARE_STEPS,
+    );
+
+    let mut reader = codetracer_ctfs::CtfsReader::open(&ct).unwrap();
+    let it = InterningTablesReader::open(&mut reader).expect("open ok").expect("paths.dat present");
+    assert_eq!(it.path_str(0).unwrap(), long);
+    assert_eq!(it.path_str(1).unwrap(), "/src/b.nr");
+}
+
+/// A Layout A record with bytes after its per-line table is refused: the
+/// record's length is known from `paths.off`, so a surplus means the record was
+/// not written in this layout.
+#[test]
+fn a_layout_a_record_with_trailing_bytes_is_refused() {
+    use codetracer_trace_reader::interning_tables_reader::InterningTablesReader;
+    use codetracer_trace_writer::column_aware::encode_path_record_layout_a;
+    use codetracer_trace_writer::meta_dat::FLAG_HAS_COLUMN_AWARE_STEPS;
+
+    let mut rec = encode_path_record_layout_a("/src/a.nr", &[3, 5]);
+    rec.push(0x01);
+    let dir = tempfile::tempdir().unwrap();
+    let ct = write_paths_container(&dir, "layout-a-trailing.ct", &[rec], FLAG_HAS_COLUMN_AWARE_STEPS);
+
+    let mut reader = codetracer_ctfs::CtfsReader::open(&ct).unwrap();
+    let it = InterningTablesReader::open(&mut reader).expect("open ok").expect("paths.dat present");
+    let err = it.path_str(0).expect_err("a surplus byte after line_lengths must be refused");
+    assert!(err.contains("trailing"), "the refusal must say what is wrong; got: {err}");
 }

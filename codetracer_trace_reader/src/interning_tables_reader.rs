@@ -164,6 +164,44 @@ fn decode_line_count_path_record(raw: &[u8], id: usize) -> Result<(&[u8], u64), 
     Ok((payload, count))
 }
 
+/// Split a Layout A `paths.dat` record into its path payload, decoding it whole.
+///
+/// The record is `path_len + path + line_count + line_lengths × line_count`,
+/// the lengths zigzag varints (`codetracer-trace-format-spec/internal-files.md`
+/// §"`paths.dat` Layout A"). Only the path is returned, but the per-line table
+/// is walked to the end and the record must end exactly there. Taking the
+/// `path_len` prefix alone accepts any record whose first byte is no larger
+/// than what follows it — a bare absolute path starts with `/`, which is 47 —
+/// and answers with that record's bytes 1..48 as the path, silently.
+fn decode_layout_a_path_record(raw: &[u8], id: usize) -> Result<&[u8], String> {
+    let (payload, line_count, mut pos) = decode_framed_path_record(raw, id)?;
+    // Each entry is at least one byte, so a count larger than what is left
+    // cannot be satisfied — refused before the walk rather than after it.
+    let left = (raw.len() - pos) as u64;
+    if line_count > left {
+        return Err(format!(
+            "paths.dat: record {id} states line_count {line_count} with only {left} byte(s) left for its Layout A line_lengths"
+        ));
+    }
+    let mut previous: i64 = 0;
+    for i in 0..line_count {
+        let zigzag = decode_varint(raw, &mut pos).map_err(|e| format!("paths.dat: record {id} line_lengths[{i}]: {e}"))?;
+        let v = ((zigzag >> 1) as i64) ^ -((zigzag & 1) as i64);
+        let length = if i == 0 { v } else { previous.wrapping_add(v) };
+        if length < 0 {
+            return Err(format!("paths.dat: record {id} line_lengths[{i}] decodes negative ({length})"));
+        }
+        previous = length;
+    }
+    if pos != raw.len() {
+        return Err(format!(
+            "paths.dat: record {id} has {} trailing byte(s) after its Layout A line_lengths — it was not written in the layout meta.dat bit 4 declares",
+            raw.len() - pos
+        ));
+    }
+    Ok(payload)
+}
+
 /// A single Variable-Size Record Table: the `.dat` data file plus its parsed
 /// `.off` offset index. Records are resolved by 0-based id with O(1) random
 /// access.
@@ -366,13 +404,16 @@ impl InterningTablesReader {
     /// Resolve a path id to its file path (raw bytes; UTF-8 for the recorders).
     pub fn path(&self, path_id: u64) -> Result<Vec<u8>, String> {
         let raw = self.paths.record(path_id as usize)?;
-        if self.line_counts.is_empty() && !self.column_aware {
+        if self.column_aware {
+            // Layout A: the path is the framed payload, and the rest of the
+            // record is its per-line table. Bit 4 permits a zero count.
+            return Ok(decode_layout_a_path_record(raw, path_id as usize)?.to_vec());
+        }
+        if self.line_counts.is_empty() {
             return Ok(raw.to_vec());
         }
-        // Layout A: the record is `path_len + path + line_count + …`, so the
-        // path is the framed payload and not the whole record. Bit 14 and bit 4
-        // both select this framing; bit 14 additionally forbids a zero count,
-        // which bit 4 alone permits.
+        // The bit-14 line-count record: Layout A's framing without its per-line
+        // table. `open` already decoded every one of these whole.
         Ok(decode_framed_path_record(raw, path_id as usize)?.0.to_vec())
     }
 

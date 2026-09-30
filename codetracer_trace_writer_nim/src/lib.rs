@@ -1112,6 +1112,10 @@ pub fn read_span_stream_json(path: &Path, settled: bool) -> Result<String, Box<d
 /// between values to clear the buffer without deallocating.
 pub struct StreamingValueEncoder {
     handle: *mut std::ffi::c_void,
+    /// The first failure a `ct_value_*` call reported since the last
+    /// [`take_failure`](Self::take_failure). A failed write leaves the CBOR
+    /// buffer malformed, so a caller that uses the bytes must know.
+    failure: Option<String>,
 }
 
 impl Default for StreamingValueEncoder {
@@ -1126,12 +1130,26 @@ impl StreamingValueEncoder {
         ensure_nim_initialized();
         let handle = unsafe { ct_value_encoder_new() };
         assert!(!handle.is_null(), "ct_value_encoder_new returned null");
-        StreamingValueEncoder { handle }
+        StreamingValueEncoder { handle, failure: None }
     }
 
     /// Reset the encoder for reuse (clears buffer, resets nesting stack).
     pub fn reset(&mut self) {
         unsafe { ct_value_encoder_reset(self.handle) }
+    }
+
+    /// Record the first failure a `ct_value_*` call reports.
+    fn check(&mut self, rc: i32) {
+        if rc != 0 && self.failure.is_none() {
+            self.failure = Some(format!("value encoder: {}", last_error()));
+        }
+    }
+
+    /// The first failure since the last call, if any; clears it. A caller
+    /// that took bytes from [`encode`](Self::encode) must not use them when
+    /// this is `Some`.
+    pub fn take_failure(&mut self) -> Option<String> {
+        self.failure.take()
     }
 
     /// Encode a `ValueRecord` into the internal CBOR buffer.
@@ -1170,44 +1188,44 @@ impl StreamingValueEncoder {
 
     /// Write an integer value.
     pub fn write_int(&mut self, value: i64, type_id: TypeId) {
-        unsafe { ct_value_write_int(self.handle, value, type_id.0 as u64) };
+        self.check(unsafe { ct_value_write_int(self.handle, value, type_id.0 as u64) });
     }
 
     /// Write a floating-point value.
     pub fn write_float(&mut self, value: f64, type_id: TypeId) {
-        unsafe { ct_value_write_float(self.handle, value, type_id.0 as u64) };
+        self.check(unsafe { ct_value_write_float(self.handle, value, type_id.0 as u64) });
     }
 
     /// Write a boolean value.
     pub fn write_bool(&mut self, value: bool, type_id: TypeId) {
-        unsafe { ct_value_write_bool_typed(self.handle, if value { 1 } else { 0 }, type_id.0 as u64) };
+        self.check(unsafe { ct_value_write_bool_typed(self.handle, if value { 1 } else { 0 }, type_id.0 as u64) });
     }
 
     /// Write a string value.
     pub fn write_string(&mut self, text: &str, type_id: TypeId) {
-        unsafe { ct_value_write_string(self.handle, text.as_ptr(), text.len(), type_id.0 as u64) };
+        self.check(unsafe { ct_value_write_string(self.handle, text.as_ptr(), text.len(), type_id.0 as u64) });
     }
 
     /// Write a None/null value.
     pub fn write_none(&mut self, type_id: TypeId) {
-        unsafe { ct_value_write_none_typed(self.handle, type_id.0 as u64) };
+        self.check(unsafe { ct_value_write_none_typed(self.handle, type_id.0 as u64) });
     }
 
     /// Write a raw string representation (for types without structured encoding).
     pub fn write_raw(&mut self, repr: &str, type_id: TypeId) {
-        unsafe { ct_value_write_raw(self.handle, repr.as_ptr(), repr.len(), type_id.0 as u64) };
+        self.check(unsafe { ct_value_write_raw(self.handle, repr.as_ptr(), repr.len(), type_id.0 as u64) });
     }
 
     /// Write an error sentinel value.
     pub fn write_error(&mut self, msg: &str, type_id: TypeId) {
-        unsafe { ct_value_write_error(self.handle, msg.as_ptr(), msg.len(), type_id.0 as u64) };
+        self.check(unsafe { ct_value_write_error(self.handle, msg.as_ptr(), msg.len(), type_id.0 as u64) });
     }
 
     /// Begin a sequence (list/array) with a known element count.
     /// Must be followed by exactly `count` element encodings and one
     /// [`end_compound`](Self::end_compound) call.
     pub fn begin_sequence(&mut self, type_id: TypeId, count: usize) {
-        unsafe { ct_value_begin_sequence(self.handle, type_id.0 as u64, count as i32) };
+        self.check(unsafe { ct_value_begin_sequence(self.handle, type_id.0 as u64, count as i32) });
     }
 
     /// Begin a sequence with an explicit `is_slice` flag.  Use `is_slice =
@@ -1216,76 +1234,78 @@ impl StreamingValueEncoder {
     /// `Array<T>`, etc.).  Must be followed by exactly `count` element
     /// encodings and one [`end_compound`](Self::end_compound) call.
     pub fn begin_sequence_with_slice(&mut self, type_id: TypeId, count: usize, is_slice: bool) {
-        unsafe { ct_value_begin_sequence_with_slice(self.handle, type_id.0 as u64, count as i32, if is_slice { 1 } else { 0 }) };
+        self.check(unsafe { ct_value_begin_sequence_with_slice(self.handle, type_id.0 as u64, count as i32, if is_slice { 1 } else { 0 }) });
     }
 
     /// Begin a tuple with a known element count.
     /// Must be followed by exactly `count` element encodings and one
     /// [`end_compound`](Self::end_compound) call.
     pub fn begin_tuple(&mut self, type_id: TypeId, count: usize) {
-        unsafe { ct_value_begin_tuple(self.handle, type_id.0 as u64, count as i32) };
+        self.check(unsafe { ct_value_begin_tuple(self.handle, type_id.0 as u64, count as i32) });
     }
 
     /// End a compound value (sequence or tuple) started by
     /// [`begin_sequence`](Self::begin_sequence) or
     /// [`begin_tuple`](Self::begin_tuple).
     pub fn end_compound(&mut self) {
-        unsafe { ct_value_end_compound(self.handle) };
+        self.check(unsafe { ct_value_end_compound(self.handle) });
     }
 
     /// Recursively encode a value record into CBOR.
     fn encode_recursive(&mut self, value: &ValueRecord) {
         match value {
             ValueRecord::None { type_id } => {
-                unsafe { ct_value_write_none_typed(self.handle, type_id.0 as u64) };
+                self.check(unsafe { ct_value_write_none_typed(self.handle, type_id.0 as u64) });
             }
             ValueRecord::Int { i, type_id } => {
-                unsafe { ct_value_write_int(self.handle, *i, type_id.0 as u64) };
+                self.check(unsafe { ct_value_write_int(self.handle, *i, type_id.0 as u64) });
             }
             ValueRecord::Float { f, type_id } => {
-                unsafe { ct_value_write_float(self.handle, *f, type_id.0 as u64) };
+                self.check(unsafe { ct_value_write_float(self.handle, *f, type_id.0 as u64) });
             }
             ValueRecord::Bool { b, type_id } => {
-                unsafe { ct_value_write_bool_typed(self.handle, if *b { 1 } else { 0 }, type_id.0 as u64) };
+                self.check(unsafe { ct_value_write_bool_typed(self.handle, if *b { 1 } else { 0 }, type_id.0 as u64) });
             }
             ValueRecord::String { text, type_id } => {
-                unsafe { ct_value_write_string(self.handle, text.as_ptr(), text.len(), type_id.0 as u64) };
+                self.check(unsafe { ct_value_write_string(self.handle, text.as_ptr(), text.len(), type_id.0 as u64) });
             }
             ValueRecord::Raw { r, type_id } => {
-                unsafe { ct_value_write_raw(self.handle, r.as_ptr(), r.len(), type_id.0 as u64) };
+                self.check(unsafe { ct_value_write_raw(self.handle, r.as_ptr(), r.len(), type_id.0 as u64) });
             }
             ValueRecord::Error { msg, type_id } => {
-                unsafe { ct_value_write_error(self.handle, msg.as_ptr(), msg.len(), type_id.0 as u64) };
+                self.check(unsafe { ct_value_write_error(self.handle, msg.as_ptr(), msg.len(), type_id.0 as u64) });
             }
             ValueRecord::Sequence { elements, is_slice, type_id } => {
-                unsafe { ct_value_begin_sequence_with_slice(self.handle, type_id.0 as u64, elements.len() as i32, if *is_slice { 1 } else { 0 }) };
+                self.check(unsafe {
+                    ct_value_begin_sequence_with_slice(self.handle, type_id.0 as u64, elements.len() as i32, if *is_slice { 1 } else { 0 })
+                });
                 for elem in elements {
                     self.encode_recursive(elem);
                 }
-                unsafe { ct_value_end_compound(self.handle) };
+                self.check(unsafe { ct_value_end_compound(self.handle) });
             }
             ValueRecord::Tuple { elements, type_id } => {
-                unsafe { ct_value_begin_tuple(self.handle, type_id.0 as u64, elements.len() as i32) };
+                self.check(unsafe { ct_value_begin_tuple(self.handle, type_id.0 as u64, elements.len() as i32) });
                 for elem in elements {
                     self.encode_recursive(elem);
                 }
-                unsafe { ct_value_end_compound(self.handle) };
+                self.check(unsafe { ct_value_end_compound(self.handle) });
             }
             ValueRecord::Struct { field_values, type_id } => {
-                unsafe { ct_value_begin_struct(self.handle, type_id.0 as u64, field_values.len() as i32) };
+                self.check(unsafe { ct_value_begin_struct(self.handle, type_id.0 as u64, field_values.len() as i32) });
                 for elem in field_values {
                     self.encode_recursive(elem);
                 }
-                unsafe { ct_value_end_compound(self.handle) };
+                self.check(unsafe { ct_value_end_compound(self.handle) });
             }
             ValueRecord::Variant {
                 discriminator,
                 contents,
                 type_id,
             } => {
-                unsafe { ct_value_begin_variant(self.handle, discriminator.as_ptr(), discriminator.len(), type_id.0 as u64) };
+                self.check(unsafe { ct_value_begin_variant(self.handle, discriminator.as_ptr(), discriminator.len(), type_id.0 as u64) });
                 self.encode_recursive(contents);
-                unsafe { ct_value_end_compound(self.handle) };
+                self.check(unsafe { ct_value_end_compound(self.handle) });
             }
             ValueRecord::Reference {
                 dereferenced,
@@ -1293,12 +1313,12 @@ impl StreamingValueEncoder {
                 mutable,
                 type_id,
             } => {
-                unsafe { ct_value_begin_reference(self.handle, *address, if *mutable { 1 } else { 0 }, type_id.0 as u64) };
+                self.check(unsafe { ct_value_begin_reference(self.handle, *address, if *mutable { 1 } else { 0 }, type_id.0 as u64) });
                 self.encode_recursive(dereferenced);
-                unsafe { ct_value_end_compound(self.handle) };
+                self.check(unsafe { ct_value_end_compound(self.handle) });
             }
             ValueRecord::Char { c, type_id } => {
-                unsafe { ct_value_write_char(self.handle, *c as u32, type_id.0 as u64) };
+                self.check(unsafe { ct_value_write_char(self.handle, *c as u32, type_id.0 as u64) });
             }
             ValueRecord::BigInt { b, negative, type_id } => {
                 let (ptr, len) = if b.is_empty() {
@@ -1306,7 +1326,7 @@ impl StreamingValueEncoder {
                 } else {
                     (b.as_ptr(), b.len())
                 };
-                unsafe { ct_value_write_bigint(self.handle, ptr, len, if *negative { 1 } else { 0 }, type_id.0 as u64) };
+                self.check(unsafe { ct_value_write_bigint(self.handle, ptr, len, if *negative { 1 } else { 0 }, type_id.0 as u64) });
             }
             // Cell has no streaming-encoder counterpart yet — its CBOR shape
             // (`{ "kind":"Cell", "place": int }`) only appears in tracer-side
@@ -1314,7 +1334,7 @@ impl StreamingValueEncoder {
             // string so the data is at least preserved for inspection.
             ValueRecord::Cell { .. } => {
                 let (repr, _kind) = value_record_to_raw(value);
-                unsafe { ct_value_write_raw(self.handle, repr.as_ptr(), repr.len(), 0) };
+                self.check(unsafe { ct_value_write_raw(self.handle, repr.as_ptr(), repr.len(), 0) });
             }
         }
     }
@@ -1344,6 +1364,10 @@ unsafe impl Send for StreamingValueEncoder {}
 /// is required.
 pub struct NimTraceWriter {
     handle: *mut std::ffi::c_void,
+    /// The first failure of an operation that has no `Result` to report it
+    /// through (a value the streaming encoder could not encode); `close`
+    /// returns it.
+    deferred_error: Option<String>,
     /// Reusable streaming value encoder — avoids allocation per value for
     /// compound types (sequences, tuples, dicts) by encoding directly to CBOR.
     streaming_encoder: StreamingValueEncoder,
@@ -1443,6 +1467,7 @@ impl NimTraceWriter {
             column_aware: false,
             discarded_records: std::collections::BTreeMap::new(),
             strict: strict_from_env_value(std::env::var(STRICT_ENV).ok().as_deref()),
+            deferred_error: None,
             discards_reported: false,
         }
     }
@@ -1524,11 +1549,32 @@ impl NimTraceWriter {
     /// discover as missing data.
     pub fn close(&mut self) -> Result<(), Box<dyn Error>> {
         self.report_discarded_records();
-        if !self.handle.is_null() {
+        let closed = if !self.handle.is_null() {
             let rc = unsafe { trace_writer_close(self.handle) };
             check_result(rc)
         } else {
             Ok(())
+        };
+        // A value that could not be encoded was not written; the container is
+        // finalized, but the close fails with the first such failure, as the
+        // Nim writer's own close does for a failed `void` call.
+        match self.deferred_error.take() {
+            Some(e) if closed.is_ok() => Err(format!("the trace is incomplete: {e}").into()),
+            _ => closed,
+        }
+    }
+
+    /// Encode `value` through the streaming encoder, or — when the encoder
+    /// reported a failure — record it for [`close`](Self::close) and return
+    /// `None`, so malformed bytes never reach the writer.
+    fn encode_value(&mut self, value: &ValueRecord) -> Option<Vec<u8>> {
+        let bytes = self.streaming_encoder.encode(value).to_vec();
+        match self.streaming_encoder.take_failure() {
+            None => Some(bytes),
+            Some(e) => {
+                self.deferred_error.get_or_insert(e);
+                None
+            }
         }
     }
 
@@ -1756,8 +1802,9 @@ impl NimTraceWriter {
             // downgraded Bool/String/Float/Char to a stringified `Raw`
             // value (incident: ct-print rendering `true` as `Raw{r:"true"}`).
             _ => {
-                let cbor = self.streaming_encoder.encode(&return_value);
-                unsafe { trace_writer_register_return_cbor(self.handle, cbor.as_ptr(), cbor.len()) }
+                if let Some(cbor) = self.encode_value(&return_value) {
+                    unsafe { trace_writer_register_return_cbor(self.handle, cbor.as_ptr(), cbor.len()) }
+                }
             }
         }
     }
@@ -1776,8 +1823,9 @@ impl NimTraceWriter {
             // which broke ct-print and any consumer that relied on the
             // typed `kind` field of the decoded value.
             _ => {
-                let cbor = self.streaming_encoder.encode(&value);
-                unsafe { trace_writer_register_variable_cbor(self.handle, c_name.as_ptr(), cbor.as_ptr(), cbor.len()) }
+                if let Some(cbor) = self.encode_value(&value) {
+                    unsafe { trace_writer_register_variable_cbor(self.handle, c_name.as_ptr(), cbor.as_ptr(), cbor.len()) }
+                }
             }
         }
     }
@@ -2385,7 +2433,7 @@ impl NimTraceWriter {
         //      `format_board(board=[[5,3,4,...]])`.
         self.register_variable_with_full_value(name, value.clone());
 
-        let cbor = self.streaming_encoder.encode(&value).to_vec();
+        let cbor = self.encode_value(&value).unwrap_or_default();
         let c_name = str_to_cstring(name);
         unsafe {
             trace_writer_register_call_arg(self.handle, c_name.as_ptr(), cbor.as_ptr(), cbor.len());
@@ -2646,7 +2694,9 @@ impl NimTraceWriter {
                 // multi-stream writer attaches them to the call record (mirrors
                 // what `arg()` does for the streaming-style API).
                 for full in &rec.args {
-                    let cbor = self.streaming_encoder.encode(&full.value).to_vec();
+                    let Some(cbor) = self.encode_value(&full.value) else {
+                        continue;
+                    };
                     let name = self
                         .variable_table
                         .get(full.variable_id.0)

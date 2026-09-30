@@ -417,6 +417,24 @@ impl InterningTablesReader {
         Ok(decode_framed_path_record(raw, path_id as usize)?.0.to_vec())
     }
 
+    /// Whether `paths.dat` records are Layout A (`meta.dat` bit 4).
+    pub fn is_column_aware(&self) -> bool {
+        self.column_aware
+    }
+
+    /// A Layout A record's per-line addressable column counts; empty for a
+    /// file whose recorder supplied none, and for every record of a trace
+    /// that is not column-aware.
+    pub fn path_line_lengths(&self, path_id: u64) -> Result<Vec<u32>, String> {
+        if !self.column_aware {
+            return Ok(Vec::new());
+        }
+        let raw = self.paths.record(path_id as usize)?;
+        decode_layout_a_path_record(raw, path_id as usize)?;
+        let (_, lls) = codetracer_trace_writer::column_aware::decode_path_record_layout_a(raw)?;
+        Ok(lls)
+    }
+
     /// Resolve a path id to its file path as a `String` (lossy UTF-8).
     pub fn path_str(&self, path_id: u64) -> Result<String, String> {
         Ok(String::from_utf8_lossy(&self.path(path_id)?).into_owned())

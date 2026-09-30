@@ -420,6 +420,43 @@ impl PositionSpace {
         }
         base + line.saturating_sub(1)
     }
+
+    /// Recover `(path_id, line, column)` from a `global_position_index` — the
+    /// inverse of [`position_of`](Self::position_of) plus a column offset.
+    ///
+    /// In a file with a per-line table the column is 1-based within its line;
+    /// in a file without one (line-only, or a column-aware trace's untabled
+    /// file, sized [`DEFAULT_LINES_PER_FILE`]) one address is one line and the
+    /// column is `None`. `None` for an address past the end of the space.
+    pub fn resolve(&mut self, position: u64) -> Option<(u64, u64, Option<u64>)> {
+        if self.dirty {
+            self.rebuild();
+        }
+        if self.prefix_sum.is_empty() {
+            return None;
+        }
+        let file = self.prefix_sum.partition_point(|base| *base <= position).checked_sub(1)?;
+        let base = self.prefix_sum[file];
+        let offset = position - base;
+        let lls = &self.line_lengths[file];
+        if self.column_aware && !lls.is_empty() {
+            let mut line_base: u64 = 0;
+            for (i, len) in lls.iter().enumerate() {
+                let len = u64::from(*len);
+                if offset < line_base + len {
+                    return Some((file as u64, i as u64 + 1, Some(offset - line_base + 1)));
+                }
+                line_base += len;
+            }
+            // Past the file's last line: only a zero-length table can land
+            // here, because slots are exactly `sum(line_lengths)` wide.
+            return None;
+        }
+        if offset >= DEFAULT_LINES_PER_FILE {
+            return None;
+        }
+        Some((file as u64, offset + 1, None))
+    }
 }
 
 // --- paths.dat Layout A ------------------------------------------------------
@@ -966,5 +1003,30 @@ mod tests {
             "control: the streaming API is the one that omits the pledge"
         );
         assert_ne!(out.dat, streaming, "control: the two APIs really do differ in bytes");
+    }
+
+    /// `resolve` inverts `position_of` at every column of every line, in a
+    /// space mixing tabled and untabled files, and refuses past the end.
+    #[test]
+    fn resolve_inverts_position_of_in_a_mixed_space() {
+        let mut space = PositionSpace::new(true);
+        space.push_path(&[3, 5]);
+        space.push_path(&[]);
+        space.push_path(&[4]);
+        for (file, table) in [(0u64, vec![3u64, 5]), (2, vec![4])] {
+            for (li, len) in table.iter().enumerate() {
+                let line = li as u64 + 1;
+                for col in 1..=*len {
+                    let pos = space.position_of(file, line) + col - 1;
+                    assert_eq!(space.resolve(pos), Some((file, line, Some(col))), "file {file} line {line} col {col}");
+                }
+            }
+        }
+        let untabled = space.position_of(1, 42);
+        assert_eq!(untabled, 8 + 41);
+        assert_eq!(space.resolve(untabled), Some((1, 42, None)));
+        let end = 8 + DEFAULT_LINES_PER_FILE + 4;
+        assert_eq!(space.resolve(end - 1), Some((2, 1, Some(4))));
+        assert_eq!(space.resolve(end), None, "one past the end of the space");
     }
 }

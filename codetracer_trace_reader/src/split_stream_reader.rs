@@ -167,6 +167,27 @@ pub fn read_window(reader: &mut CtfsReader, start_step: u64, max_steps: u64) -> 
         LinePositionSpace::from_line_counts(line_counts)
     };
 
+    // STEP addresses are a different space in a column-aware trace: each
+    // `global_position_index` names a `(line, column)` pair, a file with a
+    // per-line table is `sum(line_lengths)` addresses wide and one without is
+    // `DEFAULT_LINES_PER_FILE` (`trace-events.md` §"Source Location
+    // Addressing"). Resolving those through the line space above read a
+    // column as a line and placed every later file at the wrong base.
+    // `funcs.dat` addresses stay line addresses in both modes, so `space`
+    // above is still the one functions resolve through.
+    let mut step_space = if tables.is_column_aware() {
+        let mut ps = codetracer_trace_writer::column_aware::PositionSpace::new(true);
+        for path_id in 0..tables.path_count() {
+            let lls = tables
+                .path_line_lengths(path_id as u64)
+                .map_err(|e| format!("split-stream reader: path {path_id}'s line table is unreadable: {e}"))?;
+            ps.push_path(&lls);
+        }
+        Some(ps)
+    } else {
+        None
+    };
+
     for function_id in 0..tables.func_count() {
         let f = tables
             .func(function_id as u64)
@@ -267,9 +288,17 @@ pub fn read_window(reader: &mut CtfsReader, start_step: u64, max_steps: u64) -> 
                 global_position_index: global_line_index,
                 ..
             } => {
-                let (path_id, line) = space
-                    .resolve(global_line_index)
-                    .map_err(|e| format!("split-stream reader: step {i} has an undecodable position {global_line_index}: {e:?}"))?;
+                let (path_id, line) = match step_space.as_mut() {
+                    Some(ps) => {
+                        let (file, line, _column) = ps.resolve(global_line_index).ok_or_else(|| {
+                            format!("split-stream reader: step {i} has position {global_line_index}, outside the column-aware space")
+                        })?;
+                        (file as usize, line as i64)
+                    }
+                    None => space
+                        .resolve(global_line_index)
+                        .map_err(|e| format!("split-stream reader: step {i} has an undecodable position {global_line_index}: {e:?}"))?,
+                };
                 out.push(TraceLowLevelEvent::Step(StepRecord {
                     path_id: PathId(path_id),
                     line: Line(line),

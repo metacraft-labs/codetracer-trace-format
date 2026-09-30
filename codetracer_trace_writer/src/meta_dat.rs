@@ -7,13 +7,14 @@
 //! new `has_call_stream` capability flag (bit 8) can be carried in the canonical
 //! place, and read that flag back in the Rust reader.
 //!
-//! Layout (version 4), per
+//! Layout (version 4; version 5 inserts a `flags_ext` word, marked below), per
 //! `codetracer-trace-format-spec/internal-files.md` §"Metadata (meta.dat)":
 //!
 //! ```text
 //!   [4] magic "CTMD"
 //!   [2] version u16 LE (4)
 //!   [2] flags   u16 LE
+//!   [4] flags_ext u32 LE          (version 5 only)
 //!   varint-prefixed recording_id (UUIDv7, 36-char canonical form)
 //!   varint-prefixed program
 //!   varint args_count, then varint-prefixed arg strings
@@ -45,6 +46,8 @@
 //!   shim, and one is not merely unimplemented: subtracting one from every
 //!   address would correct a trace the old writer produced, but the version is
 //!   what would have said it did.
+//! * **v5** — a `[4] flags_ext u32 LE` word after the u16 flags, written only
+//!   when an extended flag is set; see [`META_DAT_VERSION_EXTENDED_FLAGS`].
 
 /// `meta.dat` magic bytes ("CTMD").
 pub const META_DAT_MAGIC: [u8; 4] = [0x43, 0x54, 0x4D, 0x44];

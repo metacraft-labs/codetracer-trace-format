@@ -32,11 +32,9 @@ use codetracer_trace_writer::value_stream::{ValueRecordEntry, ValueStreamBuilder
 ///
 /// across enough steps to cross several small `values.dat` chunks. Returns the
 /// `.ct` path.
-fn write_trace(dir: &tempfile::TempDir, with_value_stream: bool, values_chunk_size: usize) -> std::path::PathBuf {
+fn write_trace(dir: &tempfile::TempDir, values_chunk_size: usize) -> std::path::PathBuf {
     let path_buf = dir.path().join("trace");
-    let mut writer = CtfsTraceWriter::new("test_program", &[])
-        .with_value_stream(with_value_stream)
-        .with_values_chunk_size(values_chunk_size);
+    let mut writer = CtfsTraceWriter::new("test_program", &[]).with_values_chunk_size(values_chunk_size);
     TraceWriter::begin_writing_trace_events(&mut writer, &path_buf).unwrap();
 
     let src = Path::new("/test/prog.rs");
@@ -93,7 +91,7 @@ fn values_dat_matches_events_log() {
     let dir = tempfile::tempdir().unwrap();
     // A small chunk size so the records span multiple chunks and the round-trip
     // exercises per-chunk independent decode.
-    let ct_path = write_trace(&dir, true, 4);
+    let ct_path = write_trace(&dir, 4);
 
     let mut vs = codetracer_trace_reader::value_stream_reader::open_value_stream(&ct_path)
         .expect("open_value_stream ok")
@@ -132,7 +130,7 @@ fn values_dat_matches_events_log() {
 #[test]
 fn seek_to_step_values_across_chunk_boundary() {
     let dir = tempfile::tempdir().unwrap();
-    let ct_path = write_trace(&dir, true, 4);
+    let ct_path = write_trace(&dir, 4);
 
     let mut vs = codetracer_trace_reader::value_stream_reader::open_value_stream(&ct_path)
         .unwrap()
@@ -161,7 +159,7 @@ fn seek_to_step_values_across_chunk_boundary() {
 #[test]
 fn fetching_one_step_decompresses_only_its_chunk() {
     let dir = tempfile::tempdir().unwrap();
-    let ct_path = write_trace(&dir, true, 4);
+    let ct_path = write_trace(&dir, 4);
 
     let mut vs = codetracer_trace_reader::value_stream_reader::open_value_stream(&ct_path)
         .unwrap()
@@ -196,20 +194,11 @@ fn fetching_one_step_decompresses_only_its_chunk() {
     assert_eq!(vs.cached_chunk(), Some(0));
 }
 
-#[test]
-fn legacy_trace_has_no_value_stream() {
-    let dir = tempfile::tempdir().unwrap();
-    let ct_path = write_trace(&dir, false, 4);
-
-    // No dedicated value stream when the flag is off.
-    let vs = codetracer_trace_reader::value_stream_reader::open_value_stream(&ct_path).unwrap();
-    assert!(vs.is_none(), "a flag-off trace must not expose a value stream");
-
-    // ...and the unified events.log still reads exactly as before, with the
-    // same per-step value records derivable from it.
-    let expected = expected_records_from_events(&ct_path);
-    assert!(!expected.is_empty());
-}
+// `legacy_trace_has_no_value_stream` WAS HERE AND IS GONE: it wrote a trace
+// with the value stream switched off. Every event kind has exactly one stream
+// to live in (`trace-events.md` §"Event Variants by Stream"), so a writer with
+// that stream off drops every value it is given; the switch was removed with
+// the mode.
 
 #[test]
 fn forward_compat_chunk_records_decode_unknown_tags() {

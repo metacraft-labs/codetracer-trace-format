@@ -36,7 +36,7 @@ const N: usize = 40;
 /// path/line), a handful of types, and N variable names. Returns the `.ct` path.
 fn write_trace(dir: &tempfile::TempDir) -> std::path::PathBuf {
     let path_buf = dir.path().join("trace");
-    let mut writer = CtfsTraceWriter::new("test_program", &[]).with_interning_tables(true);
+    let mut writer = CtfsTraceWriter::new("test_program", &[]);
     TraceWriter::begin_writing_trace_events(&mut writer, &path_buf).unwrap();
 
     // `start` interns the toplevel path/function and the None type.

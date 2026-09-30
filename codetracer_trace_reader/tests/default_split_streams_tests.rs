@@ -5,8 +5,8 @@
 //! step/value/io-event/interning splits were opt-in. M23e-4 flips all five on by
 //! default so even non-production (tests/legacy) Rust-writer bundles are the spec
 //! split format, while STILL emitting `events.log` (additive — M23e-5 removes
-//! it). Each `with_*_stream(false)` lever remains the explicit disable used by
-//! tests of the legacy `events.log` postprocessing path.
+//! it). `events.log` has since been retired, and with it the levers that
+//! switched split streams off: every stream is always written.
 //!
 //! These tests pin:
 //!  1. A DEFAULT bundle carries ALL five split streams (`calls`/`steps`/`values`/
@@ -15,9 +15,6 @@
 //!  2. The split streams round-trip: the events re-read through the normal
 //!     CTFS reader (which decodes `events.log`) equal what was written, and the
 //!     split `steps.dat`/`values.dat` are consistent with that event stream.
-//!  3. A fully-disabled (`with_*_stream(false)`) bundle is `events.log`-only:
-//!     none of the split files are present, no `meta.dat`, and the events still
-//!     round-trip — the legacy path is preserved verbatim.
 
 use std::path::{Path, PathBuf};
 
@@ -32,20 +29,9 @@ use codetracer_trace_writer::trace_writer::TraceWriter;
 /// a captured argument, a local variable value, and an I/O event — so every
 /// split stream has real content. Returns the `.ct` path.
 ///
-/// When `disable_splits` is set, ALL split streams are explicitly turned off via
-/// the `with_*_stream(false)` levers, producing the legacy `events.log`-only
-/// bundle (the call stream too, so the bundle is fully legacy).
-fn write_trace(dir: &Path, disable_splits: bool) -> PathBuf {
+fn write_trace(dir: &Path) -> PathBuf {
     let path_buf = dir.join("trace");
     let mut writer = CtfsTraceWriter::new("test_program", &[]);
-    if disable_splits {
-        writer = writer
-            .with_call_stream(false)
-            .with_step_stream(false)
-            .with_value_stream(false)
-            .with_io_event_stream(false)
-            .with_interning_tables(false);
-    }
     TraceWriter::begin_writing_trace_events(&mut writer, &path_buf).unwrap();
 
     let src = Path::new("/test/prog.rs");
@@ -103,7 +89,7 @@ const SPLIT_DATA_FILES: &[&str] = &[
 #[test]
 fn default_bundle_emits_all_split_streams_and_no_events_log() {
     let dir = tempfile::tempdir().unwrap();
-    let ct = write_trace(dir.path(), false);
+    let ct = write_trace(dir.path());
 
     let mut r = codetracer_ctfs::CtfsReader::open(&ct).unwrap();
 
@@ -135,7 +121,7 @@ fn default_bundle_emits_all_split_streams_and_no_events_log() {
 #[test]
 fn default_bundle_events_round_trip_via_events_log() {
     let dir = tempfile::tempdir().unwrap();
-    let ct = write_trace(dir.path(), false);
+    let ct = write_trace(dir.path());
 
     let mut reader = codetracer_trace_reader::create_trace_reader(codetracer_trace_reader::TraceEventsFileFormat::Ctfs);
     let events = reader.load_trace_events(&ct).unwrap();
@@ -164,11 +150,10 @@ fn default_bundle_events_round_trip_via_events_log() {
     );
 }
 
-// `disabled_bundle_is_events_log_only_legacy` WAS HERE AND IS GONE.
-//
-// It pinned the mode in which every `with_*_stream(false)` lever was pulled and
-// the bundle carried ONLY `events.log`. With that stream removed, the same
-// levers produce a container with no event data at all, so the mode it tested
-// no longer describes anything a writer can do. The levers themselves remain
-// meaningful per stream — a bundle without a value stream is still a bundle —
-// but "all of them off" is now an empty recording rather than a legacy one.
+// `disabled_bundle_is_events_log_only_legacy` WAS HERE AND IS GONE, and so
+// are the `with_*_stream(false)` levers it pulled. Every event kind has exactly
+// one stream to live in (`trace-events.md` §"Event Variants by Stream"), so a
+// writer with a stream switched off drops that kind of event; with the step
+// stream off it wrote no execution data at all and still finished as a
+// success. With `events.log` retired there is no other place for the data, so
+// there is no such mode.

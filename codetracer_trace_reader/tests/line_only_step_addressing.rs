@@ -31,7 +31,7 @@ const UTIL_SRC: &str = "/test/util.rs";
 /// return the `.ct` path plus the `(path_id, line)` sequence it recorded.
 fn write_three_path_trace(dir: &tempfile::TempDir) -> (std::path::PathBuf, Vec<(usize, i64)>) {
     let path_buf = dir.path().join("trace");
-    let mut writer = CtfsTraceWriter::new("three_paths", &[]).with_step_stream(true);
+    let mut writer = CtfsTraceWriter::new("three_paths", &[]);
     writer = writer.with_steps_chunk_size(4);
     TraceWriter::begin_writing_trace_events(&mut writer, &path_buf).unwrap();
 

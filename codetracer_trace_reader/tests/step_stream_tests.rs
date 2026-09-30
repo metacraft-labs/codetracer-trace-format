@@ -34,7 +34,7 @@ use codetracer_trace_writer::trace_writer::TraceWriter;
 /// independent expected-sequence cross-check).
 fn write_trace(dir: &tempfile::TempDir, steps_chunk_size: usize) -> (std::path::PathBuf, Vec<i64>) {
     let path_buf = dir.path().join("trace");
-    let mut writer = CtfsTraceWriter::new("test_program", &[]).with_step_stream(true);
+    let mut writer = CtfsTraceWriter::new("test_program", &[]);
     writer = writer.with_steps_chunk_size(steps_chunk_size);
     TraceWriter::begin_writing_trace_events(&mut writer, &path_buf).unwrap();
 

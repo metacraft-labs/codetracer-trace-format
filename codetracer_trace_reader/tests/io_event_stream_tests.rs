@@ -35,9 +35,7 @@ use codetracer_trace_writer::trace_writer::TraceWriter;
 /// `.ct` path.
 fn write_trace(dir: &tempfile::TempDir, events_chunk_size: usize) -> std::path::PathBuf {
     let path_buf = dir.path().join("trace");
-    let mut writer = CtfsTraceWriter::new("test_program", &[])
-        .with_io_event_stream(true)
-        .with_events_chunk_size(events_chunk_size);
+    let mut writer = CtfsTraceWriter::new("test_program", &[]).with_events_chunk_size(events_chunk_size);
     TraceWriter::begin_writing_trace_events(&mut writer, &path_buf).unwrap();
 
     let src = Path::new("/test/prog.rs");

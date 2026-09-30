@@ -25,7 +25,7 @@ use codetracer_trace_writer::trace_writer::TraceWriter;
 ///   (unused_c is defined but never called)
 fn write_trace(dir: &tempfile::TempDir) -> std::path::PathBuf {
     let path_buf = dir.path().join("trace");
-    let mut writer = CtfsTraceWriter::new("test_program", &[]).with_call_stream(true);
+    let mut writer = CtfsTraceWriter::new("test_program", &[]);
     // small chunk size so seeking crosses a chunk boundary in the test
     writer = writer.with_calls_chunk_size(2);
     TraceWriter::begin_writing_trace_events(&mut writer, &path_buf).unwrap();

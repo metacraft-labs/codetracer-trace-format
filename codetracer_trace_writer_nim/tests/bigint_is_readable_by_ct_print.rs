@@ -52,8 +52,7 @@ use codetracer_trace_writer::trace_writer::TraceWriter;
 
 /// The prebuilt production reader from the sibling checkout, if it is there.
 fn ct_print() -> Option<PathBuf> {
-    let p = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../codetracer-trace-format-nim/ct-print");
+    let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../codetracer-trace-format-nim/ct-print");
     p.exists().then(|| p.canonicalize().unwrap_or(p))
 }
 
@@ -88,34 +87,29 @@ fn a_bigint_wider_than_i128_is_read_back_by_the_production_nim_reader() {
         // mutation here. This is also the writer `aztec-avm-runtime/SOURCE-MAPPING.md` §4.2
         // used when it recorded the original `ct-print` refusal.
         let mut w = CtfsTraceWriter::new(program, &[]);
-        TraceWriter::begin_writing_trace_events(&mut w, &dir.path().join(program))
-            .expect("begin events");
+        TraceWriter::begin_writing_trace_events(&mut w, &dir.path().join(program)).expect("begin events");
         w.register_path_with_line_lengths(&src, &[13]);
         AbstractTraceWriter::register_function(&mut w, "main", &src, Line(1));
         AbstractTraceWriter::register_step_with_column(&mut w, &src, Line(1), None);
         AbstractTraceWriter::register_variable_with_full_value(
             &mut w,
             "wide",
-            ValueRecord::BigInt { b: magnitude.clone(), negative: false, type_id: TypeId(0) },
+            ValueRecord::BigInt {
+                b: magnitude.clone(),
+                negative: false,
+                type_id: TypeId(0),
+            },
         );
         // A small Int beside it, so a reader that dropped the whole stream is distinguishable
         // from one that merely rendered the BigInt oddly.
-        AbstractTraceWriter::register_variable_with_full_value(
-            &mut w,
-            "small",
-            ValueRecord::Int { i: 42, type_id: TypeId(0) },
-        );
+        AbstractTraceWriter::register_variable_with_full_value(&mut w, "small", ValueRecord::Int { i: 42, type_id: TypeId(0) });
         TraceWriter::finish_writing_trace_events(&mut w).expect("finish events");
     }
 
     let container = dir.path().join(format!("{program}.ct"));
     assert!(container.exists(), "the writer produced no container at {}", container.display());
 
-    let out = Command::new(&ct_print)
-        .arg("--full")
-        .arg(&container)
-        .output()
-        .expect("run ct-print");
+    let out = Command::new(&ct_print).arg("--full").arg(&container).output().expect("run ct-print");
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
 

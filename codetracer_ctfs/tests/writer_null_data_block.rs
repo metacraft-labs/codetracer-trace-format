@@ -626,12 +626,7 @@ fn the_nim_reader_agrees_with_what_a_reopened_append_wrote_across_a_level_bounda
     expected.extend_from_slice(&tail1);
     expected.extend_from_slice(&tail2);
 
-    let (out, ok) = run_nim_checker(
-        dir.path(),
-        &path,
-        &[("meta.dat", &meta), ("big.dat", &expected)],
-        &["absent.dat"],
-    );
+    let (out, ok) = run_nim_checker(dir.path(), &path, &[("meta.dat", &meta), ("big.dat", &expected)], &["absent.dat"]);
     assert!(
         ok,
         "the independent Nim reader does not agree with the container two reopened appends left \

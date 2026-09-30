@@ -502,7 +502,11 @@ pub fn normalise_to_posix(path: &Path) -> Option<String> {
             Component::ParentDir => parts.push("..".to_string()),
         }
     }
-    if parts.is_empty() { None } else { Some(parts.join("/")) }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("/"))
+    }
 }
 
 /// Convert a normalised relative path (e.g., `pkg/foo.py`) into a dotted
@@ -521,7 +525,11 @@ pub fn module_from_relative(relative: &str) -> Option<String> {
     } else {
         parts.push(last);
     }
-    if parts.is_empty() { None } else { Some(parts.join(".")) }
+    if parts.is_empty() {
+        None
+    } else {
+        Some(parts.join("."))
+    }
 }
 
 /// Return true when the supplied module name is a dotted identifier.

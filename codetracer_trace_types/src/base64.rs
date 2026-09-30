@@ -45,8 +45,7 @@ use serde::de::{Error as DeError, SeqAccess, Visitor};
 use serde::{Deserializer, Serialize, Serializer};
 use std::fmt;
 
-const ENGINE: base64::engine::general_purpose::GeneralPurpose =
-    base64::engine::general_purpose::STANDARD;
+const ENGINE: base64::engine::general_purpose::GeneralPurpose = base64::engine::general_purpose::STANDARD;
 
 pub fn serialize<S: Serializer>(v: &Vec<u8>, s: S) -> Result<S::Ok, S::Error> {
     if s.is_human_readable() {
@@ -120,7 +119,11 @@ mod tests {
         // which is the case `BigInt` exists for and the case that used to poison a trace.
         let mut b = vec![0u8; 26];
         b[0] = 1;
-        ValueRecord::BigInt { b, negative: false, type_id: TypeId(0) }
+        ValueRecord::BigInt {
+            b,
+            negative: false,
+            type_id: TypeId(0),
+        }
     }
 
     /// THE REGRESSION THIS MODULE EXISTS TO PREVENT. The magnitude must land in the CBOR
@@ -221,11 +224,9 @@ mod tests {
         assert!(saw_b, "the record must contain a `b` field");
 
         let mut buf = Vec::new();
-        ciborium::into_writer(&ciborium::value::Value::Map(rewritten), &mut buf)
-            .expect("serialise the old shape");
+        ciborium::into_writer(&ciborium::value::Value::Map(rewritten), &mut buf).expect("serialise the old shape");
 
-        let back: ValueRecord =
-            ciborium::from_reader(&buf[..]).expect("a pre-fix container must still read");
+        let back: ValueRecord = ciborium::from_reader(&buf[..]).expect("a pre-fix container must still read");
         assert_eq!(back, wide_bigint());
     }
 }

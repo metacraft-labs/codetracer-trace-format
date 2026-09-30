@@ -2,12 +2,12 @@ use std::fs::{File, OpenOptions};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use crate::CtfsError;
 use crate::base40::base40_encode;
 use crate::block_alloc::AtomicBlockAllocator;
 use crate::file_entry::FILE_ENTRY_SIZE;
-use crate::header::{EXTENDED_HEADER_SIZE, ExtendedHeader, HEADER_SIZE, Header};
+use crate::header::{ExtendedHeader, Header, EXTENDED_HEADER_SIZE, HEADER_SIZE};
 use crate::pread_compat::{pread_exact, pwrite_all};
+use crate::CtfsError;
 
 /// State for a file entry tracked in the root table.
 #[derive(Debug)]
@@ -392,13 +392,7 @@ impl FileWriter {
     /// `insert` carries what is being placed; the three loose parameters carry
     /// where the descent currently is, and are the only things that change per
     /// level.
-    fn navigate_and_insert(
-        &self,
-        insert: &MappingInsert<'_>,
-        mapping_block: u64,
-        level: u32,
-        idx_within_level: u64,
-    ) -> Result<(), CtfsError> {
+    fn navigate_and_insert(&self, insert: &MappingInsert<'_>, mapping_block: u64, level: u32, idx_within_level: u64) -> Result<(), CtfsError> {
         let MappingInsert {
             parent,
             data_block,

@@ -12,9 +12,9 @@
 //! No mocks: both writers here are the production writer, and the reader is
 //! the production reader operating on a real file.
 
+use codetracer_trace_types::*;
 use codetracer_trace_writer::ctfs_writer::CtfsTraceWriter;
 use codetracer_trace_writer::trace_writer::TraceWriter;
-use codetracer_trace_types::*;
 use std::path::{Path, PathBuf};
 
 /// A pinned id so the two writers agree on `meta.json` / `meta.dat`, which
@@ -41,7 +41,14 @@ fn write_sample_trace(writer: &mut dyn TraceWriter) {
 
     for line in 1..=40 {
         TraceWriter::register_step(writer, &path, Line(line));
-        TraceWriter::register_variable_with_full_value(writer, "acc", ValueRecord::Int { i: line * 2, type_id: int_type });
+        TraceWriter::register_variable_with_full_value(
+            writer,
+            "acc",
+            ValueRecord::Int {
+                i: line * 2,
+                type_id: int_type,
+            },
+        );
     }
 
     TraceWriter::register_special_event(writer, EventLogKind::Write, "", "hello from the sample trace\n");
@@ -58,7 +65,10 @@ fn in_memory_container_is_byte_identical_to_the_file_written_one() {
     on_disk.begin_writing_trace_events(&base).unwrap();
     write_sample_trace(&mut on_disk);
     on_disk.finish_writing_trace_events().unwrap();
-    assert!(on_disk.take_container_bytes().is_none(), "a file-backed writer must not report in-memory bytes");
+    assert!(
+        on_disk.take_container_bytes().is_none(),
+        "a file-backed writer must not report in-memory bytes"
+    );
 
     let mut in_memory = CtfsTraceWriter::new_in_memory("example", &["--flag".to_string()]);
     in_memory.set_recording_id(RECORDING_ID);

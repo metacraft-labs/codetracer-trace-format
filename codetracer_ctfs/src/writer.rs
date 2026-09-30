@@ -2,11 +2,11 @@ use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Cursor, Read as IoRead, Seek, SeekFrom, Write};
 use std::path::Path;
 
-use crate::CtfsError;
 use crate::base40::base40_encode;
 use crate::block_alloc::BlockAllocator;
-use crate::file_entry::{FILE_ENTRY_SIZE, FileEntry};
-use crate::header::{CompressionMethod, EXTENDED_HEADER_SIZE, ExtendedHeader, HEADER_SIZE, Header};
+use crate::file_entry::{FileEntry, FILE_ENTRY_SIZE};
+use crate::header::{CompressionMethod, ExtendedHeader, Header, EXTENDED_HEADER_SIZE, HEADER_SIZE};
+use crate::CtfsError;
 
 /// The random-access byte store a [`CtfsWriter`] lays its container out in.
 ///

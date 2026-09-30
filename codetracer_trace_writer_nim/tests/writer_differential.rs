@@ -671,7 +671,6 @@ fn blank_recording_id(buf: &mut [u8]) {
     }
 }
 
-
 // THE FIXTURE TELLS BOTH WRITERS THE SAME THINGS, which it did not before.
 //
 // It passed `&[]` for args and never called `set_workdir` on either side. The

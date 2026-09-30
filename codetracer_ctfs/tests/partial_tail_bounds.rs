@@ -664,10 +664,7 @@ fn a_null_mapping_root_is_refused_by_name_rather_than_served_as_block_zero() {
     let mut buf = vec![0u8; 64];
     probes.push((
         format!("CtfsReader::read_at(block index {fabricating_index})"),
-        CtfsReader::open(&path)
-            .unwrap()
-            .read_at("z.dat", at, &mut buf)
-            .map(|n| buf[..n].to_vec()),
+        CtfsReader::open(&path).unwrap().read_at("z.dat", at, &mut buf).map(|n| buf[..n].to_vec()),
     ));
     let mut buf2 = vec![0u8; 64];
     probes.push((
@@ -692,8 +689,7 @@ fn a_null_mapping_root_is_refused_by_name_rather_than_served_as_block_zero() {
         match got {
             Err(e) => errs.push((which, e.to_string())),
             Ok(content) => {
-                let source = (0..whole_blocks as usize)
-                    .find(|b| damaged[b * BS..b * BS + content.len()] == content[..]);
+                let source = (0..whole_blocks as usize).find(|b| damaged[b * BS..b * BS + content.len()] == content[..]);
                 panic!(
                     "{which} served {} bytes for a stream whose mapping root is null, and reported \
                      success; those bytes are the container's own block {:?} — content belonging to \
@@ -707,18 +703,12 @@ fn a_null_mapping_root_is_refused_by_name_rather_than_served_as_block_zero() {
 
     // Pass 2: every refusal has to say which stream was lost and why.
     for (which, err) in errs {
-        assert!(
-            err.contains("z.dat"),
-            "{which}'s refusal does not name the stream that was lost: {err}"
-        );
+        assert!(err.contains("z.dat"), "{which}'s refusal does not name the stream that was lost: {err}");
         assert!(
             err.contains("mapping root"),
             "{which}'s refusal does not say it was the mapping root: {err}"
         );
-        assert!(
-            err.contains("null"),
-            "{which}'s refusal does not say the pointer is null: {err}"
-        );
+        assert!(err.contains("null"), "{which}'s refusal does not say the pointer is null: {err}");
         // The container is intact apart from one null pointer. A refusal that
         // blames truncation sends whoever reads it — or a repair tool — after
         // damage that is not there.

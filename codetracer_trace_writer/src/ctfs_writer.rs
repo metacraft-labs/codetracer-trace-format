@@ -385,6 +385,11 @@ pub struct CtfsTraceWriter {
     /// declaration path has no recorded size); `finish_writing_trace_events`
     /// fails with it.
     fatal_refusal: Option<String>,
+    /// Functions registered but not yet written, in id order: `(name, path,
+    /// line)`. Written at `finish_writing_trace_events`, when every path the
+    /// recorder registers is registered — see
+    /// [`AbstractTraceWriter::register_function`] on this type.
+    pending_functions: Vec<(String, std::path::PathBuf, codetracer_trace_types::Line)>,
 }
 
 /// The id handed back for a path the writer refused to register. Never a real
@@ -499,6 +504,7 @@ impl CtfsTraceWriter {
             source_reloads: 0,
             refusals: Vec::new(),
             fatal_refusal: None,
+            pending_functions: Vec::new(),
         }
     }
 
@@ -1205,28 +1211,20 @@ impl AbstractTraceWriter for CtfsTraceWriter {
         AbstractTraceWriter::add_event(self, TraceLowLevelEvent::Step(codetracer_trace_types::StepRecord { path_id, line }));
     }
 
-    /// Register a function, refusing one whose declaration path has no
-    /// recorded line count under the line-count table: its `funcs.dat` address
-    /// could not be computed, so the container is not finishable.
+    /// Register a function. Its record is WRITTEN at finish, not now, as the
+    /// Nim writer writes it at close.
+    ///
+    /// A function's declaration path may be a file no step has visited yet.
+    /// Interning it now would give it the next path id ahead of the files the
+    /// recorder registers next, and would intern it with no size: a later
+    /// `register_path_with_line_lengths` for it would find it interned and
+    /// lose its per-line table, and under the line-count table a later
+    /// `register_path_with_line_count` would come too late for the function
+    /// to be accepted. At finish every such registration has happened; a path
+    /// still unregistered then is interned there, and under the line-count
+    /// table refused by name.
     fn register_function(&mut self, name: &str, path: &std::path::Path, line: codetracer_trace_types::Line) {
-        let path_id = AbstractTraceWriter::ensure_path_id(self, path);
-        if path_id == INVALID_PATH_ID {
-            let msg = format!(
-                "function {name} is declared at {}, which has no recorded line count under the line-count table",
-                path.display()
-            );
-            self.fatal_refusal.get_or_insert(msg);
-            return;
-        }
-        self.base.function_list.push((name.to_string(), path_id, line));
-        AbstractTraceWriter::add_event(
-            self,
-            TraceLowLevelEvent::Function(codetracer_trace_types::FunctionRecord {
-                name: name.to_string(),
-                path_id,
-                line,
-            }),
-        );
+        self.pending_functions.push((name.to_string(), path.to_path_buf(), line));
     }
 
     /// Record a step at `(path, line, column)`.
@@ -1557,6 +1555,24 @@ impl TraceWriter for CtfsTraceWriter {
     }
 
     fn finish_writing_trace_events(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        // Write the deferred function records first, in id order: every path
+        // is registered now, and `funcs.dat` is interned before the tables are
+        // encoded.
+        for (name, path, line) in std::mem::take(&mut self.pending_functions) {
+            let path_id = AbstractTraceWriter::ensure_path_id(self, &path);
+            if path_id == INVALID_PATH_ID {
+                self.fatal_refusal.get_or_insert(format!(
+                    "function {name} is declared at {}, which has no recorded line count under the line-count table",
+                    path.display()
+                ));
+                continue;
+            }
+            self.base.function_list.push((name.clone(), path_id, line));
+            AbstractTraceWriter::add_event(
+                self,
+                TraceLowLevelEvent::Function(codetracer_trace_types::FunctionRecord { name, path_id, line }),
+            );
+        }
         if let Some(err) = self.fatal_refusal.take() {
             return Err(err.into());
         }

@@ -511,3 +511,152 @@ fn an_undeclared_reload_marker_is_refused_by_name() {
         "the refusal must name the tag and the missing flag; got: {err}"
     );
 }
+
+/// Layout for [`function_before_its_file`].
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum FnLayout {
+    ColumnAware,
+    LineCountTable,
+}
+
+/// A function declared in a file that is registered only LATER (with its
+/// per-line table, or its line count), and a function in a file never
+/// registered at all (line-count mode excepted, where that is refused), with a
+/// call into each. Both writers write the declaration records at close, so
+/// the path ids follow the recorder's registrations and the later
+/// registration keeps its table; and neither adds a step for a call.
+fn function_before_its_file(writer: Writer, layout: FnLayout, dir: &Path) -> PathBuf {
+    let main = PathBuf::from("/src/main.ex");
+    let nested = PathBuf::from("/src/nested.ex");
+    let orphan = PathBuf::from("/src/orphan.ex");
+    let program = format!("fn_before_file_{layout:?}");
+    let with_orphan = layout == FnLayout::ColumnAware;
+    match writer {
+        Writer::Nim => {
+            let mut w = NimTraceWriter::new(&program, &[], TraceEventsFileFormat::Ctfs);
+            w.begin_writing_trace_events(&dir.join("e.json")).unwrap();
+            w.begin_writing_trace_metadata(&dir.join("m.json")).unwrap();
+            w.begin_writing_trace_paths(&dir.join("p.json")).unwrap();
+            match layout {
+                FnLayout::ColumnAware => {
+                    w.enable_column_aware_steps();
+                    w.register_path_with_line_lengths(&main, &[5, 5, 5]).unwrap();
+                }
+                FnLayout::LineCountTable => {
+                    w.enable_line_count_table().unwrap();
+                    w.register_path_with_line_count(&main, 3).unwrap();
+                }
+            }
+            w.start(&main, Line(1));
+            let f = w.ensure_function_id("nested_fn", &nested, Line(2));
+            if with_orphan {
+                w.ensure_function_id("orphan_fn", &orphan, Line(4));
+            }
+            w.register_step(&main, Line(1));
+            w.register_call(f, vec![]);
+            match layout {
+                FnLayout::ColumnAware => {
+                    w.register_path_with_line_lengths(&nested, &[7, 7, 7, 7]).unwrap();
+                }
+                FnLayout::LineCountTable => {
+                    w.register_path_with_line_count(&nested, 4).unwrap();
+                }
+            }
+            w.register_step(&nested, Line(2));
+            w.register_step(&nested, Line(3));
+            w.register_return(ValueRecord::None {
+                type_id: codetracer_trace_types::NONE_TYPE_ID,
+            });
+            w.register_step(&main, Line(2));
+            w.finish_writing_trace_events().unwrap();
+            w.finish_writing_trace_metadata().unwrap();
+            w.finish_writing_trace_paths().unwrap();
+            w.close().expect("nim close");
+            drop(w);
+            dir.join(format!("{program}.ct"))
+        }
+        Writer::Rust => {
+            let mut w = CtfsTraceWriter::new(&program, &[]);
+            if layout == FnLayout::ColumnAware {
+                w.enable_column_aware_steps();
+            }
+            let out = dir.join(&program);
+            TraceWriter::begin_writing_trace_events(&mut w, &out).unwrap();
+            match layout {
+                FnLayout::ColumnAware => {
+                    w.register_path_with_line_lengths(&main, &[5, 5, 5]);
+                }
+                FnLayout::LineCountTable => {
+                    w.enable_line_count_table().unwrap();
+                    w.register_path_with_line_count(&main, 3).unwrap();
+                }
+            }
+            TraceWriter::start(&mut w, &main, Line(1));
+            let f = AbstractTraceWriter::ensure_function_id(&mut w, "nested_fn", &nested, Line(2));
+            if with_orphan {
+                AbstractTraceWriter::ensure_function_id(&mut w, "orphan_fn", &orphan, Line(4));
+            }
+            AbstractTraceWriter::register_step(&mut w, &main, Line(1));
+            AbstractTraceWriter::register_call(&mut w, f, vec![]);
+            match layout {
+                FnLayout::ColumnAware => {
+                    w.register_path_with_line_lengths(&nested, &[7, 7, 7, 7]);
+                }
+                FnLayout::LineCountTable => {
+                    w.register_path_with_line_count(&nested, 4).unwrap();
+                }
+            }
+            AbstractTraceWriter::register_step(&mut w, &nested, Line(2));
+            AbstractTraceWriter::register_step(&mut w, &nested, Line(3));
+            AbstractTraceWriter::register_return(
+                &mut w,
+                ValueRecord::None {
+                    type_id: codetracer_trace_types::NONE_TYPE_ID,
+                },
+            );
+            AbstractTraceWriter::register_step(&mut w, &main, Line(2));
+            TraceWriter::finish_writing_trace_events(&mut w).expect("rust finish");
+            out.with_extension("ct")
+        }
+    }
+}
+
+#[test]
+fn a_function_before_its_file_is_written_alike_by_both_writers() {
+    let _g = nim_lock();
+    for layout in [FnLayout::ColumnAware, FnLayout::LineCountTable] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let nd = dir.path().join("nim");
+        let rd = dir.path().join("rust");
+        std::fs::create_dir_all(&nd).unwrap();
+        std::fs::create_dir_all(&rd).unwrap();
+        let nim = function_before_its_file(Writer::Nim, layout, &nd);
+        let rust = function_before_its_file(Writer::Rust, layout, &rd);
+
+        let (mn, mr) = (
+            decode_meta_dat(&read_internal(&nim, "meta.dat")).unwrap(),
+            decode_meta_dat(&read_internal(&rust, "meta.dat")).unwrap(),
+        );
+        let mut want = vec!["/src/main.ex", "/src/nested.ex"];
+        if layout == FnLayout::ColumnAware {
+            want.push("/src/orphan.ex");
+        }
+        assert_eq!(mn.paths, want, "{layout:?}: nim path ids follow the recorder's registrations");
+        assert_eq!(mr.paths, mn.paths, "{layout:?}: path ids differ between the writers");
+        for name in ["paths.dat", "paths.off", "funcs.dat", "funcs.off"] {
+            assert_eq!(
+                read_internal(&nim, name),
+                read_internal(&rust, name),
+                "{layout:?}: {name} differs — the later registration's table or count was lost, or ids moved"
+            );
+        }
+        let (sn, sr) = (steps(&nim), steps(&rust));
+        assert_eq!(
+            sn.len(),
+            5,
+            "{layout:?}: the entry step and four recorded steps, and no step for the call; nim wrote {sn:?}"
+        );
+        assert_eq!(sr.len(), sn.len(), "{layout:?}: step counts differ: rust {sr:?}");
+        assert_eq!(calls(&nim), calls(&rust), "{layout:?}: calls.dat differs");
+    }
+}

@@ -44,10 +44,12 @@ fn write_three_path_trace(dir: &tempfile::TempDir) -> (std::path::PathBuf, Vec<(
     let lib_fn = TraceWriter::ensure_function_id(&mut writer, "lib_call", lib_src, Line(20));
     let util_fn = TraceWriter::ensure_function_id(&mut writer, "util_call", util_src, Line(7));
 
-    // `register_call` emits an implicit step at the callee's own declaration
-    // site before the Call event, so each call below contributes one step too.
-    // Path ids follow interning order, which is the order the three files were
-    // first named.
+    // `register_call` emits no step: a recording holds exactly the steps its
+    // recorder emitted plus the entry step (`trace-events.md` §"The entry step
+    // is part of `start`, not the recorder's first `register_step`"). Path ids
+    // follow the order the files are first registered by a step or path
+    // registration; a function's declaration site does not intern its file
+    // early.
     let mut expected: Vec<(usize, i64)> = Vec::new();
 
     // `start` emits the ENTRY STEP, at the position it was given — `main_src`, line 1, which is
@@ -60,7 +62,6 @@ fn write_three_path_trace(dir: &tempfile::TempDir) -> (std::path::PathBuf, Vec<(
     expected.push((0, 1));
 
     TraceWriter::register_call(&mut writer, main_fn, vec![]);
-    expected.push((0, 1));
     for round in 0..6i64 {
         for (path_id, src, line) in [
             (0usize, main_src, 2 + round),
@@ -75,11 +76,9 @@ fn write_three_path_trace(dir: &tempfile::TempDir) -> (std::path::PathBuf, Vec<(
     // A cross-file jump wide enough to exceed the DeltaStep range, so the
     // AbsoluteStep path is exercised on a multi-file address too.
     TraceWriter::register_call(&mut writer, lib_fn, vec![]);
-    expected.push((1, 20));
     TraceWriter::register_step(&mut writer, lib_src, Line(99_000));
     expected.push((1, 99_000));
     TraceWriter::register_call(&mut writer, util_fn, vec![]);
-    expected.push((2, 7));
     TraceWriter::register_step(&mut writer, util_src, Line(3));
     expected.push((2, 3));
 
@@ -145,12 +144,13 @@ fn the_addresses_are_the_prefix_sum_the_spec_defines() {
     // (path 1, line 20) is the first address outside file 0, and it is the
     // file's base plus the 0-based in-file offset.
     //
-    // CONFORMED TO THE SPEC, NOT LOOSENED. The subscripts moved by one because `start` emits the
-    // ENTRY STEP ahead of everything — see `trace-events.md`, "Recorder Integration — Starting a
-    // Recording". The addresses themselves are unchanged, and they are still exact.
-    assert_eq!(addresses[3], DEFAULT_LINES_PER_FILE + 19);
+    // Record 0 is the entry step `start` emits and record 1 is main's first
+    // step; `register_call` emits none (`trace-events.md`, "Recorder
+    // Integration — Starting a Recording": exactly the recorder's steps plus
+    // the entry step). The addresses themselves are exact.
+    assert_eq!(addresses[2], DEFAULT_LINES_PER_FILE + 19);
     // (path 2, line 7) likewise.
-    assert_eq!(addresses[4], 2 * DEFAULT_LINES_PER_FILE + 6);
+    assert_eq!(addresses[3], 2 * DEFAULT_LINES_PER_FILE + 6);
 }
 
 /// Every address a three-file trace produces lies inside a three-file space.

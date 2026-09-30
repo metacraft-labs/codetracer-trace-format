@@ -94,21 +94,20 @@ mod tests {
         assert!(matches!(tracer.events.last().unwrap(), TraceLowLevelEvent::DropLastStep));
 
         let args = vec![tracer.arg("a", NONE_VALUE), tracer.arg("b", NONE_VALUE)];
+        let before_call = tracer.events.len();
         tracer.register_call(function_id, args);
-        // => arg-related variable/value events; auto call-step event; potentially variables; call event
-
-        assert!(tracer.events.len() > 3);
-        // println!("{:#?}", tracer.events);
-        // -4, -3 should be variables
-        let should_be_step = &tracer.events[tracer.events.len() - 2];
-        let should_be_call = &tracer.events[tracer.events.len() - 1];
-        if let TraceLowLevelEvent::Step(StepRecord { path_id, line, .. }) = should_be_step {
-            assert_eq!(*path_id, function_path_id);
-            assert_eq!(*line, function_line);
-        } else {
-            panic!("expected an auto-registered step event before the last call one");
-        }
-        assert!(matches!(should_be_call, TraceLowLevelEvent::Call(CallRecord { .. })));
+        // => the args' value events, then the call event — and NO step. A writer
+        // adds no step the recorder did not emit (`trace-events.md` §"The entry
+        // step is part of `start`, not the recorder's first `register_step`");
+        // the call's entry is the next step the recorder emits.
+        let _ = function_path_id;
+        let _ = function_line;
+        let emitted = &tracer.events[before_call..];
+        assert!(
+            !emitted.iter().any(|e| matches!(e, TraceLowLevelEvent::Step(_))),
+            "register_call must not synthesize a step; it emitted {emitted:?}"
+        );
+        assert!(matches!(emitted.last(), Some(TraceLowLevelEvent::Call(CallRecord { .. }))));
 
         let int_value_1 = ValueRecord::Int {
             i: 1,
@@ -190,8 +189,11 @@ mod tests {
         // Integration — Starting a Recording"); and `register_asm` records NOTHING, so the one
         // this test calls contributes none (the same file's event disposition table:
         // `| 10 | Asm | Removed (unused by current recorders) |`). CONFORMED TO THE SPEC, NOT
-        // LOOSENED — still an exact count, arrived at as 48 − 1.
-        assert_eq!(tracer.events.len(), 47);
+        // LOOSENED — still an exact count. And `register_call` records the call
+        // and its argument values but no step, so the one call above adds no
+        // Step event (the same section: a recording holds exactly the steps
+        // its recorder emitted, plus the entry step).
+        assert_eq!(tracer.events.len(), 46);
         // visible with
         // cargo tets -- --nocapture
         // println!("{:#?}", tracer.events);

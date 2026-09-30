@@ -46,7 +46,8 @@ fn write_trace(dir: &tempfile::TempDir, events_chunk_size: usize) -> std::path::
     let main_fn = TraceWriter::ensure_function_id(&mut writer, "main", src, Line(1));
     TraceWriter::register_call(&mut writer, main_fn, vec![]);
 
-    // An I/O event BEFORE the first register_step (attributes to step 0).
+    // An I/O event BEFORE the first register_step: it attributes to the most
+    // recently emitted step, which is the entry step `start` emitted (step 0).
     TraceWriter::register_special_event(&mut writer, EventLogKind::Write, "stdout", "startup banner\n");
 
     for ln in 2..=30i64 {
@@ -111,16 +112,14 @@ fn events_dat_matches_events_log() {
         "io event record count must equal the Event count in events.log"
     );
 
-    // The pre-first-step event attributes to the step that is about to happen, and `start` now
-    // emits the entry step ahead of it, so that is step 1 rather than step 0.
-    //
-    // CONFORMED TO THE SPEC, NOT LOOSENED. `codetracer-trace-format-spec`'s `trace-events.md`,
-    // "Recorder Integration — Starting a Recording". The ATTRIBUTION RULE is unchanged — an I/O
-    // event still names the step it precedes — and only the index moved, because there is now one
-    // more step in front of it. The assertion stays an exact index rather than becoming a range.
+    // I/O attributes to the most recently emitted step. Before the first
+    // `register_step` that is the entry step `start` emitted, step 0: the call
+    // to `main` in between emits no step of its own (`trace-events.md` §"The
+    // entry step is part of `start`, not the recorder's first
+    // `register_step`" — a writer adds no step the recorder did not emit).
     assert_eq!(
-        from_dat[0].step_id, 1,
-        "the startup banner (pre-first-step) attributes to the step it precedes, which is 1 now          that start() emits the entry step ahead of it"
+        from_dat[0].step_id, 0,
+        "the startup banner follows only the entry step, so it attributes to step 0"
     );
     assert!(from_dat.iter().any(|r| r.step_id > 0), "expected events attributed to later steps");
     // Variety: at least one stderr/error and one file-write record.

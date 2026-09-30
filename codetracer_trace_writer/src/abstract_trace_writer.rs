@@ -187,21 +187,16 @@ pub trait AbstractTraceWriter {
         self.register_step(path, line);
     }
 
+    /// Record a call. Writes no step: the spec gives a recording exactly the
+    /// steps its recorder emitted (`trace-events.md` §"The entry step is part
+    /// of `start`, not the recorder's first `register_step`"), and the call's
+    /// entry is the next step the recorder emits, as in the Nim writer.
     fn register_call(&mut self, function_id: FunctionId, args: Vec<FullValueRecord>) {
-        // register a step for each call, the backend expects this for
-        // non-toplevel calls, so
-        // we ensure it directly from register_call
         if function_id != TOP_LEVEL_FUNCTION_ID {
             for arg in &args {
                 self.register_full_value(arg.variable_id, arg.value.clone());
             }
-            let function = &self.get_data().function_list[function_id.0];
-            self.add_event(TraceLowLevelEvent::Step(StepRecord {
-                path_id: function.1,
-                line: function.2,
-            }));
         }
-        // the actual call event:
         self.add_event(TraceLowLevelEvent::Call(CallRecord { function_id, args }));
     }
 

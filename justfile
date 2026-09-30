@@ -2,7 +2,7 @@
 test:
   cargo test --verbose
 
-# Run clippy lint checks.
+# Run the formatting and clippy lint checks.
 #
 # THIS IS THE LINT GATE. CI runs this recipe and so does the pre-commit hook,
 # so there is one definition of what "lint" means here and the two cannot
@@ -14,7 +14,12 @@ test:
 # obliged to fix is a warning that accumulates — the backlog this turns on
 # against stood at 159 across the workspace, and one of them was a loop that
 # indexed one past the end of every BigInt it wrote.
+#
+# `cargo fmt --all --check` runs first because nothing else checks formatting:
+# sixteen files had drifted from rustfmt unnoticed, so any contributor who ran
+# `cargo fmt` produced a diff mixing their change with unrelated reformatting.
 lint:
+  cargo fmt --all --check
   cargo clippy --workspace --all-targets -- -D warnings
 
 # Build all crates

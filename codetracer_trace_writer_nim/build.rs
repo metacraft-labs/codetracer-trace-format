@@ -174,6 +174,13 @@ fn main() {
         .arg("--mm:arc")
         .arg("--noMain")
         .arg("-d:release")
+        // Nim's allocator is thread-local: memory a host's worker thread
+        // allocated through the writer is freed by whichever thread closes
+        // it, and once that worker has exited the free crashes in
+        // `rawDealloc`. The C allocator has no per-thread ownership. Same
+        // flag as `codetracer-trace-format-nim`'s library build tasks (see
+        // its `testFfiThreads`).
+        .arg("-d:useMalloc")
         // db-backend also links the Nim-compiled MCR emulator. Two
         // independently Nim-compiled artifacts in one binary both define
         // `NimMain`/`PreMain`/... -- `--nimMainPrefix` renames this lib's

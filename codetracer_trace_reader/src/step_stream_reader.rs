@@ -27,7 +27,8 @@
 //! neighbours.
 
 use codetracer_ctfs::CtfsReader;
-use codetracer_trace_writer::step_stream::{StepStreamRecord, decode_record};
+use codetracer_trace_writer::meta_dat::{FLAG_EXT_HAS_SOURCE_RELOAD, read_meta_dat_ext_flags};
+use codetracer_trace_writer::step_stream::{StepStreamRecord, decode_record_declared};
 
 #[cfg(not(target_arch = "wasm32"))]
 fn decode_zstd_chunk(compressed: &[u8]) -> Result<Vec<u8>, String> {
@@ -88,13 +89,23 @@ impl StepsIndex {
 /// Exposed (`pub`) so the db-backend follow-mode split-stream reader (M1) can
 /// decode an appended `steps.dat` chunk through the EXACT same wire-format path
 /// the seekable final-file reader uses, rather than re-implementing the decode.
+///
+/// Refuses tag 8 (`SourceReload`), which only a container declaring
+/// `FLAG_EXT_HAS_SOURCE_RELOAD` may carry; a caller that has read `meta.dat`
+/// uses [`decode_chunk_records_declared`].
 pub fn decode_chunk_records(compressed: &[u8]) -> Result<Vec<StepStreamRecord>, String> {
+    decode_chunk_records_declared(compressed, false)
+}
+
+/// [`decode_chunk_records`], accepting tag 8 exactly when
+/// `allow_source_reload`.
+pub fn decode_chunk_records_declared(compressed: &[u8], allow_source_reload: bool) -> Result<Vec<StepStreamRecord>, String> {
     let raw = decode_zstd_chunk(compressed)?;
     let mut records = Vec::new();
     let mut pos = 0usize;
     let mut prev_abs: Option<u64> = None;
     while pos < raw.len() {
-        let (rec, next) = decode_record(&raw, &mut pos, prev_abs)?;
+        let (rec, next) = decode_record_declared(&raw, &mut pos, prev_abs, allow_source_reload)?;
         prev_abs = next;
         records.push(rec);
     }
@@ -114,6 +125,18 @@ pub struct StepStreamReader {
     record_count: u64,
     /// Cache of the most-recently-decompressed chunk: (chunk_number, records).
     cached_chunk: Option<(usize, Vec<StepStreamRecord>)>,
+    /// Whether `meta.dat` declares `FLAG_EXT_HAS_SOURCE_RELOAD`, which is what
+    /// admits tag 8 to this stream.
+    allow_source_reload: bool,
+}
+
+/// Whether a `meta.dat` declares source reload markers. An absent `meta.dat`
+/// (a still-recording trace) declares nothing, so tag 8 is refused there.
+pub fn meta_declares_source_reload(meta: &[u8]) -> Result<bool, String> {
+    if meta.is_empty() {
+        return Ok(false);
+    }
+    Ok(read_meta_dat_ext_flags(meta)? & FLAG_EXT_HAS_SOURCE_RELOAD != 0)
 }
 
 impl StepStreamReader {
@@ -122,14 +145,16 @@ impl StepStreamReader {
     /// This keeps the format-level reader independent of how the container bytes
     /// were sourced (local file, follow source, HTTP range, overlay) while
     /// preserving the exact same decode/cache path as [`Self::open`].
-    pub fn from_files(_meta: &[u8], dat: Vec<u8>, idx: Vec<u8>) -> Result<Option<StepStreamReader>, String> {
+    pub fn from_files(meta: &[u8], dat: Vec<u8>, idx: Vec<u8>) -> Result<Option<StepStreamReader>, String> {
         // Existence is answered by STRUCTURAL PRESENCE — the caller resolved
         // `steps.dat` / `steps.idx` by `findFile` + `FileEntry.Size` and handed
         // their bytes here. The `meta.dat` `has_step_stream` hint bit (bit 9) is
         // NOT consulted: a writer may stamp it only at close, so gating on it
         // would refuse a step stream that structurally exists in a still-recording
         // trace (trace-format spec: "Stream-presence flags are a hint, not a
-        // gate"). `_meta` is retained in the signature for source compatibility.
+        // gate"). `meta` is read only for its extended flags, which decide
+        // whether tag 8 is admitted.
+        let allow_source_reload = meta_declares_source_reload(meta)?;
         let index = StepsIndex::parse(&idx)?;
 
         // Compute the total record count: all chunks but the last hold
@@ -144,7 +169,7 @@ impl StepStreamReader {
             if start > end {
                 return Err("steps.idx: last chunk offset past end of steps.dat".to_string());
             }
-            let last_records = decode_chunk_records(&dat[start..end])?.len();
+            let last_records = decode_chunk_records_declared(&dat[start..end], allow_source_reload)?.len();
             (last_chunk * index.chunk_size + last_records) as u64
         };
 
@@ -153,6 +178,7 @@ impl StepStreamReader {
             dat,
             record_count,
             cached_chunk: None,
+            allow_source_reload,
         }))
     }
 
@@ -214,7 +240,7 @@ impl StepStreamReader {
             if start > end || end > self.dat.len() {
                 return Err("steps.dat: chunk offsets out of range".to_string());
             }
-            let records = decode_chunk_records(&self.dat[start..end])?;
+            let records = decode_chunk_records_declared(&self.dat[start..end], self.allow_source_reload)?;
             self.cached_chunk = Some((chunk_number, records));
         }
 

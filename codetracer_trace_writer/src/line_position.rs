@@ -175,6 +175,15 @@ impl LinePositionSpace {
         }
     }
 
+    /// Register the next file with `line_count` addresses (raised to 1, as in
+    /// [`from_line_counts`](Self::from_line_counts)) and return its id.
+    /// Base-preserving, like [`ensure_file`](Self::ensure_file).
+    pub fn push_file(&mut self, line_count: u64) -> usize {
+        let top = self.total_lines();
+        self.prefix_sum.push(top.saturating_add(line_count.max(1)));
+        self.file_count() - 1
+    }
+
     /// Number of files this space covers.
     pub fn file_count(&self) -> usize {
         self.prefix_sum.len() - 1

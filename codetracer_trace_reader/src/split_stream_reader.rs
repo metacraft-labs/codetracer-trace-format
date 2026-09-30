@@ -288,6 +288,10 @@ pub fn read_window(reader: &mut CtfsReader, start_step: u64, max_steps: u64) -> 
             // are carried in the step stream and dropped here rather than
             // mapped onto something they are not.
             StepStreamRecord::Raise { .. } | StepStreamRecord::Catch { .. } => {}
+            // A reload marker is an exec record with no `TraceLowLevelEvent`
+            // spelling and no source location; its (empty) value record and
+            // anything attributed to its index are still emitted below.
+            StepStreamRecord::SourceReload { .. } => {}
         }
 
         if let Some(ref mut v) = values

@@ -169,6 +169,14 @@ pub struct InterningTablesBuilder {
     types: Vec<(u8, Vec<u8>, Vec<u8>)>,
     /// Variable names, in interning order. Record = raw UTF-8 name bytes.
     varnames: Vec<Vec<u8>>,
+    /// Whether every `paths.dat` record carries its file's line count
+    /// (`meta.dat` bit 14): `path_len + path + line_count`.
+    line_count_table: bool,
+    /// Per-path line counts, parallel to `paths`, when `line_count_table`.
+    path_line_counts: Vec<u64>,
+    /// The line count the NEXT `Path` event's record carries and its file is
+    /// sized with. Consumed by that event.
+    next_path_line_count: Option<u64>,
 }
 
 impl InterningTablesBuilder {
@@ -187,6 +195,18 @@ impl InterningTablesBuilder {
     /// that bit to choose the parse.
     pub fn set_column_aware(&mut self, column_aware: bool) {
         self.column_aware = column_aware;
+    }
+
+    /// Switch `paths.dat` to the line-count-table record
+    /// (`internal-files.md` §"`paths.dat` line-count table"). Trace-global;
+    /// must be set before the first `Path` event.
+    pub fn set_line_count_table(&mut self, on: bool) {
+        self.line_count_table = on;
+    }
+
+    /// The line count the next `Path` event is recorded and sized with.
+    pub fn set_next_path_line_count(&mut self, line_count: u64) {
+        self.next_path_line_count = Some(line_count);
     }
 
     /// Whether `paths.dat` records will use Layout A.
@@ -218,7 +238,16 @@ impl InterningTablesBuilder {
         match event {
             TraceLowLevelEvent::Path(path) => {
                 self.paths.push(path.to_string_lossy().into_owned().into_bytes());
-                self.space.ensure_file(self.paths.len() - 1);
+                match self.next_path_line_count.take() {
+                    Some(count) => {
+                        self.space.push_file(count);
+                        self.path_line_counts.push(count);
+                    }
+                    None => {
+                        self.space.ensure_file(self.paths.len() - 1);
+                        self.path_line_counts.push(0);
+                    }
+                }
             }
             TraceLowLevelEvent::Function(FunctionRecord { path_id, line, name }) => {
                 let gli = self.space.global_index(path_id.0, line.0);
@@ -276,6 +305,16 @@ impl InterningTablesBuilder {
                 let empty: Vec<u32> = Vec::new();
                 let lls = self.path_line_lengths.get(id).unwrap_or(&empty);
                 records.push(crate::column_aware::encode_path_record_layout_a(&path, lls));
+            }
+            encode_raw_table(&records)
+        } else if self.line_count_table {
+            let mut records: Vec<Vec<u8>> = Vec::with_capacity(self.paths.len());
+            for (id, raw_path) in self.paths.iter().enumerate() {
+                let mut rec = Vec::with_capacity(raw_path.len() + 12);
+                encode_varint(raw_path.len() as u64, &mut rec);
+                rec.extend_from_slice(raw_path);
+                encode_varint(self.path_line_counts.get(id).copied().unwrap_or(0), &mut rec);
+                records.push(rec);
             }
             encode_raw_table(&records)
         } else {

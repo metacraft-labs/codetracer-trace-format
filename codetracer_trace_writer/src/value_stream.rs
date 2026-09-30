@@ -450,6 +450,14 @@ pub struct ValueStreamBuilder {
     /// push a spurious leading record — value events before the first step
     /// belong to step 0, which is the record the first `Step` pushes).
     seen_step: bool,
+    /// Set after an exec record that is not a step (a thread record, a source
+    /// reload): no step is open, so `current` is STAGING values for the next
+    /// step rather than accumulating them for the last one
+    /// (`trace-events.md` §"Recorder Integration — Staging Values").
+    staging: bool,
+    /// Index in `records` of the most recent step's record, for the terminus:
+    /// values still staged at `finish` attach to it.
+    last_step_record: Option<usize>,
 }
 
 impl Default for ValueStreamBuilder {
@@ -464,7 +472,39 @@ impl ValueStreamBuilder {
             records: Vec::new(),
             current: ValueRecordEntry::default(),
             seen_step: false,
+            staging: false,
+            last_step_record: None,
         }
+    }
+
+    /// A step: close the previous step's record and open this one, or — when
+    /// values were staged while no step was open — make the staged values
+    /// this step's.
+    fn on_step(&mut self) {
+        if self.staging {
+            self.staging = false;
+        } else if self.seen_step {
+            self.records.push(std::mem::take(&mut self.current));
+        } else {
+            // First step: the in-progress record holds any pre-step values
+            // (attributed to step 0), so it is left in place.
+            self.seen_step = true;
+        }
+        self.last_step_record = Some(self.records.len());
+    }
+
+    /// An exec record that is not a step (tags 4, 5, 6, 8): it owns one empty
+    /// value record, and the values that follow it are staged for the next
+    /// step, not written into it.
+    pub fn note_non_step_record(&mut self) {
+        if self.seen_step && !self.staging {
+            self.records.push(std::mem::take(&mut self.current));
+        }
+        // Whatever `current` holds now was staged while no step was open, and
+        // stays staged; the marker's own record is empty.
+        self.records.push(ValueRecordEntry::default());
+        self.seen_step = true;
+        self.staging = true;
     }
 
     /// Append `FullValueRecord` values to the current step's `StepValues` event,
@@ -487,19 +527,11 @@ impl ValueStreamBuilder {
     /// Feed one event in stream order.
     pub fn observe(&mut self, event: &TraceLowLevelEvent) {
         match event {
-            TraceLowLevelEvent::Step(_) => {
-                // Close the record for the previous step (or step 0's pre-step
-                // values) and start a fresh one for the step just stepped to.
-                if self.seen_step {
-                    self.records.push(std::mem::take(&mut self.current));
-                } else {
-                    // First step: the in-progress record holds any pre-step
-                    // values (attributed to step 0). Do NOT push it yet — the
-                    // NEXT Step (or finish) closes step 0's record. We still need
-                    // to start step 0 with whatever pre-step values accumulated,
-                    // which is exactly `self.current`, so leave it in place.
-                    self.seen_step = true;
-                }
+            TraceLowLevelEvent::Step(_) => self.on_step(),
+            // Every exec record owns one value record (`values.dat` is
+            // parallel-indexed to `steps.dat`); a thread record's is empty.
+            TraceLowLevelEvent::ThreadSwitch(_) | TraceLowLevelEvent::ThreadStart(_) | TraceLowLevelEvent::ThreadExit(_) => {
+                self.note_non_step_record()
             }
             TraceLowLevelEvent::Value(fv) => self.push_step_value(fv),
             TraceLowLevelEvent::BindVariable(BindVariableRecord { variable_id, place }) => {
@@ -572,11 +604,7 @@ impl ValueStreamBuilder {
     /// writer reaches the same place by calling `writeStepValues` from
     /// `registerColumnStep`.
     pub fn open_step_record(&mut self) {
-        if self.seen_step {
-            self.records.push(std::mem::take(&mut self.current));
-        } else {
-            self.seen_step = true;
-        }
+        self.on_step();
     }
 
     /// Number of value records built so far (excludes the in-progress record).
@@ -594,7 +622,14 @@ impl ValueStreamBuilder {
     /// A trace with zero `Step` events yields zero value records (even if
     /// pre-step value events accumulated — there is no step to attach them to).
     pub fn finish(mut self) -> Vec<ValueRecordEntry> {
-        if self.seen_step {
+        if self.staging {
+            // Values staged after the last non-step record, with no step to
+            // carry them to: they attach to the last step emitted (the
+            // terminus rule), which is where they were visible.
+            if let Some(i) = self.last_step_record {
+                self.records[i].events.append(&mut self.current.events);
+            }
+        } else if self.seen_step {
             self.records.push(self.current);
         }
         self.records

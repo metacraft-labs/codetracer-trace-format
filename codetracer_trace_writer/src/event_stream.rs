@@ -217,16 +217,23 @@ impl IoEventStreamBuilder {
         }
     }
 
+    /// Account for one exec record written without a `Step` event (a column
+    /// step, a source reload marker). Step 0 is the first exec record.
+    pub fn note_exec_record(&mut self) {
+        self.current_step = Some(match self.current_step {
+            None => 0,
+            Some(s) => s + 1,
+        });
+    }
+
     /// Feed one event in stream order.
     pub fn observe(&mut self, event: &TraceLowLevelEvent) {
         match event {
-            TraceLowLevelEvent::Step(_) => {
-                // Advance the current step id. Step 0 is the first Step.
-                self.current_step = Some(match self.current_step {
-                    None => 0,
-                    Some(s) => s + 1,
-                });
-            }
+            // Every exec record advances the step id I/O is attributed to.
+            TraceLowLevelEvent::Step(_)
+            | TraceLowLevelEvent::ThreadSwitch(_)
+            | TraceLowLevelEvent::ThreadStart(_)
+            | TraceLowLevelEvent::ThreadExit(_) => self.note_exec_record(),
             TraceLowLevelEvent::Event(RecordEvent { kind, metadata, content }) => {
                 self.records.push(IoEventRecord {
                     kind: event_log_kind_ord(*kind),

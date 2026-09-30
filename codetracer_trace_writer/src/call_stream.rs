@@ -281,13 +281,23 @@ impl CallStreamBuilder {
         CallStreamBuilder::default()
     }
 
+    /// Account for one exec record written without a `Step` event (a column
+    /// step, a source reload marker).
+    pub fn note_exec_record(&mut self) {
+        self.step_index += 1;
+        self.any_step = true;
+    }
+
     /// Feed one event in stream order.
     pub fn observe(&mut self, event: &TraceLowLevelEvent) {
         match event {
-            TraceLowLevelEvent::Step(_) => {
-                self.step_index += 1;
-                self.any_step = true;
-            }
+            // Every exec record advances the index `first_step_id` /
+            // `last_step_id` are expressed in, not only position-bearing ones
+            // (`trace-events.md` §"Execution Stream").
+            TraceLowLevelEvent::Step(_)
+            | TraceLowLevelEvent::ThreadSwitch(_)
+            | TraceLowLevelEvent::ThreadStart(_)
+            | TraceLowLevelEvent::ThreadExit(_) => self.note_exec_record(),
             TraceLowLevelEvent::Call(EventCallRecord { function_id, args }) => {
                 let call_key = self.records.len() as u64;
                 let parent_key = match self.open_stack.last() {
@@ -333,7 +343,14 @@ impl CallStreamBuilder {
                         rec.first_step_id = last;
                     }
                     rec.last_step_id = last;
-                    rec.return_value = cbor_bytes(return_value);
+                    // `ValueRecord::None` is how this API says "returned no
+                    // value", and the spec's VoidReturn marker is how the
+                    // container says it — the Nim writer writes the marker for
+                    // the same call (`trace-events.md` §"Call Stream").
+                    rec.return_value = match return_value {
+                        codetracer_trace_types::ValueRecord::None { .. } => vec![VOID_RETURN_MARKER],
+                        other => cbor_bytes(other),
+                    };
                 }
             }
             _ => {}
@@ -481,5 +498,29 @@ mod tests {
         rec.encode(&mut buf);
         let decoded = CallStreamRecord::decode(3, &buf).unwrap();
         assert_eq!(decoded, rec);
+    }
+
+    /// A return of no value — `ValueRecord::None`, the Rust API's spelling of
+    /// it — is written as the VoidReturn marker, as the Nim writer writes it,
+    /// and a real value is written as CBOR.
+    #[test]
+    fn a_none_return_is_the_void_marker_and_a_value_is_cbor() {
+        use codetracer_trace_types::{CallRecord, FunctionId, Line, PathId, ReturnRecord, StepRecord, TypeId, ValueRecord};
+        let mut b = CallStreamBuilder::new();
+        let step = TraceLowLevelEvent::Step(StepRecord {
+            path_id: PathId(0),
+            line: Line(1),
+        });
+        for ret in [ValueRecord::None { type_id: TypeId(3) }, ValueRecord::Int { i: 5, type_id: TypeId(1) }] {
+            b.observe(&TraceLowLevelEvent::Call(CallRecord {
+                function_id: FunctionId(0),
+                args: vec![],
+            }));
+            b.observe(&step);
+            b.observe(&TraceLowLevelEvent::Return(ReturnRecord { return_value: ret }));
+        }
+        let recs = b.finish();
+        assert_eq!(recs[0].return_value, vec![VOID_RETURN_MARKER], "a None return is the void marker");
+        assert_ne!(recs[1].return_value, vec![VOID_RETURN_MARKER], "a value is not");
     }
 }

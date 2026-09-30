@@ -106,6 +106,24 @@ pub const TAG_THREAD_EXIT: u8 = 6;
 /// [`crate::column_aware`]; decoded here so this reader can consume a
 /// column-aware stream from either writer.
 pub const TAG_DELTA_COLUMN: u8 = 7;
+/// Tag 8 — SourceReload: one or more source files were reloaded as new path
+/// versions (`trace-events.md` §"Source Reload Marker (Tag 0x08)").
+///
+/// Legal only in a trace whose `meta.dat` declares
+/// [`crate::meta_dat::FLAG_EXT_HAS_SOURCE_RELOAD`]; a decoder refuses it by
+/// name otherwise, because skipping it would re-read its payload as records.
+pub const TAG_SOURCE_RELOAD: u8 = 8;
+
+/// One file's transition across a source reload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SourceReloadChange {
+    /// The `paths.dat` id the file's steps resolved to before the reload.
+    pub old_path_id: u64,
+    /// The id they resolve to after. Distinct from `old_path_id`.
+    pub new_path_id: u64,
+    /// The observer's generation: 2 for the first reload of a file.
+    pub generation: u64,
+}
 
 /// One decoded execution-stream record. This is the on-disk projection of the
 /// compact step encoding; a [`StepStreamRecord::Step`] carries the recovered
@@ -133,6 +151,60 @@ pub enum StepStreamRecord {
     /// retained so a consumer can tell a column-only step from a line step
     /// without re-deriving it from the line table.
     DeltaColumn { global_position_index: u64, column_delta: i64 },
+    /// A source reload marker (tag 8). Not a position: it does not move the
+    /// running cursor and resolves to no source location.
+    SourceReload {
+        reload_ordinal: u64,
+        changed: Vec<SourceReloadChange>,
+        in_flight_frames: u64,
+    },
+}
+
+/// Append a `SourceReload` record's payload (without the tag).
+pub fn encode_source_reload_payload(reload_ordinal: u64, changed: &[SourceReloadChange], in_flight_frames: u64, out: &mut Vec<u8>) {
+    encode_varint(reload_ordinal, out);
+    encode_varint(changed.len() as u64, out);
+    for ch in changed {
+        encode_varint(ch.old_path_id, out);
+        encode_varint(ch.new_path_id, out);
+        encode_varint(ch.generation, out);
+    }
+    encode_varint(in_flight_frames, out);
+}
+
+/// Decode a `SourceReload` record's payload (the tag already consumed).
+pub fn decode_source_reload_payload(data: &[u8], pos: &mut usize) -> Result<(u64, Vec<SourceReloadChange>, u64), String> {
+    let reload_ordinal = decode_varint(data, pos)?;
+    let count = decode_varint(data, pos)?;
+    // A count read off the wire is bounded by the bytes that remain before
+    // anything is allocated: the smallest change is three one-byte varints.
+    let left = (data.len() - *pos) as u64;
+    if count > left / 3 {
+        return Err(format!(
+            "steps.dat: source reload marker claims {count} changed files, more than the remaining {left} bytes can hold"
+        ));
+    }
+    let mut changed = Vec::with_capacity(count as usize);
+    for _ in 0..count {
+        let old_path_id = decode_varint(data, pos)?;
+        let new_path_id = decode_varint(data, pos)?;
+        let generation = decode_varint(data, pos)?;
+        changed.push(SourceReloadChange {
+            old_path_id,
+            new_path_id,
+            generation,
+        });
+    }
+    let in_flight_frames = decode_varint(data, pos)?;
+    Ok((reload_ordinal, changed, in_flight_frames))
+}
+
+/// The refusal for tag 8 in a container that does not declare it.
+pub fn undeclared_source_reload_error() -> String {
+    "steps.dat: record tag 8 (0x08, SourceReload) is present but meta.dat does not declare \
+     FLAG_EXT_HAS_SOURCE_RELOAD (extended flag bit 0, schema version 5); the record cannot be \
+     skipped because its length is only known by decoding it"
+        .to_string()
 }
 
 // --- varint helpers (unsigned LEB128 + zigzag signed) ---
@@ -231,6 +303,9 @@ pub struct StepStreamBuilder {
     /// rebuilds the same space from `paths.dat` and inverts every address with
     /// it — see [`crate::line_position`].
     space: LinePositionSpace,
+    /// The size the NEXT `Path` event's file is given, when the trace records
+    /// real line counts (`meta.dat` bit 14). Consumed by that event.
+    next_path_line_count: Option<u64>,
 }
 
 impl StepStreamBuilder {
@@ -240,7 +315,26 @@ impl StepStreamBuilder {
             forced_absolute: Vec::new(),
             next_is_absolute: true,
             space: LinePositionSpace::new(),
+            next_path_line_count: None,
         }
+    }
+
+    /// Size the file the next `Path` event registers at `line_count`
+    /// addresses instead of the conventional stride. Used by a trace that
+    /// records per-file line counts (`meta.dat` bit 14).
+    pub fn set_next_path_line_count(&mut self, line_count: u64) {
+        self.next_path_line_count = Some(line_count);
+    }
+
+    /// Append a `SourceReload` record at the current point of the stream. It
+    /// is not a position, so the running cursor and the delta policy are left
+    /// as they were.
+    pub fn push_source_reload(&mut self, reload_ordinal: u64, changed: Vec<SourceReloadChange>, in_flight_frames: u64) {
+        self.records.push(StepStreamRecord::SourceReload {
+            reload_ordinal,
+            changed,
+            in_flight_frames,
+        });
     }
 
     /// The address space this builder has addressed its steps in. A file joins
@@ -256,8 +350,15 @@ impl StepStreamBuilder {
             TraceLowLevelEvent::Path(_) => {
                 // Paths are interned in event order, so the id this event
                 // assigns is the number of paths already seen.
-                let next_id = self.space.file_count();
-                self.space.ensure_file(next_id);
+                match self.next_path_line_count.take() {
+                    Some(count) => {
+                        self.space.push_file(count);
+                    }
+                    None => {
+                        let next_id = self.space.file_count();
+                        self.space.ensure_file(next_id);
+                    }
+                }
             }
             TraceLowLevelEvent::Step(step) => {
                 self.records.push(StepStreamRecord::Step {
@@ -276,6 +377,15 @@ impl StepStreamBuilder {
                 // previous-absolute belongs to a different thread, so force
                 // AbsoluteStep (keeps deltas within a single thread).
                 self.next_is_absolute = true;
+            }
+            // Thread start/exit are exec records too (tags 5 and 6); the
+            // canonical writer emits them, and a writer that dropped them
+            // would shift every later exec-record index.
+            TraceLowLevelEvent::ThreadStart(ThreadId(tid)) => {
+                self.records.push(StepStreamRecord::ThreadStart { thread_id: *tid });
+            }
+            TraceLowLevelEvent::ThreadExit(ThreadId(tid)) => {
+                self.records.push(StepStreamRecord::ThreadExit { thread_id: *tid });
             }
             _ => {}
         }
@@ -361,13 +471,37 @@ fn encode_record(record: &StepStreamRecord, prev_abs: Option<u64>, force_absolut
             // relative to the new column, not to the line's first column.
             prev_abs.map(|p| (p as i64 + *column_delta) as u64)
         }
+        StepStreamRecord::SourceReload {
+            reload_ordinal,
+            changed,
+            in_flight_frames,
+        } => {
+            out.push(TAG_SOURCE_RELOAD);
+            encode_source_reload_payload(*reload_ordinal, changed, *in_flight_frames, out);
+            prev_abs
+        }
     }
 }
 
 /// Decode a single execution-stream record at `*pos`, carrying the running
 /// absolute `global_line_index` `prev_abs` for delta resolution. Returns the
 /// decoded record and the updated running absolute value.
+///
+/// Refuses tag 8 (`SourceReload`); a caller that has read the container's
+/// `meta.dat` uses [`decode_record_declared`] with what it declares.
 pub fn decode_record(data: &[u8], pos: &mut usize, prev_abs: Option<u64>) -> Result<(StepStreamRecord, Option<u64>), String> {
+    decode_record_declared(data, pos, prev_abs, false)
+}
+
+/// [`decode_record`], accepting tag 8 exactly when `allow_source_reload` —
+/// which a caller sets from the container's
+/// [`crate::meta_dat::FLAG_EXT_HAS_SOURCE_RELOAD`].
+pub fn decode_record_declared(
+    data: &[u8],
+    pos: &mut usize,
+    prev_abs: Option<u64>,
+    allow_source_reload: bool,
+) -> Result<(StepStreamRecord, Option<u64>), String> {
     if *pos >= data.len() {
         return Err("steps.dat: truncated record (no tag)".to_string());
     }
@@ -439,6 +573,20 @@ pub fn decode_record(data: &[u8], pos: &mut usize, prev_abs: Option<u64>) -> Res
                     column_delta,
                 },
                 Some(gpi),
+            ))
+        }
+        TAG_SOURCE_RELOAD => {
+            if !allow_source_reload {
+                return Err(undeclared_source_reload_error());
+            }
+            let (reload_ordinal, changed, in_flight_frames) = decode_source_reload_payload(data, pos)?;
+            Ok((
+                StepStreamRecord::SourceReload {
+                    reload_ordinal,
+                    changed,
+                    in_flight_frames,
+                },
+                prev_abs,
             ))
         }
         other => Err(format!("steps.dat: unknown record tag {other}")),

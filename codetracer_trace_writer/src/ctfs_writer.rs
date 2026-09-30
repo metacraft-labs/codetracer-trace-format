@@ -89,10 +89,11 @@ use crate::{
     event_stream::{DEFAULT_EVENTS_CHUNK_SIZE, IoEventStreamBuilder, encode_io_event_stream},
     interning_tables::InterningTablesBuilder,
     meta_dat::{
-        FLAG_HAS_CALL_STREAM, FLAG_HAS_COLUMN_AWARE_STEPS, FLAG_HAS_INTERNING_TABLES, FLAG_HAS_IO_EVENT_STREAM, FLAG_HAS_STEP_STREAM,
-        FLAG_HAS_VALUE_STREAM, FLAG_SUPPORTS_COLUMN_BREAKPOINTS, FLAG_SUPPORTS_COLUMN_MOTIONS, encode_meta_dat,
+        FLAG_EXT_HAS_SOURCE_RELOAD, FLAG_HAS_CALL_STREAM, FLAG_HAS_COLUMN_AWARE_STEPS, FLAG_HAS_INTERNING_TABLES, FLAG_HAS_IO_EVENT_STREAM,
+        FLAG_HAS_LINE_COUNT_TABLE, FLAG_HAS_STEP_STREAM, FLAG_HAS_VALUE_STREAM, FLAG_SUPPORTS_COLUMN_BREAKPOINTS, FLAG_SUPPORTS_COLUMN_MOTIONS,
+        encode_meta_dat_ext,
     },
-    step_stream::{DEFAULT_STEPS_CHUNK_SIZE, StepStreamBuilder, encode_step_stream},
+    step_stream::{DEFAULT_STEPS_CHUNK_SIZE, SourceReloadChange, StepStreamBuilder, encode_step_stream},
     trace_writer::TraceWriter,
     value_stream::{DEFAULT_VALUES_CHUNK_SIZE, ValueStreamBuilder, encode_value_stream},
 };
@@ -357,7 +358,38 @@ pub struct CtfsTraceWriter {
     /// consume-once way as `pending_line_lengths`. Set by
     /// [`AbstractTraceWriter::register_step_with_column`].
     pending_column_delta: i64,
+
+    // --- Per-file line counts, path versions, source reloads ----------------
+    //
+    // Parity with the Nim writer's `enableLineCountTable`,
+    // `registerPathVersion` and `registerSourceReload`
+    // (`internal-files.md` §"`paths.dat` line-count table" and §"`paths.dat`
+    // path versions"; `trace-events.md` §"Source Reload Marker (Tag 0x08)").
+    /// Whether every `paths.dat` record carries its file's line count
+    /// (`meta.dat` bit 14).
+    line_count_table: bool,
+    /// The line count the next `Path` event is registered with. Set by the
+    /// registration entry points and consumed by that event.
+    pending_line_count: Option<u64>,
+    /// The recorded line count of each path id, when `line_count_table`.
+    path_line_counts: Vec<u64>,
+    /// How many `SourceReload` markers have been written; the next one's
+    /// ordinal is this plus one, and a non-zero value sets
+    /// `FLAG_EXT_HAS_SOURCE_RELOAD` at close.
+    source_reloads: u64,
+    /// Operations this writer refused because honouring them would have
+    /// written a location or record the container cannot represent. See
+    /// [`CtfsTraceWriter::refusals`].
+    refusals: Vec<String>,
+    /// A refusal that makes the container unfinishable (a function whose
+    /// declaration path has no recorded size); `finish_writing_trace_events`
+    /// fails with it.
+    fatal_refusal: Option<String>,
 }
+
+/// The id handed back for a path the writer refused to register. Never a real
+/// `paths.dat` index.
+pub const INVALID_PATH_ID: codetracer_trace_types::PathId = codetracer_trace_types::PathId(usize::MAX);
 
 impl CtfsTraceWriter {
     /// Create a new CTFS trace writer using the default SplitBinary format.
@@ -461,6 +493,209 @@ impl CtfsTraceWriter {
             exec_encoder: None,
             pending_line_lengths: None,
             pending_column_delta: 0,
+            line_count_table: false,
+            pending_line_count: None,
+            path_line_counts: Vec::new(),
+            source_reloads: 0,
+            refusals: Vec::new(),
+            fatal_refusal: None,
+        }
+    }
+
+    // --- Per-file line counts, path versions, source reloads ----------------
+
+    /// Record every file's line count in `paths.dat` (`meta.dat` bit 14) and
+    /// size each file's slot in the position space from it. Mirrors the Nim
+    /// writer's `enableLineCountTable`.
+    ///
+    /// After this every path is registered through
+    /// [`Self::register_path_with_line_count`] (or
+    /// [`Self::register_path_version`]); a step or function naming a path with
+    /// no recorded count is refused. Must be called before the first path is
+    /// registered, and is refused on a column-aware writer, whose Layout A
+    /// records already carry `line_count`.
+    pub fn enable_line_count_table(&mut self) -> Result<(), String> {
+        if self.column_aware_requested {
+            return Err(
+                "enable_line_count_table: this writer is column-aware, whose paths.dat records already carry the \
+                        file's line_count and whose files are sized in addressable columns rather than lines"
+                    .to_string(),
+            );
+        }
+        if !self.base.path_list.is_empty() {
+            return Err(format!(
+                "enable_line_count_table: {} path(s) are already interned under the bare paths.dat layout and cannot \
+                 grow a line count; enable the table before the first path is registered",
+                self.base.path_list.len()
+            ));
+        }
+        self.line_count_table = true;
+        if let Some(builder) = self.interning_tables_builder.as_mut() {
+            builder.set_line_count_table(true);
+        }
+        Ok(())
+    }
+
+    /// Whether this writer records per-file line counts.
+    pub fn line_count_table_enabled(&self) -> bool {
+        self.line_count_table
+    }
+
+    /// Register `path` with the number of lines its file has. Mirrors the Nim
+    /// writer's `registerPath(path, lineCount = …)`.
+    ///
+    /// Without the line-count table this registers the path alone. With it,
+    /// a zero count is refused, and a path already registered resolves to its
+    /// newest version without writing a record.
+    pub fn register_path_with_line_count(&mut self, path: &Path, line_count: u64) -> Result<codetracer_trace_types::PathId, String> {
+        if let Some(id) = self.base.paths.get(path) {
+            return Ok(*id);
+        }
+        if !self.line_count_table {
+            return Ok(AbstractTraceWriter::ensure_path_id(self, path));
+        }
+        if line_count == 0 {
+            return Err(format!(
+                "register_path_with_line_count: line_count 0 for {}. A file sized 0 shares its base with the next \
+                 file; a recorder that cannot count the lines records the ceiling it lays the file out with",
+                path.display()
+            ));
+        }
+        Ok(self.append_path_record(path, line_count))
+    }
+
+    /// Register a NEW VERSION of `path` with its own line count, and make it
+    /// the version a bare `path` resolves to from now on. Mirrors the Nim
+    /// writer's `registerPathVersion`
+    /// (`internal-files.md` §"`paths.dat` path versions").
+    pub fn register_path_version(&mut self, path: &Path, line_count: u64) -> Result<codetracer_trace_types::PathId, String> {
+        if self.column_aware_requested {
+            return Err(
+                "register_path_version: this writer is column-aware, whose paths.dat records size a file in \
+                        addressable columns; versioned paths are defined for the line-only line-count-table layout"
+                    .to_string(),
+            );
+        }
+        if !self.line_count_table {
+            return Err(format!(
+                "register_path_version: this writer has no line-count table, so a second record for {} would carry no \
+                 size and both versions would be laid out at the conventional stride. Call enable_line_count_table \
+                 before the first path is registered",
+                path.display()
+            ));
+        }
+        if line_count == 0 {
+            return Err(format!("register_path_version: line_count 0 for {}", path.display()));
+        }
+        Ok(self.append_path_record(path, line_count))
+    }
+
+    /// The id a bare step on `path` is attributed to right now: its newest
+    /// version. `None` for a path this writer has not registered.
+    pub fn current_path_id(&self, path: &Path) -> Option<codetracer_trace_types::PathId> {
+        self.base.paths.get(path).copied()
+    }
+
+    /// Append a `paths.dat` record for `path` with `line_count`, and point the
+    /// path's name at it.
+    fn append_path_record(&mut self, path: &Path, line_count: u64) -> codetracer_trace_types::PathId {
+        let id = codetracer_trace_types::PathId(self.base.path_list.len());
+        self.base.paths.insert(path.to_path_buf(), id);
+        self.pending_line_count = Some(line_count);
+        AbstractTraceWriter::register_path(self, path);
+        self.pending_line_count = None;
+        id
+    }
+
+    /// Write a `SourceReload` marker (tag 0x08) at the current point of the
+    /// execution stream and return its 1-based `reload_ordinal`. Mirrors the
+    /// Nim writer's `registerSourceReload`
+    /// (`trace-events.md` §"Source Reload Marker (Tag 0x08)").
+    ///
+    /// Refused, by name, when `changed` is empty, when an id is not a
+    /// registered path, when a change's two ids are equal, or when a
+    /// generation is below 2.
+    pub fn register_source_reload(&mut self, changed: &[SourceReloadChange], in_flight_frames: u64) -> Result<u64, String> {
+        if self.ctfs_writer.is_none() {
+            return Err("register_source_reload called before begin_writing_trace_events".to_string());
+        }
+        if changed.is_empty() {
+            return Err(
+                "register_source_reload: no changed files. A marker that records a reload without recording what \
+                        it changed cannot be told apart from one whose files were lost"
+                    .to_string(),
+            );
+        }
+        let path_count = self.base.path_list.len() as u64;
+        for (i, ch) in changed.iter().enumerate() {
+            if ch.old_path_id >= path_count {
+                return Err(format!(
+                    "register_source_reload: changed[{i}].old_path_id {} is not a registered path ({path_count} registered)",
+                    ch.old_path_id
+                ));
+            }
+            if ch.new_path_id >= path_count {
+                return Err(format!(
+                    "register_source_reload: changed[{i}].new_path_id {} is not a registered path ({path_count} registered)",
+                    ch.new_path_id
+                ));
+            }
+            if ch.old_path_id == ch.new_path_id {
+                return Err(format!(
+                    "register_source_reload: changed[{i}] reports old_path_id == new_path_id == {}. A reload that minted no \
+                     new path index cannot attribute its post-reload steps to the version that ran them",
+                    ch.old_path_id
+                ));
+            }
+            if ch.generation < 2 {
+                return Err(format!(
+                    "register_source_reload: changed[{i}].generation is {}. Generation 1 is the content the process \
+                     started with, so a reload's generation is 2 or more",
+                    ch.generation
+                ));
+            }
+        }
+        let ordinal = self.source_reloads + 1;
+        if let Some(encoder) = self.exec_encoder.as_mut() {
+            encoder.write_event(crate::column_aware::StepEvent::SourceReload {
+                reload_ordinal: ordinal,
+                changed: changed.to_vec(),
+                in_flight_frames,
+            })?;
+            self.step_encoder.note_non_step_event();
+        } else if let Some(builder) = self.step_stream_builder.as_mut() {
+            builder.push_source_reload(ordinal, changed.to_vec(), in_flight_frames);
+        }
+        self.note_non_step_exec_record();
+        self.source_reloads = ordinal;
+        Ok(ordinal)
+    }
+
+    /// How many source reload markers this writer has written.
+    pub fn source_reload_count(&self) -> u64 {
+        self.source_reloads
+    }
+
+    /// Operations refused because honouring them would have written something
+    /// the container cannot represent — a step at a path with no recorded
+    /// line count, or past the end of its file. The step is not written; the
+    /// Nim FFI reports the same refusals through `trace_writer_last_error`.
+    pub fn refusals(&self) -> &[String] {
+        &self.refusals
+    }
+
+    /// Account for one exec record that is not a step in every stream indexed
+    /// by exec record: an empty value record, and one more index for
+    /// `calls.dat` and `events.dat`.
+    fn note_non_step_exec_record(&mut self) {
+        if let Some(builder) = self.value_stream_builder.as_mut() {
+            builder.note_non_step_record();
+        }
+        if let Some(builder) = self.call_stream_builder.as_mut() {
+            builder.note_exec_record();
+        }
+        if let Some(builder) = self.io_event_stream_builder.as_mut() {
+            builder.note_exec_record();
         }
     }
 
@@ -572,8 +807,16 @@ impl CtfsTraceWriter {
         };
         let event = self.step_encoder.column_step(column_delta)?;
         encoder.write_event(event)?;
+        // A column step is an exec record: it owns a value record and advances
+        // the index `calls.dat` and `events.dat` are expressed in.
         if let Some(builder) = self.value_stream_builder.as_mut() {
             builder.open_step_record();
+        }
+        if let Some(builder) = self.call_stream_builder.as_mut() {
+            builder.note_exec_record();
+        }
+        if let Some(builder) = self.io_event_stream_builder.as_mut() {
+            builder.note_exec_record();
         }
         Ok(())
     }
@@ -911,6 +1154,80 @@ impl AbstractTraceWriter for CtfsTraceWriter {
         &mut self.base
     }
 
+    /// Intern `path`, resolving it to its newest version.
+    ///
+    /// The id of a new path is the number of `paths.dat` records written so
+    /// far, not the number of distinct names: with path versions the two
+    /// differ. Under the line-count table a path with no recorded count is
+    /// refused (recorded in [`CtfsTraceWriter::refusals`]) and
+    /// [`INVALID_PATH_ID`] is returned.
+    fn ensure_path_id(&mut self, path: &std::path::Path) -> codetracer_trace_types::PathId {
+        if let Some(id) = self.base.paths.get(path) {
+            return *id;
+        }
+        if self.line_count_table && self.pending_line_count.is_none() {
+            self.refusals.push(format!(
+                "{} has no recorded line count; under the line-count table every path is registered with \
+                 register_path_with_line_count",
+                path.display()
+            ));
+            return INVALID_PATH_ID;
+        }
+        let id = codetracer_trace_types::PathId(self.base.path_list.len());
+        self.base.paths.insert(path.to_path_buf(), id);
+        AbstractTraceWriter::register_path(self, path);
+        id
+    }
+
+    /// Record a step, refusing one the container cannot represent: a path with
+    /// no recorded line count, or a line past the file's recorded count, whose
+    /// address would fall inside the NEXT file's range
+    /// (`internal-files.md` §"`paths.dat` line-count table").
+    fn register_step(&mut self, path: &std::path::Path, line: codetracer_trace_types::Line) {
+        let path_id = AbstractTraceWriter::ensure_path_id(self, path);
+        if path_id == INVALID_PATH_ID {
+            return;
+        }
+        if self.line_count_table
+            && let Some(count) = self.path_line_counts.get(path_id.0)
+            && line.0 > 0
+            && line.0 as u64 > *count
+        {
+            self.refusals.push(format!(
+                "step at line {} of {}, which this trace records as having {count} line(s); its address would fall \
+                 inside the next file's range",
+                line.0,
+                path.display()
+            ));
+            return;
+        }
+        AbstractTraceWriter::add_event(self, TraceLowLevelEvent::Step(codetracer_trace_types::StepRecord { path_id, line }));
+    }
+
+    /// Register a function, refusing one whose declaration path has no
+    /// recorded line count under the line-count table: its `funcs.dat` address
+    /// could not be computed, so the container is not finishable.
+    fn register_function(&mut self, name: &str, path: &std::path::Path, line: codetracer_trace_types::Line) {
+        let path_id = AbstractTraceWriter::ensure_path_id(self, path);
+        if path_id == INVALID_PATH_ID {
+            let msg = format!(
+                "function {name} is declared at {}, which has no recorded line count under the line-count table",
+                path.display()
+            );
+            self.fatal_refusal.get_or_insert(msg);
+            return;
+        }
+        self.base.function_list.push((name.to_string(), path_id, line));
+        AbstractTraceWriter::add_event(
+            self,
+            TraceLowLevelEvent::Function(codetracer_trace_types::FunctionRecord {
+                name: name.to_string(),
+                path_id,
+                line,
+            }),
+        );
+    }
+
     /// Record a step at `(path, line, column)`.
     ///
     /// This overrides the trait's column-dropping shim. In column-aware mode
@@ -999,15 +1316,40 @@ impl AbstractTraceWriter for CtfsTraceWriter {
                     // matter — the value record keeps `values.dat` parallel,
                     // and the counter is what decides whether the NEXT step is
                     // forced absolute.
+                    // The value record is opened by `ValueStreamBuilder::observe`
+                    // below, as it is for the line-only stream.
                     if let Some(encoder) = self.exec_encoder.as_mut() {
                         let _ = encoder.write_event(crate::column_aware::StepEvent::ThreadSwitch { thread_id: *tid });
                     }
                     self.step_encoder.note_non_step_event();
-                    if let Some(builder) = self.value_stream_builder.as_mut() {
-                        builder.open_step_record();
+                }
+                TraceLowLevelEvent::ThreadStart(codetracer_trace_types::ThreadId(tid)) => {
+                    if let Some(encoder) = self.exec_encoder.as_mut() {
+                        let _ = encoder.write_event(crate::column_aware::StepEvent::ThreadStart { thread_id: *tid });
                     }
+                    self.step_encoder.note_non_step_event();
+                }
+                TraceLowLevelEvent::ThreadExit(codetracer_trace_types::ThreadId(tid)) => {
+                    if let Some(encoder) = self.exec_encoder.as_mut() {
+                        let _ = encoder.write_event(crate::column_aware::StepEvent::ThreadExit { thread_id: *tid });
+                    }
+                    self.step_encoder.note_non_step_event();
                 }
                 _ => {}
+            }
+        }
+        // A line-count-table trace sizes every file from its recorded count.
+        // The count rides on the registration that emits this `Path` event.
+        if self.line_count_table
+            && let TraceLowLevelEvent::Path(_) = &event
+        {
+            let count = self.pending_line_count.take().unwrap_or(crate::line_position::DEFAULT_LINES_PER_FILE);
+            self.path_line_counts.push(count);
+            if let Some(builder) = self.step_stream_builder.as_mut() {
+                builder.set_next_path_line_count(count);
+            }
+            if let Some(builder) = self.interning_tables_builder.as_mut() {
+                builder.set_next_path_line_count(count);
             }
         }
         // M17a: feed the dedicated call-stream builder from the SAME event
@@ -1204,6 +1546,7 @@ impl TraceWriter for CtfsTraceWriter {
         self.interning_tables_builder = if self.emit_interning_tables {
             let mut builder = InterningTablesBuilder::new();
             builder.set_column_aware(self.column_aware_active);
+            builder.set_line_count_table(self.line_count_table);
             Some(builder)
         } else {
             None
@@ -1213,6 +1556,9 @@ impl TraceWriter for CtfsTraceWriter {
     }
 
     fn finish_writing_trace_events(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        if let Some(err) = self.fatal_refusal.take() {
+            return Err(err.into());
+        }
         match self.serialization_format {
             EventSerializationFormat::Cbor => {
                 // Finish the encoder: flushes any remaining data and writes the seek table.
@@ -1410,7 +1756,13 @@ impl TraceWriter for CtfsTraceWriter {
             // safe while `meta.json` carried the metadata for that case. With
             // the JSON sidecars retired, gating this would leave a flags-off
             // bundle with no metadata document at all.
-            let meta_dat = encode_meta_dat(
+            if self.line_count_table {
+                stream_flags |= FLAG_HAS_LINE_COUNT_TABLE;
+            }
+            // Version 5 exactly when an extended flag is set
+            // (`internal-files.md` §"Extended flags").
+            let ext_flags = if self.source_reloads > 0 { FLAG_EXT_HAS_SOURCE_RELOAD } else { 0 };
+            let meta_dat = encode_meta_dat_ext(
                 &trace_metadata.recording_id,
                 &self.base.program,
                 &self.base.args,
@@ -1418,6 +1770,7 @@ impl TraceWriter for CtfsTraceWriter {
                 "",
                 &self.base.path_list.iter().map(|p| p.to_string_lossy().into_owned()).collect::<Vec<_>>(),
                 stream_flags,
+                ext_flags,
             );
             let meta_dat_handle = writer.add_file("meta.dat")?;
             writer.write(meta_dat_handle, &meta_dat)?;

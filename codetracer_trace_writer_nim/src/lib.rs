@@ -322,6 +322,22 @@ extern "C" {
     // refused: a file sized 0 shares its base with the next one.
     fn trace_writer_register_path_with_line_count(handle: *mut std::ffi::c_void, path: *const std::os::raw::c_char, line_count: u64) -> i32;
 
+    // Register a NEW VERSION of an already-registered path (paths.dat path
+    // versions) and return the writer's id for it; `u64::MAX` on failure.
+    fn trace_writer_register_path_version(handle: *mut std::ffi::c_void, path: *const std::os::raw::c_char, line_count: u64) -> u64;
+
+    // The id a bare step on `path` is attributed to now; `u64::MAX` on failure.
+    fn trace_writer_current_path_id(handle: *mut std::ffi::c_void, path: *const std::os::raw::c_char) -> u64;
+
+    // Write a SourceReload marker (tag 0x08); returns its 1-based ordinal, or
+    // 0 on failure.
+    fn trace_writer_register_source_reload(
+        handle: *mut std::ffi::c_void,
+        changed: *const SourceReloadChange,
+        changed_count: usize,
+        in_flight_frames: u64,
+    ) -> u64;
+
     // Alternate Source Views (Deminification Support — spec section
     // "Alternate Source Views" in
     // `codetracer-trace-format-spec/internal-files.md`).  Buffers one
@@ -570,6 +586,19 @@ fn ensure_nim_initialized() {
 /// was refused rather than recorded. The slot is process-global and sticky —
 /// nothing clears it on success — so read it against a known state (immediately
 /// after the call being tested) rather than as a running health check.
+/// One file's transition across a source reload — `ct_tw_source_reload_change`
+/// from `codetracer_trace_writer.h`, laid out identically.
+#[repr(C)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SourceReloadChange {
+    /// The path id steps resolved to before the reload.
+    pub old_path_id: u64,
+    /// The path id they resolve to after (from `register_path_version`).
+    pub new_path_id: u64,
+    /// The observer's generation, 2 or more.
+    pub generation: u64,
+}
+
 pub fn last_error() -> String {
     unsafe {
         let ptr = trace_writer_last_error();
@@ -2223,6 +2252,38 @@ impl NimTraceWriter {
     /// `PathId(0)` is a placeholder mirroring
     /// [`ensure_path_id`](Self::ensure_path_id) — the Nim library owns the
     /// real ID assignment.
+    /// Register a new version of `path` with its own line count
+    /// (`internal-files.md` §"`paths.dat` path versions") and return the
+    /// writer's id for it. Requires [`Self::enable_line_count_table`].
+    pub fn register_path_version(&mut self, path: &Path, line_count: u64) -> Result<PathId, Box<dyn Error>> {
+        let c_path = path_to_cstring(path);
+        let id = unsafe { trace_writer_register_path_version(self.handle, c_path.as_ptr(), line_count) };
+        if id == u64::MAX {
+            return Err(last_error().into());
+        }
+        Ok(PathId(id as usize))
+    }
+
+    /// The id a bare step on `path` is attributed to now: its newest version.
+    pub fn current_path_id(&self, path: &Path) -> Result<PathId, Box<dyn Error>> {
+        let c_path = path_to_cstring(path);
+        let id = unsafe { trace_writer_current_path_id(self.handle, c_path.as_ptr()) };
+        if id == u64::MAX {
+            return Err(last_error().into());
+        }
+        Ok(PathId(id as usize))
+    }
+
+    /// Write a `SourceReload` marker (tag 0x08) and return its 1-based
+    /// ordinal (`trace-events.md` §"Source Reload Marker (Tag 0x08)").
+    pub fn register_source_reload(&mut self, changed: &[SourceReloadChange], in_flight_frames: u64) -> Result<u64, Box<dyn Error>> {
+        let ordinal = unsafe { trace_writer_register_source_reload(self.handle, changed.as_ptr(), changed.len(), in_flight_frames) };
+        if ordinal == 0 {
+            return Err(last_error().into());
+        }
+        Ok(ordinal)
+    }
+
     pub fn register_path_with_line_count(&mut self, path: &Path, line_count: u64) -> Result<PathId, Box<dyn Error>> {
         let c_path = path_to_cstring(path);
         let rc = unsafe { trace_writer_register_path_with_line_count(self.handle, c_path.as_ptr(), line_count) };

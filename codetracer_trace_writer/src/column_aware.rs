@@ -168,6 +168,12 @@ pub enum StepEvent {
     ThreadExit { thread_id: u64 },
     /// Column-only motion inside the current line (tag 0x07).
     DeltaColumn { column_delta: i64 },
+    /// A source reload marker (tag 0x08). Not a position.
+    SourceReload {
+        reload_ordinal: u64,
+        changed: Vec<crate::step_stream::SourceReloadChange>,
+        in_flight_frames: u64,
+    },
 }
 
 /// Encode one step event. Port of Nim `step_encoding.nim` `encodeStepEvent`.
@@ -207,12 +213,27 @@ pub fn encode_step_event(event: &StepEvent, out: &mut Vec<u8>) {
             out.push(TAG_DELTA_COLUMN);
             encode_signed_varint(*column_delta, out);
         }
+        StepEvent::SourceReload {
+            reload_ordinal,
+            changed,
+            in_flight_frames,
+        } => {
+            out.push(crate::step_stream::TAG_SOURCE_RELOAD);
+            crate::step_stream::encode_source_reload_payload(*reload_ordinal, changed, *in_flight_frames, out);
+        }
     }
 }
 
 /// Decode one step event at `*pos`. Port of Nim `step_encoding.nim`
-/// `decodeStepEvent`.
+/// `decodeStepEvent`, including its default: tag 0x08 is refused unless the
+/// caller says the container declares it (see [`decode_step_event_declared`]).
 pub fn decode_step_event(data: &[u8], pos: &mut usize) -> Result<StepEvent, String> {
+    decode_step_event_declared(data, pos, false)
+}
+
+/// [`decode_step_event`], accepting tag 0x08 exactly when
+/// `allow_source_reload` (the container's `FLAG_EXT_HAS_SOURCE_RELOAD`).
+pub fn decode_step_event_declared(data: &[u8], pos: &mut usize, allow_source_reload: bool) -> Result<StepEvent, String> {
     if *pos >= data.len() {
         return Err("unexpected end of step stream".to_string());
     }
@@ -250,6 +271,17 @@ pub fn decode_step_event(data: &[u8], pos: &mut usize) -> Result<StepEvent, Stri
         TAG_DELTA_COLUMN => Ok(StepEvent::DeltaColumn {
             column_delta: decode_signed_varint(data, pos)?,
         }),
+        crate::step_stream::TAG_SOURCE_RELOAD => {
+            if !allow_source_reload {
+                return Err(crate::step_stream::undeclared_source_reload_error());
+            }
+            let (reload_ordinal, changed, in_flight_frames) = crate::step_stream::decode_source_reload_payload(data, pos)?;
+            Ok(StepEvent::SourceReload {
+                reload_ordinal,
+                changed,
+                in_flight_frames,
+            })
+        }
         other => Err(format!("unknown step event tag: {other}")),
     }
 }

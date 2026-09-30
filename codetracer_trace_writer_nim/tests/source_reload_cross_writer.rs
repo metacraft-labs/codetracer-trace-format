@@ -660,3 +660,75 @@ fn a_function_before_its_file_is_written_alike_by_both_writers() {
         assert_eq!(calls(&nim), calls(&rust), "{layout:?}: calls.dat differs");
     }
 }
+
+/// A call registered while the previous step is still pending — right after
+/// `start`, and in a recording that never called `start` — begins at the
+/// callee's first step in both writers (`calls.dat` `first_step_id`, "First
+/// step in this call").
+#[test]
+fn a_call_after_a_pending_step_begins_at_the_callee_s_first_step_in_both_writers() {
+    let _g = nim_lock();
+    let main = PathBuf::from("/src/main.ex");
+    let f_src = PathBuf::from("/src/f.ex");
+    for with_start in [true, false] {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let program = format!("pending_call_{with_start}");
+        let nim = {
+            let mut w = NimTraceWriter::new(&program, &[], TraceEventsFileFormat::Ctfs);
+            w.begin_writing_trace_events(&dir.path().join("e.json")).unwrap();
+            w.begin_writing_trace_metadata(&dir.path().join("m.json")).unwrap();
+            w.begin_writing_trace_paths(&dir.path().join("p.json")).unwrap();
+            if with_start {
+                w.start(&main, Line(1));
+            } else {
+                w.register_step(&main, Line(1));
+            }
+            let f = w.ensure_function_id("f", &f_src, Line(3));
+            w.register_call(f, vec![]);
+            w.register_step(&f_src, Line(3));
+            w.register_step(&f_src, Line(4));
+            w.register_return(ValueRecord::None {
+                type_id: codetracer_trace_types::NONE_TYPE_ID,
+            });
+            w.finish_writing_trace_events().unwrap();
+            w.finish_writing_trace_metadata().unwrap();
+            w.finish_writing_trace_paths().unwrap();
+            w.close().expect("nim close");
+            drop(w);
+            dir.path().join(format!("{program}.ct"))
+        };
+        let rust = {
+            let rd = dir.path().join("rust");
+            std::fs::create_dir_all(&rd).unwrap();
+            let mut w = CtfsTraceWriter::new(&program, &[]);
+            let out = rd.join(&program);
+            TraceWriter::begin_writing_trace_events(&mut w, &out).unwrap();
+            if with_start {
+                TraceWriter::start(&mut w, &main, Line(1));
+            } else {
+                AbstractTraceWriter::register_step(&mut w, &main, Line(1));
+            }
+            let f = AbstractTraceWriter::ensure_function_id(&mut w, "f", &f_src, Line(3));
+            AbstractTraceWriter::register_call(&mut w, f, vec![]);
+            AbstractTraceWriter::register_step(&mut w, &f_src, Line(3));
+            AbstractTraceWriter::register_step(&mut w, &f_src, Line(4));
+            AbstractTraceWriter::register_return(
+                &mut w,
+                ValueRecord::None {
+                    type_id: codetracer_trace_types::NONE_TYPE_ID,
+                },
+            );
+            TraceWriter::finish_writing_trace_events(&mut w).expect("rust finish");
+            out.with_extension("ct")
+        };
+        let (cn, cr) = (calls(&nim), calls(&rust));
+        let f_call = cn.last().copied().expect("nim wrote f's call");
+        assert_eq!(
+            (f_call.1, f_call.2),
+            (1, 2),
+            "with_start={with_start}: f begins at its own first step (1) and ends at 2; nim wrote {cn:?}"
+        );
+        assert_eq!(cn, cr, "with_start={with_start}: calls.dat differs between the writers");
+        assert_eq!(steps(&nim), steps(&rust), "with_start={with_start}: steps differ");
+    }
+}

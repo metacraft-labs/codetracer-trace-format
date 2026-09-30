@@ -277,16 +277,16 @@ fn encode_plain_table(records: &[&[u8]]) -> (Vec<u8>, Vec<u8>) {
     (dat, off)
 }
 
-/// The real-trace case F3 fixes: the production Nim `MultiStreamTraceWriter`
-/// emits all four interning tables in the PLAIN layout and leaves `meta.dat`
-/// bit 12 (`has_interning_tables`) CLEAR. Existence must be resolved by
-/// `paths.dat` STRUCTURAL PRESENCE, never by the flag — otherwise EVERY real
-/// trace resolves to no interning tables (a blank Variables pane over data that
-/// is on disk). Before the fix, `open` returned `Ok(None)` here.
+/// A container with `meta.dat` bit 12 (`has_interning_tables`) CLEAR still has
+/// its tables found — existence is `paths.dat`'s STRUCTURAL PRESENCE, since a
+/// stream-presence bit is a hint — and its paths and variable names resolve.
+/// Its `funcs.dat`/`types.dat` hold BARE NAMES, the shape the Nim writer used
+/// before b891a0f; the spec's records are structured, so those two tables'
+/// records are refused by name rather than read as names.
 #[test]
-fn plain_layout_bit12_clear_resolves_interned_names() {
+fn bit12_clear_tables_are_found_and_bare_name_records_refused() {
     use codetracer_ctfs::CtfsWriter;
-    use codetracer_trace_reader::interning_tables_reader::{InterningTablesReader, RecordLayout};
+    use codetracer_trace_reader::interning_tables_reader::InterningTablesReader;
     use codetracer_trace_writer::meta_dat::{encode_meta_dat, meta_dat_has_interning_tables};
 
     let paths = [b"/test/main.rs".as_slice(), b"/test/mod.rs".as_slice()];
@@ -323,9 +323,6 @@ fn plain_layout_bit12_clear_resolves_interned_names() {
         .expect("open ok")
         .expect("paths.dat present ⇒ interning tables resolve even with bit 12 CLEAR");
 
-    // bit 12 clear ⇒ PLAIN decode; paths.dat presence answered existence.
-    assert_eq!(it.layout(), RecordLayout::Plain);
-
     // Names (raw bytes in both layouts) resolve — the case the gate broke.
     assert_eq!(it.path_count(), 2);
     assert_eq!(it.path_str(0).unwrap(), "/test/main.rs");
@@ -334,26 +331,28 @@ fn plain_layout_bit12_clear_resolves_interned_names() {
     assert_eq!(it.varname_str(0).unwrap(), "x");
     assert_eq!(it.varname_str(2).unwrap(), "z");
 
-    // Plain func/type records are raw names: global_line_index stubbed to 0,
-    // type kind degrades to Raw (parity with db-backend / the Nim FFI reader).
+    // Bare-name func/type records are not the spec's records and are refused,
+    // saying so — the Nim reader gives the identical message
+    // (codetracer_trace_writer_nim/tests/bare_name_records_refused_alike.rs).
     assert_eq!(it.func_count(), 2);
-    let f = it.func(1).unwrap();
-    assert_eq!(String::from_utf8(f.name).unwrap(), "helper");
-    assert_eq!(f.global_line_index, 0);
+    let f = it.func(1).expect_err("a bare-name funcs.dat record is refused");
+    assert!(
+        f.starts_with("funcs.dat record 1 is not the spec's structured record") && f.contains("bare name"),
+        "{f}"
+    );
     assert_eq!(it.type_count(), 2);
-    let t = it.type_record(0).unwrap();
-    assert_eq!(t.type_kind(), Some(TypeKind::Raw));
-    assert_eq!(String::from_utf8(t.lang_type).unwrap(), "i64");
+    let t = it.type_record(0).expect_err("a bare-name types.dat record is refused");
+    assert!(t.starts_with("types.dat record 0 is not the spec's structured record"), "{t}");
 }
 
 /// A container with NO `meta.dat` at all (a still-recording trace whose meta is
 /// written only at close) but with the interning tables present must still
-/// resolve names — `meta.dat` is read best-effort and its absence reads as the
-/// PLAIN layout rather than refusing the tables.
+/// resolve names — `meta.dat` is read best-effort and its absence does not
+/// refuse the tables.
 #[test]
 fn missing_meta_dat_still_resolves_interned_names() {
     use codetracer_ctfs::CtfsWriter;
-    use codetracer_trace_reader::interning_tables_reader::{InterningTablesReader, RecordLayout};
+    use codetracer_trace_reader::interning_tables_reader::InterningTablesReader;
 
     let paths = [b"/a.rs".as_slice(), b"/b.rs".as_slice()];
     let funcs = [b"f".as_slice()];
@@ -384,7 +383,6 @@ fn missing_meta_dat_still_resolves_interned_names() {
     let it = InterningTablesReader::open(&mut reader)
         .expect("open ok")
         .expect("paths.dat present ⇒ resolves even with meta.dat absent");
-    assert_eq!(it.layout(), RecordLayout::Plain);
     assert_eq!(it.path_str(1).unwrap(), "/b.rs");
     assert_eq!(it.varname_str(0).unwrap(), "v");
 }

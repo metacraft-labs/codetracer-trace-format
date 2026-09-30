@@ -9,39 +9,27 @@
 //! (two `u64`s), then slice the `.dat` between them — there is NO sequential
 //! scan, so resolving a mid-table id costs the same as the first.
 //!
-//! # Detection is by PRESENCE; `meta.dat` bit 12 selects only the LAYOUT
+//! # Detection is by PRESENCE, and there is one record shape
 //!
 //! EXISTENCE of the binary interning tables is decided by STRUCTURAL PRESENCE of
-//! `paths.dat` (written first and unconditionally by every writer that emits the
-//! tables), never by the `has_interning_tables` capability flag (bit 12) in
-//! `meta.dat`. Bit 12 is NOT a presence check: the production Nim
-//! `MultiStreamTraceWriter` emits all four tables but leaves the bit clear,
-//! because the bit means "these records are in the M23d STRUCTURED layout" and
-//! its records are in the simpler PLAIN layout. A reader that took the flag as a
-//! presence gate found nothing on every real trace — a blank Variables pane over
-//! data sitting on disk (this is exactly the gate removed from the
-//! call/step/value/io stream readers; it was mirrored in db-backend's
-//! `ctfs_trace_reader::interning_tables`, and this brought the format crate into
-//! line). `meta.dat` is read best-effort and its bit 12 chooses ONLY how to
-//! decode ([`RecordLayout`]). A missing/absent `meta.dat` (a still-recording
-//! trace) therefore reads as PLAIN rather than refusing the tables.
+//! `paths.dat`, never by the `has_interning_tables` hint (bit 12) in `meta.dat`
+//! — a stream-presence bit is a hint, not a gate (`internal-files.md` "Stream-
+//! presence flags are a hint, not a gate").
 //!
-//! The legacy `events.log` / `paths.json` interning remains the source of truth;
-//! M23d does NOT migrate any consumer off it, and this reader is additive.
-//!
-//! # Record layouts (mirrors `codetracer_trace_writer::interning_tables` and
-//! db-backend's `ctfs_trace_reader::interning_tables`)
+//! Nor does bit 12 select a record LAYOUT. The spec gives each table one shape:
 //!
 //! ```text
-//!   [`RecordLayout::Plain`] — what the production Nim writer emits (bit 12 clear)
-//!     paths.dat / funcs.dat / types.dat / varnames.dat = raw name bytes
-//!
-//!   [`RecordLayout::Structured`] — M23d (bit 12 set)
-//!     paths.dat / varnames.dat record = raw bytes
-//!     funcs.dat   record = global_line_index: varint, name_len: varint, name: bytes
-//!     types.dat   record = kind: u8, lang_type_len: varint, lang_type: bytes,
-//!                          specific_info: binary (CBOR of TypeSpecificInfo)
+//!   paths.dat / varnames.dat record = raw bytes (paths.dat framed under bits 4/14)
+//!   funcs.dat   record = global_line_index: varint, name_len: varint, name: bytes
+//!   types.dat   record = kind: u8, lang_type_len: varint, lang_type: bytes,
+//!                        specific_info: binary (CBOR of TypeSpecificInfo)
 //! ```
+//!
+//! The Nim writer wrote bare names into `funcs.dat`/`types.dat` until b891a0f
+//! (2026-09-15), with bit 12 clear. This reader used to take bit 12 as a switch
+//! between those bare names and the structured records; it now decodes the
+//! spec's shape only, and refuses a bare-name record with the same message the
+//! Nim reader gives (see `InterningTablesReader::func`).
 
 use codetracer_ctfs::CtfsReader;
 use codetracer_trace_types::{TypeKind, TypeSpecificInfo};
@@ -202,6 +190,67 @@ fn decode_layout_a_path_record(raw: &[u8], id: usize) -> Result<&[u8], String> {
     Ok(payload)
 }
 
+/// Decode a `funcs.dat` record: `global_line_index: varint, name_len: varint,
+/// name`. Messages match the Nim reader's `decodeFuncRecord`.
+fn decode_func_record(raw: &[u8]) -> Result<FuncRecord, String> {
+    let mut pos = 0usize;
+    let global_line_index = decode_varint_nim(raw, &mut pos)?;
+    let name_len = decode_varint_nim(raw, &mut pos)?;
+    let left = (raw.len() - pos) as u64;
+    if left < name_len {
+        return Err(format!(
+            "funcs.dat record is truncated: declares a {name_len}-byte name with only {left} bytes left"
+        ));
+    }
+    let name = raw[pos..pos + name_len as usize].to_vec();
+    Ok(FuncRecord { global_line_index, name })
+}
+
+/// Decode a `types.dat` record: `kind: u8, lang_type_len: varint, lang_type,
+/// specific_info` (CBOR). Messages match the Nim reader's `decodeTypeRecord`.
+fn decode_type_record(raw: &[u8]) -> Result<DecodedTypeRecord, String> {
+    if raw.is_empty() {
+        return Err("types.dat record is empty: it must carry at least the kind byte".to_string());
+    }
+    let kind = raw[0];
+    let mut pos = 1usize;
+    let lang_len = decode_varint_nim(raw, &mut pos)?;
+    let left = (raw.len() - pos) as u64;
+    if left < lang_len {
+        return Err(format!(
+            "types.dat record is truncated: declares a {lang_len}-byte lang_type with only {left} bytes left"
+        ));
+    }
+    let lang_type = raw[pos..pos + lang_len as usize].to_vec();
+    pos += lang_len as usize;
+    let specific_info: TypeSpecificInfo =
+        cbor4ii::serde::from_slice(&raw[pos..]).map_err(|e| format!("types.dat record specific_info CBOR decode failed: {e}"))?;
+    Ok(DecodedTypeRecord {
+        kind,
+        lang_type,
+        specific_info,
+    })
+}
+
+/// Unsigned LEB128 with the Nim reader's error messages.
+fn decode_varint_nim(data: &[u8], pos: &mut usize) -> Result<u64, String> {
+    let mut result: u64 = 0;
+    let mut shift: u32 = 0;
+    for _ in 0..10 {
+        if *pos >= data.len() {
+            return Err("varint: unexpected end of input".to_string());
+        }
+        let byte = data[*pos];
+        *pos += 1;
+        result |= u64::from(byte & 0x7f) << shift;
+        if byte & 0x80 == 0 {
+            return Ok(result);
+        }
+        shift += 7;
+    }
+    Err("varint: too many bytes (>10)".to_string())
+}
+
 /// A single Variable-Size Record Table: the `.dat` data file plus its parsed
 /// `.off` offset index. Records are resolved by 0-based id with O(1) random
 /// access.
@@ -257,19 +306,6 @@ impl VarSizeTable {
     }
 }
 
-/// Which on-disk record layout the four interning tables use. Selected by
-/// `meta.dat` bit 12 (`has_interning_tables`) — the flag is a LAYOUT selector,
-/// never a presence gate (see the module docs).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum RecordLayout {
-    /// M23d structured records: `funcs.dat` carries a `global_line_index`
-    /// varint prefix and `types.dat` a kind byte + CBOR specific-info tail.
-    Structured,
-    /// What the production Nim writer emits (bit 12 clear): every table record
-    /// is raw name bytes, with no varint prefix or kind byte.
-    Plain,
-}
-
 /// A reader over a container's binary interning tables, resolving interned
 /// records by id with O(1) random access.
 pub struct InterningTablesReader {
@@ -277,9 +313,10 @@ pub struct InterningTablesReader {
     funcs: VarSizeTable,
     types: VarSizeTable,
     varnames: VarSizeTable,
-    /// How `funcs.dat` / `types.dat` records are decoded (bit 12 layout
-    /// selector; `varnames.dat` is raw bytes in both layouts).
-    layout: RecordLayout,
+    /// Whether `meta.dat` declares the tables (bit 12). Decides only how a
+    /// record that does not decode is described: under bit 12 clear it is
+    /// most likely a pre-b891a0f bare name.
+    interning_tables_declared: bool,
     /// Whether `paths.dat` records carry the column-aware Layout A framing
     /// (`meta.dat` bit 4), independently of the bit-14 line-count table.
     column_aware: bool,
@@ -300,16 +337,12 @@ impl InterningTablesReader {
     /// `paths.json` interning.
     ///
     /// EXISTENCE is decided by STRUCTURAL PRESENCE of `paths.dat`, not by
-    /// `meta.dat` bit 12; the flag selects only the decode [`RecordLayout`]. See
-    /// the module docs for why the two are separate (the production Nim writer
-    /// emits the tables with bit 12 clear).
+    /// `meta.dat` bit 12, which is only a hint (see the module docs).
     pub fn open(reader: &mut CtfsReader) -> Result<Option<InterningTablesReader>, String> {
-        // `meta.dat` is read best-effort: a missing/absent one (still-recording
-        // trace) simply reads as the PLAIN layout rather than refusing the
-        // tables.
-        let layout = match reader.read_file("meta.dat") {
-            Ok(meta) if meta_dat_has_interning_tables(&meta) => RecordLayout::Structured,
-            _ => RecordLayout::Plain,
+        // `meta.dat` is read best-effort: a still-recording trace has none yet.
+        let interning_tables_declared = match reader.read_file("meta.dat") {
+            Ok(meta) => meta_dat_has_interning_tables(&meta),
+            Err(_) => false,
         };
         // Bit 14 selects the `paths.dat` RECORD layout, independently of bit
         // 12's `funcs.dat`/`types.dat` selector. Read best-effort for the same
@@ -360,15 +393,10 @@ impl InterningTablesReader {
             funcs,
             types,
             varnames,
-            layout,
+            interning_tables_declared,
             column_aware,
             line_counts,
         }))
-    }
-
-    /// Which on-disk record layout this reader decodes (bit 12 selector).
-    pub fn layout(&self) -> RecordLayout {
-        self.layout
     }
 
     fn load_table(reader: &mut CtfsReader, name: &str) -> Result<VarSizeTable, String> {
@@ -458,69 +486,43 @@ impl InterningTablesReader {
         &self.line_counts
     }
 
-    /// Resolve a function id to its decoded record (`global_line_index` + name).
-    ///
-    /// In the PLAIN layout (the production Nim writer) `funcs.dat` records are
-    /// raw name bytes with no `global_line_index` prefix, so it is stubbed to
-    /// `0` — parity with db-backend's `RecordLayout::Plain` and the Nim FFI
-    /// reader, which stub the same field rather than lose data that is not on
-    /// disk in that layout.
+    /// Resolve a function id to its decoded record (`global_line_index` +
+    /// name). A record that is not the spec's structured record is refused by
+    /// name — see [`Self::bare_record_diagnosis`].
     pub fn func(&self, function_id: u64) -> Result<FuncRecord, String> {
         let raw = self.funcs.record(function_id as usize)?;
-        match self.layout {
-            RecordLayout::Plain => Ok(FuncRecord {
-                global_line_index: 0,
-                name: raw.to_vec(),
-            }),
-            RecordLayout::Structured => {
-                let mut pos = 0usize;
-                let global_line_index = decode_varint(raw, &mut pos)?;
-                let name_len = decode_varint(raw, &mut pos)? as usize;
-                if pos + name_len > raw.len() {
-                    return Err(format!("funcs.dat: record {function_id} name extends past record"));
-                }
-                let name = raw[pos..pos + name_len].to_vec();
-                Ok(FuncRecord { global_line_index, name })
-            }
-        }
+        decode_func_record(raw).map_err(|e| self.bare_record_diagnosis("funcs.dat", function_id, e))
     }
 
-    /// Resolve a type id to its decoded record (kind / lang_type / specific_info).
-    ///
-    /// In the PLAIN layout `types.dat` records are the raw type NAME only, so the
-    /// kind degrades to [`TypeKind::Raw`] and specific-info to
-    /// [`TypeSpecificInfo::None`] — again matching db-backend's
-    /// `RecordLayout::Plain` and the Nim FFI reader.
+    /// Resolve a type id to its decoded record (kind / lang_type /
+    /// specific_info). Refused by name like [`Self::func`].
     pub fn type_record(&self, type_id: u64) -> Result<DecodedTypeRecord, String> {
         let raw = self.types.record(type_id as usize)?;
-        match self.layout {
-            RecordLayout::Plain => Ok(DecodedTypeRecord {
-                kind: TypeKind::Raw as u8,
-                lang_type: raw.to_vec(),
-                specific_info: TypeSpecificInfo::None,
-            }),
-            RecordLayout::Structured => {
-                if raw.is_empty() {
-                    return Err(format!("types.dat: record {type_id} is empty (missing kind byte)"));
-                }
-                let kind = raw[0];
-                let mut pos = 1usize;
-                let lang_type_len = decode_varint(raw, &mut pos)? as usize;
-                if pos + lang_type_len > raw.len() {
-                    return Err(format!("types.dat: record {type_id} lang_type extends past record"));
-                }
-                let lang_type = raw[pos..pos + lang_type_len].to_vec();
-                pos += lang_type_len;
-                // The remainder is the CBOR-encoded TypeSpecificInfo blob.
-                let specific_info: TypeSpecificInfo = cbor4ii::serde::from_slice(&raw[pos..])
-                    .map_err(|e| format!("types.dat: record {type_id} specific_info CBOR decode failed: {e}"))?;
-                Ok(DecodedTypeRecord {
-                    kind,
-                    lang_type,
-                    specific_info,
-                })
-            }
+        decode_type_record(raw).map_err(|e| self.bare_record_diagnosis("types.dat", type_id, e))
+    }
+
+    /// The refusal for a `funcs.dat` / `types.dat` record that does not decode
+    /// as the spec's structured record — word for word the Nim reader's
+    /// (`new_trace_reader.nim` `bareRecordDiagnosis`), so a caller sees one
+    /// message whichever reader it uses.
+    ///
+    /// The spec's records have always been structured (`internal-files.md`
+    /// "Interning Tables"); bit 12 only says the tables are present. The Nim
+    /// writer wrote BARE NAMES into both tables until b891a0f (2026-09-15), with
+    /// bit 12 clear, at schema versions 4 and 5 — so no version check refuses
+    /// such a container, and the structured decoder's own message describes
+    /// neither the record nor the remedy.
+    fn bare_record_diagnosis(&self, table: &str, id: u64, decode_error: String) -> String {
+        if self.interning_tables_declared {
+            return decode_error;
         }
+        format!(
+            "{table} record {id} is not the spec's structured record (internal-files.md \"Interning Tables\"); \
+             in a container with meta.dat bit 12 clear it is a bare name, the shape the Nim writer wrote before \
+             b891a0f (2026-09-15). Such a container does not conform to the spec at any schema version and is \
+             not read; re-record it with a current recorder. (Decoding it as a structured record reported: \
+             {decode_error})"
+        )
     }
 
     /// Resolve a variable-name id to its name (raw bytes; UTF-8 for recorders).

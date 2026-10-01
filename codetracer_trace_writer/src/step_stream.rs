@@ -39,16 +39,14 @@
 //! reader resolving a step back to a location — agree by construction rather
 //! than by two implementations happening to match.
 //!
-//! # Encoding rules (spec §"Encoding Rules")
+//! # Encoding rule (spec §"Encoding Rules")
 //!
-//! 1. The first step in a trace is always AbsoluteStep.
-//! 2. After a Call event, the next step is AbsoluteStep (new function context).
-//! 3. After a Return event, the next step is AbsoluteStep (returning to caller).
-//! 4. All other steps use DeltaStep when the signed delta fits in 3 varint
-//!    bytes (±1048575), otherwise AbsoluteStep.
-//! 5. The first step record of every chunk is AbsoluteStep so each chunk is
-//!    independently decodable (the running absolute value never carries across a
-//!    chunk boundary). See [`encode_step_stream`].
+//! The first position record of every chunk is an AbsoluteStep; every other
+//! one is a DeltaStep exactly when its delta's varint is strictly shorter than
+//! the position's, and an AbsoluteStep otherwise. Calls, returns and thread
+//! switches force nothing. The rule lives in [`crate::step_rule`] and the
+//! chunking in [`crate::column_aware::ExecStreamEncoder`], which both step
+//! paths share; see [`encode_step_stream`].
 //!
 //! # Storage (`steps.dat` + `steps.idx`)
 //!
@@ -77,10 +75,6 @@ use crate::line_position::LinePositionSpace;
 /// per-chunk overhead amortised while chunks still hold thousands of steps
 /// (seekable-zstd.md §Configuration).
 pub const DEFAULT_STEPS_CHUNK_SIZE: usize = 4096;
-
-/// The maximum absolute delta encodable as a DeltaStep (3 varint bytes, spec
-/// §"Compact Step Encoding"). Larger jumps fall back to AbsoluteStep.
-pub const MAX_DELTA: i64 = 1_048_575;
 
 // --- compact step record tags (trace-events.md §"Execution Stream Events") ---
 
@@ -199,6 +193,15 @@ pub fn decode_source_reload_payload(data: &[u8], pos: &mut usize) -> Result<(u64
     Ok((reload_ordinal, changed, in_flight_frames))
 }
 
+/// The refusal for a delta record that comes before its chunk's first
+/// `AbsoluteStep`. A caller that knows the chunk's number prefixes it.
+fn unanchored_delta_error(tag: &str) -> String {
+    format!(
+        "steps.dat: a {tag} comes before the chunk's first AbsoluteStep, so it has nothing to be relative to; \
+         every chunk's first position record must be absolute (trace-events.md \"Encoding Rules\")"
+    )
+}
+
 /// The refusal for tag 8 in a container that does not declare it.
 pub fn undeclared_source_reload_error() -> String {
     "steps.dat: record tag 8 (0x08, SourceReload) is present but meta.dat does not declare \
@@ -223,6 +226,7 @@ fn encode_varint(mut value: u64, out: &mut Vec<u8>) {
     }
 }
 
+#[cfg(test)]
 fn encode_signed_varint(value: i64, out: &mut Vec<u8>) {
     // zigzag: (n << 1) ^ (n >> 63)
     let zz = ((value << 1) ^ (value >> 63)) as u64;
@@ -256,15 +260,10 @@ fn decode_signed_varint(data: &[u8], pos: &mut usize) -> Result<i64, String> {
     Ok(((zz >> 1) as i64) ^ -((zz & 1) as i64))
 }
 
-/// A finalized execution stream: records in stream order plus, for each `Step`
-/// record, whether it must be encoded AbsoluteStep (encoding rules 1-3). The
-/// `forced_absolute` flags are positional over `Step` records only (the i-th
-/// `true`/`false` applies to the i-th `StepStreamRecord::Step`).
+/// A finalized execution stream: its records in stream order.
 pub struct StepStream {
     /// All execution-stream records in order.
     pub records: Vec<StepStreamRecord>,
-    /// One flag per `Step` record (in `Step` order): force AbsoluteStep.
-    pub forced_absolute: Vec<bool>,
 }
 
 impl StepStream {
@@ -283,9 +282,7 @@ impl StepStream {
 ///
 /// Only the events that belong to the execution stream are observed: `Path`
 /// (⇒ a file joins the position space), `Step` (⇒ a step record carrying that
-/// step's address) and `ThreadSwitch` (⇒ a ThreadSwitch record). `Call`/`Return`
-/// are observed only to mark the *next* step as AbsoluteStep per the spec
-/// encoding rules; they do not themselves produce execution-stream records.
+/// step's address) and the thread events (⇒ thread records).
 /// Raise/Catch have no representation in the legacy `TraceLowLevelEvent` enum,
 /// so the builder never emits them today — but the wire format and reader
 /// support their tags so the stream is forward-compatible when recorders begin
@@ -294,11 +291,6 @@ impl StepStream {
 pub struct StepStreamBuilder {
     /// Finalized records in stream order.
     records: Vec<StepStreamRecord>,
-    /// Per-Step forced-absolute flags (parallel to the `Step` records).
-    forced_absolute: Vec<bool>,
-    /// Whether the next `Step` must be encoded as AbsoluteStep (the first step,
-    /// or the step right after a Call/Return/ThreadSwitch). Starts true (rule 1).
-    next_is_absolute: bool,
     /// The trace's address space, grown as `Path` events intern files. A reader
     /// rebuilds the same space from `paths.dat` and inverts every address with
     /// it — see [`crate::line_position`].
@@ -312,8 +304,6 @@ impl StepStreamBuilder {
     pub fn new() -> Self {
         StepStreamBuilder {
             records: Vec::new(),
-            forced_absolute: Vec::new(),
-            next_is_absolute: true,
             space: LinePositionSpace::new(),
             next_path_line_count: None,
         }
@@ -327,8 +317,7 @@ impl StepStreamBuilder {
     }
 
     /// Append a `SourceReload` record at the current point of the stream. It
-    /// is not a position, so the running cursor and the delta policy are left
-    /// as they were.
+    /// is not a position, so the running cursor is left where it was.
     pub fn push_source_reload(&mut self, reload_ordinal: u64, changed: Vec<SourceReloadChange>, in_flight_frames: u64) {
         self.records.push(StepStreamRecord::SourceReload {
             reload_ordinal,
@@ -364,19 +353,9 @@ impl StepStreamBuilder {
                 self.records.push(StepStreamRecord::Step {
                     global_line_index: self.space.global_index(step.path_id.0, step.line.0),
                 });
-                self.forced_absolute.push(self.next_is_absolute);
-                self.next_is_absolute = false;
-            }
-            TraceLowLevelEvent::Call(_) | TraceLowLevelEvent::Return(_) => {
-                // Rules 2 & 3: the next step starts a new function context.
-                self.next_is_absolute = true;
             }
             TraceLowLevelEvent::ThreadSwitch(ThreadId(tid)) => {
                 self.records.push(StepStreamRecord::ThreadSwitch { thread_id: *tid });
-                // A thread switch breaks delta continuity: the next step's
-                // previous-absolute belongs to a different thread, so force
-                // AbsoluteStep (keeps deltas within a single thread).
-                self.next_is_absolute = true;
             }
             // Thread start/exit are exec records too (tags 5 and 6); the
             // canonical writer emits them, and a writer that dropped them
@@ -402,84 +381,7 @@ impl StepStreamBuilder {
 
     /// Finalize and return the execution stream.
     pub fn finish(self) -> StepStream {
-        StepStream {
-            records: self.records,
-            forced_absolute: self.forced_absolute,
-        }
-    }
-}
-
-/// Encode a single execution-stream record into the chunk buffer.
-///
-/// For a `Step`, `prev_abs` is the running absolute `global_line_index` of the
-/// previous step in the same chunk (or `None` to force AbsoluteStep — the first
-/// step of a chunk, or a step flagged forced-absolute). `force_absolute` honors
-/// encoding rules 1-3. Returns the new running absolute value for the next step
-/// (unchanged for non-Step records).
-fn encode_record(record: &StepStreamRecord, prev_abs: Option<u64>, force_absolute: bool, out: &mut Vec<u8>) -> Option<u64> {
-    match record {
-        StepStreamRecord::Step { global_line_index } => {
-            let gli = *global_line_index;
-            let use_delta = match (prev_abs, force_absolute) {
-                (Some(prev), false) => {
-                    let delta = gli as i64 - prev as i64;
-                    delta.abs() <= MAX_DELTA
-                }
-                _ => false,
-            };
-            if use_delta {
-                let delta = gli as i64 - prev_abs.unwrap() as i64;
-                out.push(TAG_DELTA_STEP);
-                encode_signed_varint(delta, out);
-            } else {
-                out.push(TAG_ABSOLUTE_STEP);
-                encode_varint(gli, out);
-            }
-            Some(gli)
-        }
-        StepStreamRecord::Raise { exception_type_id, message } => {
-            out.push(TAG_RAISE);
-            encode_varint(*exception_type_id, out);
-            encode_varint(message.len() as u64, out);
-            out.extend_from_slice(message);
-            prev_abs
-        }
-        StepStreamRecord::Catch { exception_type_id } => {
-            out.push(TAG_CATCH);
-            encode_varint(*exception_type_id, out);
-            prev_abs
-        }
-        StepStreamRecord::ThreadSwitch { thread_id } => {
-            out.push(TAG_THREAD_SWITCH);
-            encode_varint(*thread_id, out);
-            prev_abs
-        }
-        StepStreamRecord::ThreadStart { thread_id } => {
-            out.push(TAG_THREAD_START);
-            encode_varint(*thread_id, out);
-            prev_abs
-        }
-        StepStreamRecord::ThreadExit { thread_id } => {
-            out.push(TAG_THREAD_EXIT);
-            encode_varint(*thread_id, out);
-            prev_abs
-        }
-        StepStreamRecord::DeltaColumn { column_delta, .. } => {
-            out.push(TAG_DELTA_COLUMN);
-            encode_signed_varint(*column_delta, out);
-            // A column move advances the running position, so the next delta is
-            // relative to the new column, not to the line's first column.
-            prev_abs.map(|p| (p as i64 + *column_delta) as u64)
-        }
-        StepStreamRecord::SourceReload {
-            reload_ordinal,
-            changed,
-            in_flight_frames,
-        } => {
-            out.push(TAG_SOURCE_RELOAD);
-            encode_source_reload_payload(*reload_ordinal, changed, *in_flight_frames, out);
-            prev_abs
-        }
+        StepStream { records: self.records }
     }
 }
 
@@ -513,20 +415,9 @@ pub fn decode_record_declared(
             Ok((StepStreamRecord::Step { global_line_index: gli }, Some(gli)))
         }
         TAG_DELTA_STEP => {
-            // A delta with no preceding absolute IN THIS CHUNK resolves against
-            // 0, not against an error.
-            //
-            // This used to be rejected, and rejecting it made this reader
-            // stricter than the reference: the canonical Nim reader
-            // (`new_trace_reader.nim`, `stepAbsoluteGlobalLineIndex`) starts its
-            // running cursor at 0 for every chunk and applies deltas from there.
-            // The shape is reachable from the reference WRITER, too — its
-            // chunk-boundary promotion only fires for the chunk's *first*
-            // record, so a chunk that opens with a `ThreadSwitch` and continues
-            // with a `DeltaStep` carries exactly this. Such a container is
-            // legal, decodes to 0-plus-delta everywhere else, and this reader
-            // refused to open it at all.
-            let prev = prev_abs.unwrap_or(0);
+            // A delta before the chunk's first AbsoluteStep has nothing to be
+            // relative to (`trace-events.md` §"Encoding Rules", "Reading").
+            let prev = prev_abs.ok_or_else(|| unanchored_delta_error("DeltaStep"))?;
             let delta = decode_signed_varint(data, pos)?;
             let gli = (prev as i64 + delta) as u64;
             Ok((StepStreamRecord::Step { global_line_index: gli }, Some(gli)))
@@ -562,9 +453,7 @@ pub fn decode_record_declared(
             // position space is one-dimensional, so a column delta is a
             // position delta. Treating it as position-neutral would desync
             // every subsequent DeltaStep in the chunk.
-            // Same rule as `TAG_DELTA_STEP` above: resolve against 0 rather
-            // than refusing, matching the reference reader's per-chunk cursor.
-            let prev = prev_abs.unwrap_or(0);
+            let prev = prev_abs.ok_or_else(|| unanchored_delta_error("DeltaColumn"))?;
             let column_delta = decode_signed_varint(data, pos)?;
             let gpi = (prev as i64 + column_delta) as u64;
             Ok((
@@ -607,64 +496,42 @@ pub struct EncodedStepStream {
 /// (companion offset index), per seekable-zstd.md and trace-events.md
 /// §"Chunked Compression".
 ///
-/// Each chunk is independently decodable: the running absolute
-/// `global_line_index` resets at every chunk boundary, so the first `Step` in a
-/// chunk is always AbsoluteStep (encoding rule 5). `forced_absolute` (one flag
-/// per `Step` record, in `Step` order) additionally forces AbsoluteStep for the
-/// first step and steps following a Call/Return/ThreadSwitch (rules 1-3).
+/// The records go through [`crate::column_aware::ExecStreamEncoder`], the
+/// chunk encoder the column-aware path streams into, so both paths apply one
+/// encoding rule ([`crate::step_rule`]).
 pub fn encode_step_stream(stream: &StepStream, chunk_size: usize, zstd_level: i32) -> Result<EncodedStepStream, String> {
-    let chunk_size = chunk_size.max(1);
-    let records = &stream.records;
-    let mut dat: Vec<u8> = Vec::new();
-    let mut idx: Vec<u8> = Vec::new();
-    idx.extend_from_slice(&(chunk_size as u32).to_le_bytes());
-
-    // Walk forced-absolute flags in `Step` order as we encounter Step records.
-    let mut step_index = 0usize;
-
-    let mut i = 0usize;
-    while i < records.len() {
-        let end = (i + chunk_size).min(records.len());
-        // Record the byte offset of this chunk within steps.dat.
-        idx.extend_from_slice(&(dat.len() as u64).to_le_bytes());
-
-        let mut raw: Vec<u8> = Vec::new();
-        // Running absolute value resets per chunk for independent decode.
-        let mut prev_abs: Option<u64> = None;
-        for record in &records[i..end] {
-            let force_absolute = match record {
-                StepStreamRecord::Step { .. } => {
-                    let flag = stream.forced_absolute.get(step_index).copied().unwrap_or(true);
-                    step_index += 1;
-                    // First Step of a chunk is always absolute (prev_abs is None
-                    // there anyway); rules 1-3 force it elsewhere via `flag`.
-                    flag
-                }
-                _ => false,
-            };
-            prev_abs = encode_record(record, prev_abs, force_absolute, &mut raw);
+    use crate::column_aware::{ExecStreamEncoder, StepEvent};
+    let mut enc = ExecStreamEncoder::new(chunk_size, zstd_level);
+    for record in &stream.records {
+        match record {
+            StepStreamRecord::Step { global_line_index } => enc.write_position(*global_line_index, false)?,
+            StepStreamRecord::DeltaColumn { global_position_index, .. } => enc.write_position(*global_position_index, true)?,
+            StepStreamRecord::Raise { exception_type_id, message } => enc.write_event(StepEvent::Raise {
+                exception_type_id: *exception_type_id,
+                message: message.clone(),
+            })?,
+            StepStreamRecord::Catch { exception_type_id } => enc.write_event(StepEvent::Catch {
+                exception_type_id: *exception_type_id,
+            })?,
+            StepStreamRecord::ThreadSwitch { thread_id } => enc.write_event(StepEvent::ThreadSwitch { thread_id: *thread_id })?,
+            StepStreamRecord::ThreadStart { thread_id } => enc.write_event(StepEvent::ThreadStart { thread_id: *thread_id })?,
+            StepStreamRecord::ThreadExit { thread_id } => enc.write_event(StepEvent::ThreadExit { thread_id: *thread_id })?,
+            StepStreamRecord::SourceReload {
+                reload_ordinal,
+                changed,
+                in_flight_frames,
+            } => enc.write_event(StepEvent::SourceReload {
+                reload_ordinal: *reload_ordinal,
+                changed: changed.clone(),
+                in_flight_frames: *in_flight_frames,
+            })?,
         }
-        // ONE-SHOT, not streaming — and this is a correctness requirement, not
-        // a style choice. `zstd::bulk::compress` is `ZSTD_compress`, which
-        // records the payload's size in the frame header;
-        // `zstd::encode_all` is the streaming API, which cannot know the size
-        // in advance and leaves the field unset. The canonical Nim reader
-        // (`exec_stream.nim`, `decodeSpecChunkRecordCount` and `chunkSlot`)
-        // calls `ZSTD_getFrameContentSize` and FAILS on
-        // `ZSTD_CONTENTSIZE_UNKNOWN`, so a stream compressed the streaming way
-        // is not merely different — it is unreadable by the reference reader.
-        // Measured on a 200-record chunk: 104 bytes / `None` from the streaming
-        // API against 105 bytes / `Some(400)` from this one. See
-        // `crate::column_aware::compress_chunk`.
-        let compressed = crate::column_aware::compress_chunk(&raw, zstd_level)?;
-        dat.extend_from_slice(&compressed);
-        i = end;
     }
-
+    let encoded = enc.finish()?;
     Ok(EncodedStepStream {
-        dat,
-        idx,
-        record_count: records.len(),
+        dat: encoded.dat,
+        idx: encoded.idx,
+        record_count: stream.records.len(),
     })
 }
 
@@ -693,7 +560,7 @@ mod tests {
 
     #[test]
     fn signed_varint_roundtrip() {
-        for v in [0i64, -1, 1, -64, 63, MAX_DELTA, -MAX_DELTA, i32::MIN as i64, i64::MAX, i64::MIN] {
+        for v in [0i64, -1, 1, -64, 63, 1_048_575, -1_048_575, i32::MIN as i64, i64::MAX, i64::MIN] {
             let mut buf = Vec::new();
             encode_signed_varint(v, &mut buf);
             let mut pos = 0;

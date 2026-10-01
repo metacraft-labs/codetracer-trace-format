@@ -15,10 +15,10 @@
 //! | this module | Nim original |
 //! |---|---|
 //! | [`StepEvent`] / [`encode_step_event`] / [`decode_step_event`] | `codetracer_trace_writer/step_encoding.nim` |
-//! | [`ExecStreamEncoder`] | `codetracer_trace_writer/exec_stream.nim` (`writeEvent` / `flushChunk` / `flush`) |
+//! | [`ExecStreamEncoder`] | `codetracer_trace_writer/exec_stream.nim` (`writeEvent` / `flushChunk` / `flush`); the position encoding is [`crate::step_rule`]'s |
 //! | [`PositionSpace`] | `multi_stream_writer.nim` (`rebuildGli` / `toGlobalLineIndex`) + `global_line_index.nim` |
 //! | [`encode_path_record_layout_a`] | `interning_table.nim` (`ensurePathIdColumnAware`) |
-//! | [`StepEncoder`] | `multi_stream_writer.nim` (`registerStep` / `registerStepWithColumn` / `registerColumnStep`) |
+//! | [`StepEncoder`] | `multi_stream_writer.nim` (`registerStep` / `registerStepWithColumn` / `registerColumnStep`), positions only |
 //!
 //! # The two addressing modes
 //!
@@ -521,6 +521,8 @@ pub fn decode_path_record_layout_a(record: &[u8]) -> Result<(String, Vec<u32>), 
 
 // --- the execution-stream encoder -------------------------------------------
 
+use crate::step_rule::ChunkCursor;
+
 /// Nim `exec_stream.nim` `DefaultExecChunkSize`.
 pub const DEFAULT_EXEC_CHUNK_SIZE: usize = 4096;
 /// Nim `exec_stream.nim` `ExecCompressionLevel`.
@@ -536,26 +538,20 @@ pub struct EncodedExecStream {
     pub total_events: u64,
 }
 
-/// Streaming encoder for the execution stream, byte-compatible with the Nim
-/// writer. Port of Nim `exec_stream.nim` `ExecStreamWriter`.
+/// Streaming encoder for `steps.dat` + `steps.idx`: the one chunk encoder
+/// both of this crate's step paths use.
 ///
-/// Two behaviours here are load-bearing for byte identity and are easy to get
-/// wrong by re-deriving from the spec:
+/// It owns the chunking and the encoding rule ([`crate::step_rule`]): every
+/// position is written through a per-chunk [`ChunkCursor`], so the first
+/// position of each chunk is an `AbsoluteStep` whatever records precede it,
+/// and every other one takes the shorter of the absolute and the delta, a tie
+/// going to the absolute. `last_position` is the writer's running position,
+/// carried across chunks, against which [`StepEvent::DeltaStep`] and
+/// [`StepEvent::DeltaColumn`] inputs are resolved.
 ///
-/// 1. **Chunk-boundary promotion happens at write time, not at flush time.**
-///    A `DeltaStep` or `DeltaColumn` that lands first in a chunk is rewritten
-///    to an `AbsoluteStep` carrying `running + delta`, so every chunk decodes
-///    independently. The running cursor is *not* reset at the boundary — it
-///    carries across, which is what makes the promoted absolute correct.
-/// 2. **The chunk payload is compressed one-shot.** Nim calls `ZSTD_compress`,
-///    which pledges the frame's content size in its header.
-///    `zstd::encode_all` — the streaming call — does not, and produces
-///    different bytes for the same input (measured: 104 vs 105 bytes on a
-///    200-record chunk, `get_frame_content_size` `None` vs `Some(400)`). That
-///    is not only a byte difference: the Nim reader's
-///    `decodeSpecChunkRecordCount` and `chunkSlot` both *fail* on
-///    `ZSTD_CONTENTSIZE_UNKNOWN`, so a stream compressed the streaming way is
-///    unreadable by the reference reader. Use [`compress_chunk`].
+/// The chunk payload is compressed one-shot ([`compress_chunk`]), so that its
+/// frame declares its content size (`internal-files.md` §"Chunking and
+/// compression of the runtime streams").
 pub struct ExecStreamEncoder {
     chunk_size: usize,
     zstd_level: i32,
@@ -565,8 +561,10 @@ pub struct ExecStreamEncoder {
     dat: Vec<u8>,
     idx: Vec<u8>,
     data_offset: u64,
-    /// Running absolute position — Nim's `lastGlobalLineIndex`.
+    /// The running absolute position after the last position record.
     last_position: u64,
+    /// The encoding rule's cursor, reset at every chunk boundary.
+    cursor: ChunkCursor,
 }
 
 /// Compress one chunk payload the way the Nim writer does.
@@ -598,6 +596,7 @@ impl ExecStreamEncoder {
             idx,
             data_offset: 0,
             last_position: 0,
+            cursor: ChunkCursor::new(),
         }
     }
 
@@ -611,42 +610,44 @@ impl ExecStreamEncoder {
         self.last_position
     }
 
-    /// Write one event. Port of Nim `writeEvent`.
+    /// Write a position record for `position`; `column_step` says the
+    /// recorder registered it as a column step. Its form is the rule's.
+    pub fn write_position(&mut self, position: u64, column_step: bool) -> Result<(), String> {
+        self.cursor.encode_position(position, column_step, &mut self.buffer);
+        self.last_position = position;
+        self.count_record()
+    }
+
+    /// Write one event. A position event (`AbsoluteStep`, `DeltaStep`,
+    /// `DeltaColumn`) is resolved to its absolute position — a delta against
+    /// the running position — and written through [`Self::write_position`],
+    /// so its form on the wire is the rule's, not the caller's. Any other
+    /// event is written as it is.
     pub fn write_event(&mut self, event: StepEvent) -> Result<(), String> {
-        let mut ev = event;
-
-        // At the start of a chunk, force an absolute so the chunk stands alone.
-        if self.event_count == 0 {
-            ev = match ev {
-                StepEvent::DeltaStep { delta } => StepEvent::AbsoluteStep {
-                    global_position_index: (self.last_position as i64).wrapping_add(delta) as u64,
-                },
-                StepEvent::DeltaColumn { column_delta } => StepEvent::AbsoluteStep {
-                    global_position_index: (self.last_position as i64).wrapping_add(column_delta) as u64,
-                },
-                other => other,
-            };
+        match event {
+            StepEvent::AbsoluteStep { global_position_index } => self.write_position(global_position_index, false),
+            StepEvent::DeltaStep { delta } => self.write_position((self.last_position as i64).wrapping_add(delta) as u64, false),
+            StepEvent::DeltaColumn { column_delta } => self.write_position((self.last_position as i64).wrapping_add(column_delta) as u64, true),
+            other => {
+                encode_step_event(&other, &mut self.buffer);
+                self.count_record()
+            }
         }
+    }
 
-        match &ev {
-            StepEvent::AbsoluteStep { global_position_index } => self.last_position = *global_position_index,
-            StepEvent::DeltaStep { delta } => self.last_position = (self.last_position as i64).wrapping_add(*delta) as u64,
-            StepEvent::DeltaColumn { column_delta } => self.last_position = (self.last_position as i64).wrapping_add(*column_delta) as u64,
-            _ => {}
-        }
-
-        encode_step_event(&ev, &mut self.buffer);
+    fn count_record(&mut self) -> Result<(), String> {
         self.event_count += 1;
         self.total_events += 1;
-
         if self.event_count >= self.chunk_size {
             self.flush_chunk()?;
         }
         Ok(())
     }
 
-    /// Compress and emit the buffered chunk. Port of Nim `flushChunk`.
+    /// Compress and emit the buffered chunk, and start the next one without a
+    /// cursor.
     fn flush_chunk(&mut self) -> Result<(), String> {
+        self.cursor.reset();
         if self.event_count == 0 {
             return Ok(());
         }
@@ -660,7 +661,6 @@ impl ExecStreamEncoder {
     }
 
     /// Flush the trailing partial chunk and return the two files.
-    /// Port of Nim `flush`.
     pub fn finish(mut self) -> Result<EncodedExecStream, String> {
         self.flush_chunk()?;
         Ok(EncodedExecStream {
@@ -671,28 +671,12 @@ impl ExecStreamEncoder {
     }
 }
 
-// --- the step encoder (delta-vs-absolute policy) -----------------------------
+// --- the step encoder ---------------------------------------------------------
 
-/// Nim's delta window. `registerStep` emits a `DeltaStep` only when the signed
-/// position delta lies in `-64 ..= 63` — one zigzag varint byte — and an
-/// `AbsoluteStep` otherwise.
-///
-/// This is **narrower than** [`crate::step_stream::MAX_DELTA`] (±1_048_575),
-/// which the line-only Rust encoder uses. The two policies produce different
-/// bytes for the same steps, so the column-aware path uses Nim's.
-pub const NIM_DELTA_MIN: i64 = -64;
-/// Upper end of Nim's delta window. See [`NIM_DELTA_MIN`].
-pub const NIM_DELTA_MAX: i64 = 63;
-
-/// Turns `(path_id, line[, column_delta])` calls into the [`StepEvent`]
-/// sequence the Nim writer would buffer.
-///
-/// Port of Nim `multi_stream_writer.nim` `registerStep`,
-/// `registerStepWithColumn` and `registerColumnStep`. It owns the running
-/// cursor and the delta-vs-absolute decision; [`ExecStreamEncoder`] owns
-/// framing and chunk-boundary promotion. Keeping the two separate mirrors the
-/// Nim split and is why promotion cannot double-count: the encoder's promotion
-/// preserves the absolute value this type computed.
+/// Turns `(path_id, line[, column_delta])` calls into the position events the
+/// execution stream records, and keeps the running position a column step is
+/// relative to. Which form each position takes on the wire is
+/// [`ExecStreamEncoder`]'s decision, by the rule of [`crate::step_rule`].
 #[derive(Debug, Clone, Default)]
 pub struct StepEncoder {
     step_count: u64,
@@ -707,7 +691,7 @@ impl StepEncoder {
         }
     }
 
-    /// Steps emitted so far.
+    /// Exec records emitted so far.
     pub fn step_count(&self) -> u64 {
         self.step_count
     }
@@ -715,48 +699,28 @@ impl StepEncoder {
     /// The event for a step at `position`, with `column_delta` folded in.
     ///
     /// `column_delta` is the offset from column 1 of the requested line, i.e.
-    /// `column - 1`. Passing 0 reproduces `registerStep` exactly — Nim's
-    /// `registerStepWithColumn` docs make the same guarantee.
+    /// `column - 1`; the step is still a line step, written as a `DeltaStep`
+    /// or an `AbsoluteStep`.
     pub fn step_at(&mut self, position: u64, column_delta: i64) -> StepEvent {
         let combined = (position as i64).wrapping_add(column_delta) as u64;
-        let event = if self.step_count == 0 {
-            // Rule 1: the first step in a trace is always absolute.
-            StepEvent::AbsoluteStep {
-                global_position_index: combined,
-            }
-        } else {
-            let delta = (combined as i64).wrapping_sub(self.last_position as i64);
-            if (NIM_DELTA_MIN..=NIM_DELTA_MAX).contains(&delta) {
-                StepEvent::DeltaStep { delta }
-            } else {
-                StepEvent::AbsoluteStep {
-                    global_position_index: combined,
-                }
-            }
-        };
         self.last_position = combined;
         self.step_count += 1;
-        event
+        StepEvent::AbsoluteStep {
+            global_position_index: combined,
+        }
     }
 
-    /// Account for an execution-stream record that occupies a step slot but
-    /// carries no position — `ThreadSwitch`, `ThreadStart`, `ThreadExit`.
-    ///
-    /// The Nim writer increments `stepCount` for each of these (they also each
-    /// write an empty value record, so `values.dat` stays parallel), and
-    /// `stepCount` is what decides "the first step in a trace is always
-    /// absolute". A trace that opens with a thread switch therefore encodes its
-    /// FIRST real step as a `DeltaStep` from position 0, not as an
-    /// `AbsoluteStep` — surprising, and exactly the sort of detail a
-    /// re-derivation from the spec gets wrong. The cursor itself does not move.
+    /// Account for an execution-stream record that occupies an exec slot but
+    /// carries no position — `ThreadSwitch`, `ThreadStart`, `ThreadExit`,
+    /// `SourceReload`. The running position does not move.
     pub fn note_non_step_event(&mut self) {
         self.step_count += 1;
     }
 
-    /// A column-only step. Port of `registerColumnStep`.
+    /// A column-only step: a column delta from the running position.
     ///
-    /// Refuses to be the first step: the running cursor must be defined before
-    /// a column delta can be applied, and Nim returns the same error.
+    /// Refused as the trace's first record: the running position must be
+    /// defined before a column delta can be applied to it.
     pub fn column_step(&mut self, column_delta: i64) -> Result<StepEvent, String> {
         if self.step_count == 0 {
             return Err(
@@ -918,16 +882,11 @@ mod tests {
     }
 
     #[test]
-    fn step_encoder_uses_nims_narrow_delta_window() {
+    fn step_encoder_hands_the_encoder_absolute_positions() {
         let mut enc = StepEncoder::new();
         assert_eq!(enc.step_at(1000, 0), StepEvent::AbsoluteStep { global_position_index: 1000 });
-        // +63 is inside the window.
-        assert_eq!(enc.step_at(1063, 0), StepEvent::DeltaStep { delta: 63 });
-        // +64 is outside it — the wider MAX_DELTA policy would have emitted a
-        // DeltaStep here, which is exactly the byte divergence this pins.
-        assert_eq!(enc.step_at(1127, 0), StepEvent::AbsoluteStep { global_position_index: 1127 });
-        // -64 is inside.
-        assert_eq!(enc.step_at(1063, 0), StepEvent::DeltaStep { delta: -64 });
+        assert_eq!(enc.step_at(1000, 3), StepEvent::AbsoluteStep { global_position_index: 1003 });
+        assert_eq!(enc.column_step(2), Ok(StepEvent::DeltaColumn { column_delta: 2 }));
     }
 
     #[test]
@@ -939,11 +898,12 @@ mod tests {
 
     #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
     #[test]
-    fn chunk_boundary_promotes_a_delta_to_an_absolute() {
-        // Two events per chunk. The third event opens chunk 1 and must be
-        // promoted, or chunk 1 cannot be decoded on its own.
+    fn every_chunk_anchors_its_first_position_and_resolves_deltas_across_the_boundary() {
+        // Two events per chunk. Chunk 1 opens with a delta input, which the
+        // encoder resolves against the running position (102) and writes as
+        // the chunk's absolute anchor.
         let mut enc = ExecStreamEncoder::new(2, EXEC_COMPRESSION_LEVEL);
-        enc.write_event(StepEvent::AbsoluteStep { global_position_index: 100 }).unwrap();
+        enc.write_event(StepEvent::AbsoluteStep { global_position_index: 200 }).unwrap();
         enc.write_event(StepEvent::DeltaStep { delta: 1 }).unwrap();
         enc.write_event(StepEvent::DeltaStep { delta: 1 }).unwrap();
         enc.write_event(StepEvent::DeltaColumn { column_delta: 1 }).unwrap();
@@ -953,19 +913,11 @@ mod tests {
         // idx: chunk_size + two chunk offsets.
         assert_eq!(out.idx.len(), 4 + 8 * 2);
         assert_eq!(u32::from_le_bytes(out.idx[0..4].try_into().unwrap()), 2);
-        let off0 = u64::from_le_bytes(out.idx[4..12].try_into().unwrap());
         let off1 = u64::from_le_bytes(out.idx[12..20].try_into().unwrap());
-        assert_eq!(off0, 0);
-        assert!(off1 > 0 && (off1 as usize) < out.dat.len());
-
-        // Chunk 1 decodes standalone and starts absolute at 102.
+        let raw0 = zstd::decode_all(&out.dat[..off1 as usize]).unwrap();
         let raw1 = zstd::decode_all(&out.dat[off1 as usize..]).unwrap();
-        let mut pos = 0usize;
-        assert_eq!(
-            decode_step_event(&raw1, &mut pos).unwrap(),
-            StepEvent::AbsoluteStep { global_position_index: 102 }
-        );
-        assert_eq!(decode_step_event(&raw1, &mut pos).unwrap(), StepEvent::DeltaColumn { column_delta: 1 });
+        assert_eq!(raw0, vec![0, 0xc8, 0x01, 1, 2]);
+        assert_eq!(raw1, vec![0, 0xca, 0x01, 7, 2], "chunk 1 decodes on its own");
     }
 
     #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]

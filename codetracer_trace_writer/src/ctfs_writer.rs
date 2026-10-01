@@ -557,7 +557,7 @@ impl CtfsTraceWriter {
         }
         if !self.source_reloads_declared {
             return Err("register_source_reload: this trace did not declare source reloads before it opened \
-                        (call declare_source_reloads before begin_writing_trace_events). meta.dat is written \
+                        (call declare_source_reload before begin_writing_trace_events). meta.dat is written \
                         at open and does not admit a SourceReload record unless it declares one may occur"
                 .to_string());
         }
@@ -620,9 +620,9 @@ impl CtfsTraceWriter {
     /// and the line-count table: `meta.dat` is written at open and never
     /// rewritten, so it is refused once the trace has begun. A trace that
     /// declares it and records no reload is well-formed.
-    pub fn declare_source_reloads(&mut self) -> Result<(), String> {
+    pub fn declare_source_reload(&mut self) -> Result<(), String> {
         if self.ctfs_writer.is_some() {
-            return Err("declare_source_reloads: the trace is already open, and meta.dat, which carries the \
+            return Err("declare_source_reload: the trace is already open, and meta.dat, which carries the \
                         declaration, is fixed when it opens"
                 .to_string());
         }

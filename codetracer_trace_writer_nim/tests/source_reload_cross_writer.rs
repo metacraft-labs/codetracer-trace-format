@@ -124,7 +124,7 @@ fn record(writer: Writer, dir: &Path) -> PathBuf {
         Writer::Rust => {
             let mut w = CtfsTraceWriter::new(PROGRAM, &[]);
             let out = dir.join(PROGRAM);
-            w.declare_source_reloads().expect("rust declare_source_reloads");
+            w.declare_source_reload().expect("rust declare_source_reload");
             TraceWriter::begin_writing_trace_events(&mut w, &out).expect("rust begin_events");
             w.enable_line_count_table().expect("rust enable_line_count_table");
             w.register_path_with_line_count(&game, 12).expect("rust game");

@@ -31,7 +31,7 @@ fn open(program: &str) -> CtfsTraceWriter {
 /// A writer whose recorder declared, before opening, that reloads may occur.
 fn open_reloading(program: &str) -> CtfsTraceWriter {
     let mut w = CtfsTraceWriter::new(program, &[]).with_output(CtfsOutput::Memory);
-    w.declare_source_reloads().expect("declared before the trace opens");
+    w.declare_source_reload().expect("declared before the trace opens");
     TraceWriter::begin_writing_trace_events(&mut w, Path::new(program)).expect("begin");
     w
 }
@@ -84,7 +84,7 @@ fn a_reload_in_a_trace_that_did_not_declare_it_is_refused() {
     assert_eq!(w.source_reload_count(), 0);
     let mut late = open("late_declare");
     assert!(
-        late.declare_source_reloads().is_err(),
+        late.declare_source_reload().is_err(),
         "the declaration is part of meta.dat, which is fixed when the trace opens"
     );
 }
@@ -185,7 +185,7 @@ fn the_table_refuses_what_it_cannot_represent() {
 fn a_column_aware_writer_writes_a_reload_marker() {
     let mut w = CtfsTraceWriter::new("col_reload", &[]).with_output(CtfsOutput::Memory);
     w.enable_column_aware_steps();
-    w.declare_source_reloads().expect("declare");
+    w.declare_source_reload().expect("declare");
     TraceWriter::begin_writing_trace_events(&mut w, Path::new("col_reload")).unwrap();
     w.register_path_with_line_lengths(Path::new("/a"), &[4, 4]);
     w.register_path_with_line_lengths(Path::new("/b"), &[4, 4]);

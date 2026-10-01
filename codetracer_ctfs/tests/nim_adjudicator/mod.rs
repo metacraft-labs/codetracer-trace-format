@@ -34,10 +34,19 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// The Nim checkout to adjudicate with: the `CODETRACER_TRACE_FORMAT_NIM_DIR`
+/// override `codetracer_trace_writer_nim/build.rs` also honours, or the
+/// sibling repo.
+pub fn nim_repo() -> PathBuf {
+    std::env::var("CODETRACER_TRACE_FORMAT_NIM_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../codetracer-trace-format-nim"))
+}
+
 /// The sibling Nim checkout, the `direnv` that supplies its toolchain, and
 /// `HOME`. `None` means the cross-implementation half cannot run here.
 pub fn nim_checker() -> Option<(PathBuf, PathBuf, PathBuf)> {
-    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../codetracer-trace-format-nim");
+    let repo = nim_repo();
     if !repo.join("tests/check_ctfs_container.nim").exists() {
         eprintln!(
             "SKIP: the sibling codetracer-trace-format-nim checkout has no \

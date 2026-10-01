@@ -96,9 +96,12 @@ impl StepMapBuilder {
     }
 
     /// Record that the step at exec-record index `step_id` executed `line` of
-    /// `path_id`. The line is the registered one, truncated to 32 bits as the
-    /// wire field is.
+    /// `path_id`. The key is the line as recorded, truncated to 32 bits as the
+    /// wire field is — line 0 is recorded as line 1, as it is in `steps.dat`
+    /// (`internal-files.md` §"Global Line Index", "Line 0 is line 1,
+    /// everywhere").
     pub fn record_step(&mut self, path_id: u64, line: i64, step_id: u64) {
+        let line = if line == 0 { 1 } else { line };
         self.by_path.entry(path_id).or_default().entry(line as u32).or_default().push(step_id);
     }
 

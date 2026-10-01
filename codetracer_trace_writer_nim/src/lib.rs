@@ -3541,11 +3541,19 @@ impl std::fmt::Debug for NimTraceReaderHandle {
 unsafe impl Send for NimTraceReaderHandle {}
 
 /// Helper: read a heap-allocated buffer from Nim into a Rust `String`, then free it.
+///
+/// A null pointer is the C ABI's failure signal and callers check it first;
+/// an empty name is a NON-null buffer of length 0, which still has to be
+/// freed. Freeing only when `len > 0` leaked every empty name's buffer.
 fn read_nim_buffer(ptr: *mut u8, len: usize) -> String {
-    if ptr.is_null() || len == 0 {
+    if ptr.is_null() {
         return String::new();
     }
-    let s = unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len)) }.to_string();
+    let s = if len == 0 {
+        String::new()
+    } else {
+        unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len)) }.to_string()
+    };
     unsafe { ct_free_buffer(ptr) };
     s
 }

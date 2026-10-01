@@ -20,7 +20,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 /// Recursively collect the Nim source files under `dir` (`.nim` / `.nims` /
-/// `.cfg` / `.nimble`), skipping VCS and build-output directories. Used to make
+/// `.cfg` / `.nimble`, and the `.c` / `.h` files they `{.compile.}`), skipping VCS and build-output directories. Used to make
 /// this crate rebuild when the SIBLING `codetracer-trace-format-nim` sources
 /// change — see the call site for why Cargo would otherwise miss them.
 fn collect_nim_sources(dir: &Path, out: &mut Vec<PathBuf>) {
@@ -38,7 +38,7 @@ fn collect_nim_sources(dir: &Path, out: &mut Vec<PathBuf>) {
             }
             collect_nim_sources(&path, out);
         } else if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
-            if matches!(ext, "nim" | "nims" | "cfg" | "nimble") {
+            if matches!(ext, "nim" | "nims" | "cfg" | "nimble" | "c" | "h") {
                 out.push(path);
             }
         }
@@ -172,6 +172,13 @@ fn main() {
     nim.arg("c")
         .arg("--app:staticlib")
         .arg("--mm:arc")
+        // One process-wide Nim heap, owned by no thread. With `--threads:on`
+        // every thread gets its own heap, and a writer recorded on a worker
+        // thread that exits before the close is freed into a dead heap (a
+        // crash in `rawDealloc`). The library's entry points serialise on a
+        // process lock, which is what makes one heap safe to share; see
+        // `codetracer_trace_writer_ffi_runtime.c` in the Nim repository.
+        .arg("--threads:off")
         .arg("--noMain")
         .arg("-d:release")
         // db-backend also links the Nim-compiled MCR emulator. Two

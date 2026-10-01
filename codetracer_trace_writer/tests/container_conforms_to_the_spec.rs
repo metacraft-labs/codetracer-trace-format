@@ -12,12 +12,12 @@
 //! log as *moved to events.dat*. Second, the CONTAINER HEADER, read straight out
 //! of `ctfs-container.md` section 1:
 //!
-//!   * **Byte 5 is `4`.** v4 also RE-DEFINES bytes 6 and 7 — under v2/v3 they
-//!     were compression and encryption, under v4 they are encryption and
-//!     max_shards — so the version is asserted together with what those bytes
-//!     now mean, rather than alone. A bump that left a compression tag sitting
-//!     in the encryption byte would satisfy a version assertion and produce a
-//!     container declaring itself AES-256-GCM encrypted.
+//!   * **Byte 5 is `5`.** Bytes 6 and 7 are encryption and max_shards — under
+//!     the retired v2/v3 they were compression and encryption — so the version
+//!     is asserted together with what those bytes mean, rather than alone. A
+//!     compression tag sitting in the encryption byte would satisfy a version
+//!     assertion and produce a container declaring itself AES-256-GCM
+//!     encrypted.
 //!
 //!   * **Byte 7 is `0`.** The spec reads `0 = no sharding`, and this writer
 //!     produces a single unsharded container.
@@ -73,7 +73,7 @@ fn write_container(dir: &Path) -> PathBuf {
 }
 
 #[test]
-fn the_container_header_declares_version_4() {
+fn the_container_header_declares_version_5() {
     let dir = tempfile::tempdir().unwrap();
     let ct = write_container(dir.path());
     let bytes = std::fs::read(&ct).unwrap();
@@ -85,32 +85,31 @@ fn the_container_header_declares_version_4() {
         "magic is not the one ctfs-container.md states"
     );
     assert_eq!(
-        bytes[5], 4,
-        "ctfs-container.md section 1 states header byte 5 (Version) is 4; this writer wrote {}",
+        bytes[5], 5,
+        "ctfs-container.md section 1 states header byte 5 (Version) is 5; this writer wrote {}",
         bytes[5]
     );
 }
 
 #[test]
-fn version_4_reinterprets_bytes_6_and_7_and_this_writer_respects_that() {
+fn bytes_6_and_7_are_encryption_and_max_shards_and_this_writer_respects_that() {
     let dir = tempfile::tempdir().unwrap();
     let ct = write_container(dir.path());
     let bytes = std::fs::read(&ct).unwrap();
 
-    // Under v4 byte 6 is Encryption, not the compression tag it was under
-    // v2/v3. This writer does not encrypt, so it must be 0 — and it is only
+    // Byte 6 is Encryption, not the compression tag it was under v2/v3. This writer does not encrypt, so it must be 0 — and it is only
     // 0 by luck if the compression tag it used to hold was also 0, which is
     // exactly why this is asserted beside the version rather than trusted.
     assert_eq!(
         bytes[6], 0,
-        "ctfs-container.md: byte 6 under version 4 is Encryption (0 = none); this writer wrote {}",
+        "ctfs-container.md: byte 6 is Encryption (0 = none); this writer wrote {}",
         bytes[6]
     );
-    // Under v4 byte 7 is MaxShards, where `0` means no sharding. This writer
+    // Byte 7 is MaxShards, where `0` means no sharding. This writer
     // produces a single unsharded container.
     assert_eq!(
         bytes[7], 0,
-        "ctfs-container.md: byte 7 under version 4 is MaxShards (0 = no sharding); this writer wrote {}",
+        "ctfs-container.md: byte 7 is MaxShards (0 = no sharding); this writer wrote {}",
         bytes[7]
     );
 }

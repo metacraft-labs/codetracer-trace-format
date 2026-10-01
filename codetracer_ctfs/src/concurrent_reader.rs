@@ -3,7 +3,7 @@ use std::path::Path;
 
 use crate::base40::base40_decode;
 use crate::block_bounds::BlockBound;
-use crate::file_entry::{FileEntry, FILE_ENTRY_SIZE};
+use crate::file_entry::{FileEntry, MemberLayout, FILE_ENTRY_SIZE};
 use crate::header::{EXTENDED_HEADER_SIZE, HEADER_SIZE};
 use crate::pread_compat::pread_exact;
 use crate::CtfsError;
@@ -48,12 +48,8 @@ impl ConcurrentCtfsReader {
         // Read header
         let mut header_buf = [0u8; HEADER_SIZE];
         pread_exact(&file, &mut header_buf, 0)?;
-        if header_buf[0..5] != crate::header::MAGIC {
-            return Err(CtfsError::InvalidMagic);
-        }
-        if header_buf[5] != crate::header::VERSION && header_buf[5] != crate::header::VERSION_V2 && header_buf[5] != crate::header::VERSION_V4 {
-            return Err(CtfsError::InvalidVersion(header_buf[5]));
-        }
+        // The same check `CtfsReader` applies: magic, then version 5 only.
+        crate::header::Header::read_from(&mut &header_buf[..])?;
 
         // Read extended header
         let mut ext_buf = [0u8; EXTENDED_HEADER_SIZE];
@@ -183,8 +179,21 @@ impl ConcurrentCtfsReader {
         let n = self.block_size as u64 / 8;
         let usable = n - 1;
 
+        // The form is decided from `MapBlock`, never from `Size`
+        // (`ctfs-container.md` §2, "Readers").
+        let root = match entry.layout() {
+            // Reached only with a non-zero `Size` (callers return early on an
+            // empty member), which is a null pointer: refused below by name.
+            MemberLayout::Empty => 0,
+            MemberLayout::Direct(b) => {
+                bound.check_direct_member(b, entry.size, name)?;
+                return Ok(b);
+            }
+            MemberLayout::Mapped(m) => m,
+        };
+
         let mut idx = block_index;
-        let mut current_level_block = entry.map_block;
+        let mut current_level_block = root;
         let mut level = 1u32;
 
         // Path 1 of 3: the entry's mapping root.

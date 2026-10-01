@@ -174,6 +174,7 @@ impl IoEventRecord {
             return Err("events.dat: truncated record (no kind)".to_string());
         }
         let kind = data[*pos];
+        event_log_kind(kind)?;
         *pos += 1;
         let step_id = decode_varint(data, pos)?;
         let metadata = decode_blob(data, pos)?;
@@ -262,11 +263,38 @@ impl IoEventStreamBuilder {
     }
 }
 
-/// Map an [`EventLogKind`] to its stable on-disk ordinal. The ordinal is the
-/// enum's `repr(u8)` discriminant — the exact value the legacy `events.log`
-/// already carries — so `events.dat` and `events.log` agree on the kind byte.
+/// Map an [`EventLogKind`] to its on-disk ordinal: the enum's `repr(u8)`
+/// discriminant, in declaration order (`trace-events.md` §"EventLogKind (u8
+/// enum)").
 fn event_log_kind_ord(kind: EventLogKind) -> u8 {
     kind as u8
+}
+
+/// The `EventLogKind` an `events.dat` kind byte names, exactly. Values 14-255
+/// are unassigned and refused, naming the value: a reader never substitutes a
+/// kind for one it does not know.
+pub fn event_log_kind(ordinal: u8) -> Result<EventLogKind, String> {
+    Ok(match ordinal {
+        0 => EventLogKind::Write,
+        1 => EventLogKind::WriteFile,
+        2 => EventLogKind::WriteOther,
+        3 => EventLogKind::Read,
+        4 => EventLogKind::ReadFile,
+        5 => EventLogKind::ReadOther,
+        6 => EventLogKind::ReadDir,
+        7 => EventLogKind::OpenDir,
+        8 => EventLogKind::CloseDir,
+        9 => EventLogKind::Socket,
+        10 => EventLogKind::Open,
+        11 => EventLogKind::Error,
+        12 => EventLogKind::TraceLogEvent,
+        13 => EventLogKind::EvmEvent,
+        other => {
+            return Err(format!(
+                "events.dat: record kind {other} is not an assigned EventLogKind (0-13 are; 14-255 are unassigned)"
+            ));
+        }
+    })
 }
 
 /// The encoded `events.dat` stream plus its companion `events.idx`.
@@ -299,6 +327,9 @@ pub fn encode_io_event_stream(records: &[IoEventRecord], chunk_size: usize, zstd
 
         let mut raw: Vec<u8> = Vec::new();
         for rec in &records[i..end] {
+            // A writer stores only an assigned kind (`trace-events.md`
+            // §"EventLogKind (u8 enum)").
+            event_log_kind(rec.kind)?;
             let mut rec_bytes: Vec<u8> = Vec::new();
             rec.encode(&mut rec_bytes);
             // Length-prefix each record so the reader can index within a chunk.

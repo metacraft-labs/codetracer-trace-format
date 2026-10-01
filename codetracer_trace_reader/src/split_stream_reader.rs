@@ -249,7 +249,7 @@ pub fn read_window(reader: &mut CtfsReader, start_step: u64, max_steps: u64) -> 
                 .read(idx)
                 .map_err(|e| format!("split-stream reader: I/O event {idx} is unreadable: {e}"))?;
             io_by_step.entry(rec.step_id).or_default().push((
-                event_log_kind_from_ordinal(rec.kind),
+                codetracer_trace_writer::event_stream::event_log_kind(rec.kind).map_err(|e| format!("split-stream reader: I/O event {idx}: {e}"))?,
                 String::from_utf8_lossy(&rec.metadata).into_owned(),
                 String::from_utf8_lossy(&rec.content).into_owned(),
             ));
@@ -362,33 +362,6 @@ fn decode_return_value(bytes: &[u8]) -> Result<ValueRecord, String> {
         return Ok(ValueRecord::None { type_id: TypeId(0) });
     }
     Ok(decode_cbor::<ValueRecord>(bytes, "a call's return value")?.unwrap_or(ValueRecord::None { type_id: TypeId(0) }))
-}
-
-fn event_log_kind_from_ordinal(kind: u8) -> EventLogKind {
-    // The ordinals are `EventLogKind`'s declaration order, and they are spelled
-    // out rather than guessed: the first draft of this list omitted the six
-    // unused middle variants (`ReadDir` … `Open`), which shifted `Error` and
-    // `TraceLogEvent` down by six and turned every recorded error into a
-    // `Write`. The test that caught it compares the kind it wrote against the
-    // kind it read back, which is the only reason a silent relabelling of one
-    // enum member onto another was visible at all.
-    match kind {
-        0 => EventLogKind::Write,
-        1 => EventLogKind::WriteFile,
-        2 => EventLogKind::WriteOther,
-        3 => EventLogKind::Read,
-        4 => EventLogKind::ReadFile,
-        5 => EventLogKind::ReadOther,
-        6 => EventLogKind::ReadDir,
-        7 => EventLogKind::OpenDir,
-        8 => EventLogKind::CloseDir,
-        9 => EventLogKind::Socket,
-        10 => EventLogKind::Open,
-        11 => EventLogKind::Error,
-        12 => EventLogKind::TraceLogEvent,
-        13 => EventLogKind::EvmEvent,
-        _ => EventLogKind::Write,
-    }
 }
 
 fn push_value_event(out: &mut Vec<TraceLowLevelEvent>, ev: ValueStreamEvent) -> Result<(), String> {

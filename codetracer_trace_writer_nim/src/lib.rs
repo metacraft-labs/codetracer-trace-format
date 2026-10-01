@@ -121,6 +121,16 @@ extern "C" {
     ) -> i32;
     fn trace_writer_register_drop_variables(handle: *mut std::ffi::c_void, names: *const *const std::os::raw::c_char, count: usize) -> i32;
     fn trace_writer_register_drop_variable(handle: *mut std::ffi::c_void, name: *const std::os::raw::c_char) -> i32;
+    // The place model, value-stream tags 1 and 4-8 (`trace-events.md`
+    // §"Value Stream"). Each returns 0, or 1 with the reason in
+    // `trace_writer_last_error`.
+    fn trace_writer_bind_variable(handle: *mut std::ffi::c_void, name: *const std::os::raw::c_char, place: i64) -> i32;
+    fn trace_writer_register_cell_value(handle: *mut std::ffi::c_void, place: i64, value_cbor: *const u8, value_cbor_len: usize) -> i32;
+    fn trace_writer_register_compound_value(handle: *mut std::ffi::c_void, place: i64, value_cbor: *const u8, value_cbor_len: usize) -> i32;
+    fn trace_writer_assign_cell(handle: *mut std::ffi::c_void, place: i64, new_value_cbor: *const u8, new_value_cbor_len: usize) -> i32;
+    fn trace_writer_assign_compound_item(handle: *mut std::ffi::c_void, place: i64, index: u64, item_place: i64) -> i32;
+    fn trace_writer_register_variable_cell(handle: *mut std::ffi::c_void, name: *const std::os::raw::c_char, place: i64) -> i32;
+    fn trace_writer_declare_source_reload(handle: *mut std::ffi::c_void) -> i32;
 
     // ----- Streaming value encoder -----
 
@@ -2547,24 +2557,58 @@ impl NimTraceWriter {
         self.register_variable_with_full_value(&name, value);
     }
 
-    pub fn register_compound_value(&mut self, _place: Place, _value: ValueRecord) {
-        self.discard_unsupported("register_compound_value");
+    /// Tag 5 `CompoundValue`. The value is CBOR-encoded here exactly as the
+    /// pure-Rust writer encodes it, so the two writers' `values.dat` agree.
+    pub fn register_compound_value(&mut self, place: Place, value: ValueRecord) {
+        let cbor = place_model_cbor(&value);
+        let rc = unsafe { trace_writer_register_compound_value(self.handle, place.0, cbor.as_ptr(), cbor.len()) };
+        self.check_place_model(rc, "register_compound_value");
     }
 
-    pub fn register_cell_value(&mut self, _place: Place, _value: ValueRecord) {
-        self.discard_unsupported("register_cell_value");
+    /// Tag 4 `CellValue`.
+    pub fn register_cell_value(&mut self, place: Place, value: ValueRecord) {
+        let cbor = place_model_cbor(&value);
+        let rc = unsafe { trace_writer_register_cell_value(self.handle, place.0, cbor.as_ptr(), cbor.len()) };
+        self.check_place_model(rc, "register_cell_value");
     }
 
-    pub fn assign_compound_item(&mut self, _place: Place, _index: usize, _item_place: Place) {
-        self.discard_unsupported("assign_compound_item");
+    /// Tag 7 `AssignCompoundItem`.
+    pub fn assign_compound_item(&mut self, place: Place, index: usize, item_place: Place) {
+        let rc = unsafe { trace_writer_assign_compound_item(self.handle, place.0, index as u64, item_place.0) };
+        self.check_place_model(rc, "assign_compound_item");
     }
 
-    pub fn assign_cell(&mut self, _place: Place, _new_value: ValueRecord) {
-        self.discard_unsupported("assign_cell");
+    /// Tag 6 `AssignCell`.
+    pub fn assign_cell(&mut self, place: Place, new_value: ValueRecord) {
+        let cbor = place_model_cbor(&new_value);
+        let rc = unsafe { trace_writer_assign_cell(self.handle, place.0, cbor.as_ptr(), cbor.len()) };
+        self.check_place_model(rc, "assign_cell");
     }
 
-    pub fn register_variable(&mut self, _variable_name: &str, _place: Place) {
-        self.discard_unsupported("register_variable");
+    /// Tag 8 `VariableCell`: `variable_name` is the cell at `place`.
+    pub fn register_variable(&mut self, variable_name: &str, place: Place) {
+        let c_name = str_to_cstring(variable_name);
+        let rc = unsafe { trace_writer_register_variable_cell(self.handle, c_name.as_ptr(), place.0) };
+        self.check_place_model(rc, "register_variable");
+    }
+
+    /// A place-model entry point that refused: the record is not in the
+    /// trace, so the loss is counted and named rather than passed over.
+    fn check_place_model(&mut self, rc: i32, op: &'static str) {
+        if rc != 0 {
+            let reason = last_error();
+            self.discard_with_reason(op, &reason);
+        }
+    }
+
+    /// Declare, before the first record, that this trace may carry source
+    /// reload markers (`meta.dat` `flags_ext` bit 0). Refused after the first
+    /// record, naming the reason.
+    pub fn declare_source_reload(&mut self) -> Result<(), Box<dyn Error>> {
+        if unsafe { trace_writer_declare_source_reload(self.handle) } != 0 {
+            return Err(last_error().into());
+        }
+        Ok(())
     }
 
     /// Record that one variable has ended its life.
@@ -2624,8 +2668,11 @@ impl NimTraceWriter {
         }
     }
 
-    pub fn bind_variable(&mut self, _variable_name: &str, _place: Place) {
-        self.discard_unsupported("bind_variable");
+    /// Tag 1 `BindVariable`: `variable_name` is bound to `place`.
+    pub fn bind_variable(&mut self, variable_name: &str, place: Place) {
+        let c_name = str_to_cstring(variable_name);
+        let rc = unsafe { trace_writer_bind_variable(self.handle, c_name.as_ptr(), place.0) };
+        self.check_place_model(rc, "bind_variable");
     }
 
     /// Record a scope exit: `variable_names` are going out of scope together.
@@ -3421,6 +3468,12 @@ impl TraceWriter for NimTraceWriter {
     fn write_meta_dat(&mut self, recorder_id: &str) -> Result<(), Box<dyn Error>> {
         NimTraceWriter::write_meta_dat(self, recorder_id)
     }
+}
+
+/// The CBOR of a place-model value, encoded as the pure-Rust writer's
+/// `value_stream` encodes it.
+fn place_model_cbor(value: &ValueRecord) -> Vec<u8> {
+    cbor4ii::serde::to_vec(Vec::new(), value).expect("CBOR encode of a ValueRecord failed")
 }
 
 // ---------------------------------------------------------------------------

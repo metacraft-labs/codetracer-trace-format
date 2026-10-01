@@ -37,6 +37,7 @@ extern "C" {
 
     fn trace_writer_start(handle: *mut std::ffi::c_void, path: *const std::os::raw::c_char, line: i64);
     fn trace_writer_set_workdir(handle: *mut std::ffi::c_void, workdir: *const std::os::raw::c_char);
+    fn trace_writer_set_recording_id(handle: *mut std::ffi::c_void, recording_id: *const std::os::raw::c_char) -> i32;
     fn trace_writer_set_args(handle: *mut std::ffi::c_void, args: *const *const u8, arg_lens: *const usize, args_count: usize);
     fn trace_writer_register_step(handle: *mut std::ffi::c_void, path: *const std::os::raw::c_char, line: i64);
 
@@ -1698,6 +1699,16 @@ impl NimTraceWriter {
 
     pub fn finish_writing_trace_paths(&mut self) -> Result<(), Box<dyn Error>> {
         check_result(unsafe { trace_writer_finish_paths(self.handle) })
+    }
+
+    /// Pin the recording's UUIDv7 identity instead of having one minted.
+    /// Refused once the trace has begun, naming the reason.
+    pub fn set_recording_id(&mut self, recording_id: &str) -> Result<(), Box<dyn Error>> {
+        let c_id = str_to_cstring(recording_id);
+        if unsafe { trace_writer_set_recording_id(self.handle, c_id.as_ptr()) } != 0 {
+            return Err(last_error().into());
+        }
+        Ok(())
     }
 
     pub fn set_workdir(&mut self, workdir: &Path) {

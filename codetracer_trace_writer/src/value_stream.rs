@@ -445,8 +445,11 @@ impl ValueRecordEntry {
 /// is M23c+; for M23b the variable id IS the name reference, exactly as the
 /// legacy `events.log` carries it).
 pub struct ValueStreamBuilder {
-    /// Finalized value records, indexed by step id.
+    /// Value records not yet handed out by [`Self::take_final`]; the first is
+    /// record `taken`.
     records: Vec<ValueRecordEntry>,
+    /// Records already handed out by [`Self::take_final`].
+    taken: usize,
     /// The record being accumulated for the current step.
     current: ValueRecordEntry,
     /// Whether at least one `Step` has been seen (so the first `Step` does not
@@ -473,6 +476,7 @@ impl ValueStreamBuilder {
     pub fn new() -> Self {
         ValueStreamBuilder {
             records: Vec::new(),
+            taken: 0,
             current: ValueRecordEntry::default(),
             seen_step: false,
             staging: false,
@@ -616,11 +620,25 @@ impl ValueStreamBuilder {
 
     /// Number of value records built so far (excludes the in-progress record).
     pub fn len(&self) -> usize {
-        self.records.len()
+        self.taken + self.records.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.records.is_empty() && self.current.events.is_empty() && !self.seen_step
+        self.len() == 0 && self.current.events.is_empty() && !self.seen_step
+    }
+
+    /// Hand out the records no later event can change, in step order: every
+    /// record before the most recent step's. That one stays, because values
+    /// staged with no step to follow attach to it at
+    /// [`finish`](Self::finish) (the terminus rule).
+    pub fn take_final(&mut self) -> Vec<ValueRecordEntry> {
+        let keep_from = self.last_step_record.unwrap_or(self.records.len()).min(self.records.len());
+        let out: Vec<ValueRecordEntry> = self.records.drain(..keep_from).collect();
+        if let Some(i) = self.last_step_record.as_mut() {
+            *i -= out.len();
+        }
+        self.taken += out.len();
+        out
     }
 
     /// Finalize: push the in-progress record for the last step (so the record
@@ -696,34 +714,15 @@ pub struct EncodedValueStream {
 /// `N % chunk_size`-th record without re-deriving sizes (records are variable
 /// length). Each chunk is independently Zstd-compressed.
 pub fn encode_value_stream(records: &[ValueRecordEntry], chunk_size: usize, zstd_level: i32) -> Result<EncodedValueStream, String> {
-    let chunk_size = chunk_size.max(1);
-    let mut dat: Vec<u8> = Vec::new();
-    let mut idx: Vec<u8> = Vec::new();
-    idx.extend_from_slice(&(chunk_size as u32).to_le_bytes());
-
-    let mut i = 0usize;
-    while i < records.len() {
-        let end = (i + chunk_size).min(records.len());
-        // Record the byte offset of this chunk within values.dat.
-        idx.extend_from_slice(&(dat.len() as u64).to_le_bytes());
-
-        let mut raw: Vec<u8> = Vec::new();
-        for rec in &records[i..end] {
-            let mut rec_bytes: Vec<u8> = Vec::new();
-            rec.encode(&mut rec_bytes);
-            // Length-prefix each record so the reader can index within a chunk.
-            encode_varint(rec_bytes.len() as u64, &mut raw);
-            raw.extend_from_slice(&rec_bytes);
-        }
-        // One-shot, so the frame header pledges its content size. `value_stream.nim`
-        // sizes its destination buffer from `ZSTD_getFrameContentSize` and returns
-        // "cannot determine decompressed size for value chunk" on UNKNOWN, which is
-        // what `zstd::encode_all` produces. See `codetracer_ctfs::zstd_frame`.
-        let compressed = codetracer_ctfs::compress_pledged(&raw, zstd_level, "values.dat")?;
-        dat.extend_from_slice(&compressed);
-        i = end;
-    }
-
+    let encoded: Vec<Vec<u8>> = records
+        .iter()
+        .map(|rec| {
+            let mut bytes = Vec::new();
+            rec.encode(&mut bytes);
+            bytes
+        })
+        .collect();
+    let (dat, idx) = crate::chunk_sink::encode_table("values.dat", encoded.iter().map(Vec::as_slice), chunk_size, zstd_level)?;
     Ok(EncodedValueStream {
         dat,
         idx,

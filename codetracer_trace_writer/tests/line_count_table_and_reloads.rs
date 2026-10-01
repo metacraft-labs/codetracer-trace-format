@@ -28,7 +28,8 @@ fn open(program: &str) -> CtfsTraceWriter {
     w
 }
 
-/// A writer whose recorder declared, before opening, that reloads may occur.
+/// A writer whose recorder declared, before its first record, that reloads may
+/// occur.
 fn open_reloading(program: &str) -> CtfsTraceWriter {
     let mut w = CtfsTraceWriter::new(program, &[]).with_output(CtfsOutput::Memory);
     w.declare_source_reload().expect("declared before the trace opens");
@@ -82,10 +83,15 @@ fn a_reload_in_a_trace_that_did_not_declare_it_is_refused() {
         .expect_err("an undeclared reload must be refused");
     assert!(err.contains("declare"), "the refusal names the missing declaration: {err}");
     assert_eq!(w.source_reload_count(), 0);
+    let mut early = open("early_declare");
+    early
+        .declare_source_reload()
+        .expect("after begin but before the first record, meta.dat is not yet written");
     let mut late = open("late_declare");
+    AbstractTraceWriter::register_step(&mut late, Path::new("/a"), Line(1));
     assert!(
         late.declare_source_reload().is_err(),
-        "the declaration is part of meta.dat, which is fixed when the trace opens"
+        "the declaration is part of meta.dat, which the first record writes"
     );
 }
 

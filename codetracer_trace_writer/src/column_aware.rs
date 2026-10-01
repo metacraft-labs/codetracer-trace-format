@@ -660,6 +660,23 @@ impl ExecStreamEncoder {
         Ok(())
     }
 
+    /// The `steps.dat` and `steps.idx` bytes sealed since the last call — the
+    /// index's `chunk_size` header first of all. [`finish`](Self::finish)
+    /// returns what was not taken.
+    pub fn take_sealed(&mut self) -> (Vec<u8>, Vec<u8>) {
+        (std::mem::take(&mut self.dat), std::mem::take(&mut self.idx))
+    }
+
+    /// Seal the trailing partial chunk, leaving the encoder usable.
+    pub fn seal(&mut self) -> Result<(), String> {
+        self.flush_chunk()
+    }
+
+    /// Whether bytes were sealed since the last [`take_sealed`](Self::take_sealed).
+    pub fn has_sealed(&self) -> bool {
+        !self.dat.is_empty() || !self.idx.is_empty()
+    }
+
     /// Flush the trailing partial chunk and return the two files.
     pub fn finish(mut self) -> Result<EncodedExecStream, String> {
         self.flush_chunk()?;

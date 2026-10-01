@@ -248,9 +248,15 @@ impl IoEventStreamBuilder {
         }
     }
 
-    /// Number of I/O event records built so far.
+    /// Number of I/O event records built so far and not yet taken.
     pub fn len(&self) -> usize {
         self.records.len()
+    }
+
+    /// Hand out the records built since the last call. Each is final when
+    /// built.
+    pub fn take_records(&mut self) -> Vec<IoEventRecord> {
+        std::mem::take(&mut self.records)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -314,36 +320,20 @@ pub struct EncodedIoEventStream {
 /// `N % chunk_size`-th record without re-deriving sizes (records are variable
 /// length). Each chunk is independently Zstd-compressed.
 pub fn encode_io_event_stream(records: &[IoEventRecord], chunk_size: usize, zstd_level: i32) -> Result<EncodedIoEventStream, String> {
-    let chunk_size = chunk_size.max(1);
-    let mut dat: Vec<u8> = Vec::new();
-    let mut idx: Vec<u8> = Vec::new();
-    idx.extend_from_slice(&(chunk_size as u32).to_le_bytes());
-
-    let mut i = 0usize;
-    while i < records.len() {
-        let end = (i + chunk_size).min(records.len());
-        // Record the byte offset of this chunk within events.dat.
-        idx.extend_from_slice(&(dat.len() as u64).to_le_bytes());
-
-        let mut raw: Vec<u8> = Vec::new();
-        for rec in &records[i..end] {
-            // A writer stores only an assigned kind (`trace-events.md`
-            // §"EventLogKind (u8 enum)").
-            event_log_kind(rec.kind)?;
-            let mut rec_bytes: Vec<u8> = Vec::new();
-            rec.encode(&mut rec_bytes);
-            // Length-prefix each record so the reader can index within a chunk.
-            encode_varint(rec_bytes.len() as u64, &mut raw);
-            raw.extend_from_slice(&rec_bytes);
-        }
-        // One-shot: `io_event_stream.nim` returns "cannot determine decompressed
-        // size for io event chunk" on a streaming frame, and `event_count` reads
-        // back as 0 rather than refusing. See `codetracer_ctfs::zstd_frame`.
-        let compressed = codetracer_ctfs::compress_pledged(&raw, zstd_level, "events.dat")?;
-        dat.extend_from_slice(&compressed);
-        i = end;
+    // A writer stores only an assigned kind (`trace-events.md`
+    // §"EventLogKind (u8 enum)").
+    for rec in records {
+        event_log_kind(rec.kind)?;
     }
-
+    let encoded: Vec<Vec<u8>> = records
+        .iter()
+        .map(|rec| {
+            let mut bytes = Vec::new();
+            rec.encode(&mut bytes);
+            bytes
+        })
+        .collect();
+    let (dat, idx) = crate::chunk_sink::encode_table("events.dat", encoded.iter().map(Vec::as_slice), chunk_size, zstd_level)?;
     Ok(EncodedIoEventStream {
         dat,
         idx,

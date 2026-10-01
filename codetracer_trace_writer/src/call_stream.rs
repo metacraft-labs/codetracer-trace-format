@@ -279,9 +279,14 @@ fn cbor_bytes<T: serde::Serialize>(value: &T) -> Vec<u8> {
 /// effect at return (clamped to the last real step).
 #[derive(Default)]
 pub struct CallStreamBuilder {
-    /// Finalized records, indexed by `call_key`.
+    /// Records not yet handed out by [`Self::take_complete`]; the first is
+    /// call key `taken`.
     records: Vec<CallStreamRecord>,
-    /// Stack of open call keys (indices into `records`).
+    /// Whether each record in `records` is complete (its call returned).
+    complete: Vec<bool>,
+    /// Records already handed out.
+    taken: usize,
+    /// Stack of open call keys.
     open_stack: Vec<usize>,
     /// Current step index (number of `Step` events seen so far).
     step_index: u64,
@@ -313,11 +318,14 @@ impl CallStreamBuilder {
             | TraceLowLevelEvent::ThreadStart(_)
             | TraceLowLevelEvent::ThreadExit(_) => self.note_exec_record(),
             TraceLowLevelEvent::Call(EventCallRecord { function_id, args }) => {
-                let call_key = self.records.len() as u64;
+                let call_key = (self.taken + self.records.len()) as u64;
                 let parent_key = match self.open_stack.last() {
-                    Some(&parent_idx) => {
-                        self.records[parent_idx].children.push(call_key);
-                        self.records[parent_idx].call_key as i64
+                    Some(&parent_key) => {
+                        // An open call is never handed out: a record is taken
+                        // only once it and every record before it returned.
+                        let parent = parent_key - self.taken;
+                        self.records[parent].children.push(call_key);
+                        self.records[parent].call_key as i64
                     }
                     None => -1,
                 };
@@ -342,10 +350,13 @@ impl CallStreamBuilder {
                     raised_exception: Vec::new(),
                     children: Vec::new(),
                 });
+                self.complete.push(false);
                 self.open_stack.push(call_key as usize);
             }
             TraceLowLevelEvent::Return(ReturnRecord { return_value }) => {
-                if let Some(idx) = self.open_stack.pop() {
+                if let Some(key) = self.open_stack.pop() {
+                    let idx = key - self.taken;
+                    self.complete[idx] = true;
                     let last = self.current_step_id();
                     let leaf = self.step_index == self.records[idx].first_step_id;
                     let rec = &mut self.records[idx];
@@ -391,18 +402,29 @@ impl CallStreamBuilder {
 
     /// Number of call records built so far.
     pub fn len(&self) -> usize {
-        self.records.len()
+        self.taken + self.records.len()
     }
 
     pub fn is_empty(&self) -> bool {
-        self.records.is_empty()
+        self.len() == 0
+    }
+
+    /// Hand out, in `call_key` order, the leading records whose calls have
+    /// returned. A returned call's record no longer changes: its children
+    /// all entered while it was open.
+    pub fn take_complete(&mut self) -> Vec<CallStreamRecord> {
+        let n = self.complete.iter().take_while(|c| **c).count();
+        self.complete.drain(..n);
+        self.taken += n;
+        self.records.drain(..n).collect()
     }
 
     /// Finalize: close any still-open calls (a Return may be missing at stream
     /// end) and return the records in `call_key` order.
     pub fn finish(mut self) -> Vec<CallStreamRecord> {
         let last = self.current_step_id();
-        while let Some(idx) = self.open_stack.pop() {
+        while let Some(key) = self.open_stack.pop() {
+            let idx = key - self.taken;
             // Leave the void-return marker in place for a call with no Return.
             self.records[idx].last_step_id = self.records[idx].last_step_id.max(last);
         }
@@ -423,36 +445,15 @@ pub struct EncodedCallStream {
 /// Encode call records into `calls.dat` (chunked Zstd) + `calls.idx`
 /// (companion offset index), per seekable-zstd.md.
 pub fn encode_call_stream(records: &[CallStreamRecord], chunk_size: usize, zstd_level: i32) -> Result<EncodedCallStream, String> {
-    let chunk_size = chunk_size.max(1);
-    let mut dat: Vec<u8> = Vec::new();
-    let mut idx: Vec<u8> = Vec::new();
-    idx.extend_from_slice(&(chunk_size as u32).to_le_bytes());
-
-    let mut i = 0usize;
-    while i < records.len() {
-        let end = (i + chunk_size).min(records.len());
-        // Record the byte offset of this chunk within calls.dat.
-        idx.extend_from_slice(&(dat.len() as u64).to_le_bytes());
-
-        let mut raw: Vec<u8> = Vec::new();
-        for rec in &records[i..end] {
-            // Each record is length-prefixed within the chunk so the reader can
-            // walk records without re-deriving sizes (records are variable
-            // length; the chunk holds up to chunk_size of them).
-            let mut rec_bytes: Vec<u8> = Vec::new();
-            rec.encode(&mut rec_bytes);
-            encode_varint(rec_bytes.len() as u64, &mut raw);
-            raw.extend_from_slice(&rec_bytes);
-        }
-        // One-shot: `call_stream.nim`'s `zstdDecompress` returns
-        // "zstd: unknown frame content size" on a streaming frame, and
-        // `call_count` reads back as 0 rather than refusing.
-        // See `codetracer_ctfs::zstd_frame`.
-        let compressed = codetracer_ctfs::compress_pledged(&raw, zstd_level, "calls.dat")?;
-        dat.extend_from_slice(&compressed);
-        i = end;
-    }
-
+    let encoded: Vec<Vec<u8>> = records
+        .iter()
+        .map(|rec| {
+            let mut bytes = Vec::new();
+            rec.encode(&mut bytes);
+            bytes
+        })
+        .collect();
+    let (dat, idx) = crate::chunk_sink::encode_table("calls.dat", encoded.iter().map(Vec::as_slice), chunk_size, zstd_level)?;
     Ok(EncodedCallStream {
         dat,
         idx,

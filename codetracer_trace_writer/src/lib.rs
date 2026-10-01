@@ -11,6 +11,9 @@ mod cbor_zstd_writer;
 
 pub mod ctfs_writer;
 
+/// A Chunked Compressed Table written as its records arrive.
+pub mod chunk_sink;
+
 pub mod call_stream;
 
 pub mod step_stream;

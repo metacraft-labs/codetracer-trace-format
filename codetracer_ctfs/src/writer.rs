@@ -661,12 +661,34 @@ impl CtfsWriter {
     /// count, so readers only access valid data even though the on-disk
     /// pending block is zero-padded.
     pub fn sync_entry(&mut self, handle: FileHandle) -> Result<(), CtfsError> {
+        self.write_pending(handle)?;
+        self.publish_entry(handle)?;
+        self.writer.flush()?;
+        Ok(())
+    }
+
+    /// Write a member's partial last block to the store, without publishing
+    /// its root entry. With [`publish_entry`](Self::publish_entry) this splits
+    /// [`sync_entry`](Self::sync_entry) so a caller publishing several members
+    /// at once writes all their data before any entry that makes it visible
+    /// (`ctfs-container.md` §6, "Durability").
+    pub fn write_pending(&mut self, handle: FileHandle) -> Result<(), CtfsError> {
         let file_idx = handle.0;
         if let Some(block) = self.files[file_idx].pending_block {
             let buffer = self.files[file_idx].buffer.clone();
             self.write_block_data(block, &buffer)?;
         }
-        self.write_entry(file_idx)?;
+        Ok(())
+    }
+
+    /// Store a member's root entry (`MapBlock`, then `Size`). Its data must
+    /// already be in the store; see [`write_pending`](Self::write_pending).
+    pub fn publish_entry(&mut self, handle: FileHandle) -> Result<(), CtfsError> {
+        self.write_entry(handle.0)
+    }
+
+    /// Hand everything written so far to the operating system.
+    pub fn flush(&mut self) -> Result<(), CtfsError> {
         self.writer.flush()?;
         Ok(())
     }

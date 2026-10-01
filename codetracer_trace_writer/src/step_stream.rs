@@ -289,8 +289,10 @@ impl StepStream {
 /// emitting them (M23b+).
 #[derive(Default)]
 pub struct StepStreamBuilder {
-    /// Finalized records in stream order.
+    /// Records in stream order not yet handed out by [`Self::drain`].
     records: Vec<StepStreamRecord>,
+    /// Records built so far, drained or not: the next record's exec index.
+    total: u64,
     /// The trace's address space, grown as `Path` events intern files. A reader
     /// rebuilds the same space from `paths.dat` and inverts every address with
     /// it — see [`crate::line_position`].
@@ -304,6 +306,7 @@ impl StepStreamBuilder {
     pub fn new() -> Self {
         StepStreamBuilder {
             records: Vec::new(),
+            total: 0,
             space: LinePositionSpace::new(),
             next_path_line_count: None,
         }
@@ -319,11 +322,21 @@ impl StepStreamBuilder {
     /// Append a `SourceReload` record at the current point of the stream. It
     /// is not a position, so the running cursor is left where it was.
     pub fn push_source_reload(&mut self, reload_ordinal: u64, changed: Vec<SourceReloadChange>, in_flight_frames: u64) {
-        self.records.push(StepStreamRecord::SourceReload {
+        self.push(StepStreamRecord::SourceReload {
             reload_ordinal,
             changed,
             in_flight_frames,
         });
+    }
+
+    fn push(&mut self, record: StepStreamRecord) {
+        self.records.push(record);
+        self.total += 1;
+    }
+
+    /// Hand out the records built since the last drain, in stream order.
+    pub fn drain(&mut self) -> Vec<StepStreamRecord> {
+        std::mem::take(&mut self.records)
     }
 
     /// The address space this builder has addressed its steps in. A file joins
@@ -350,36 +363,35 @@ impl StepStreamBuilder {
                 }
             }
             TraceLowLevelEvent::Step(step) => {
-                self.records.push(StepStreamRecord::Step {
-                    global_line_index: self.space.global_index(step.path_id.0, step.line.0),
-                });
+                let global_line_index = self.space.global_index(step.path_id.0, step.line.0);
+                self.push(StepStreamRecord::Step { global_line_index });
             }
             TraceLowLevelEvent::ThreadSwitch(ThreadId(tid)) => {
-                self.records.push(StepStreamRecord::ThreadSwitch { thread_id: *tid });
+                self.push(StepStreamRecord::ThreadSwitch { thread_id: *tid });
             }
             // Thread start/exit are exec records too (tags 5 and 6); the
             // canonical writer emits them, and a writer that dropped them
             // would shift every later exec-record index.
             TraceLowLevelEvent::ThreadStart(ThreadId(tid)) => {
-                self.records.push(StepStreamRecord::ThreadStart { thread_id: *tid });
+                self.push(StepStreamRecord::ThreadStart { thread_id: *tid });
             }
             TraceLowLevelEvent::ThreadExit(ThreadId(tid)) => {
-                self.records.push(StepStreamRecord::ThreadExit { thread_id: *tid });
+                self.push(StepStreamRecord::ThreadExit { thread_id: *tid });
             }
             _ => {}
         }
     }
 
-    /// Number of records built so far.
+    /// Number of records built so far, drained or not.
     pub fn len(&self) -> usize {
-        self.records.len()
+        self.total as usize
     }
 
     pub fn is_empty(&self) -> bool {
-        self.records.is_empty()
+        self.total == 0
     }
 
-    /// Finalize and return the execution stream.
+    /// Finalize and return the records not yet drained.
     pub fn finish(self) -> StepStream {
         StepStream { records: self.records }
     }
@@ -500,32 +512,9 @@ pub struct EncodedStepStream {
 /// chunk encoder the column-aware path streams into, so both paths apply one
 /// encoding rule ([`crate::step_rule`]).
 pub fn encode_step_stream(stream: &StepStream, chunk_size: usize, zstd_level: i32) -> Result<EncodedStepStream, String> {
-    use crate::column_aware::{ExecStreamEncoder, StepEvent};
-    let mut enc = ExecStreamEncoder::new(chunk_size, zstd_level);
+    let mut enc = crate::column_aware::ExecStreamEncoder::new(chunk_size, zstd_level);
     for record in &stream.records {
-        match record {
-            StepStreamRecord::Step { global_line_index } => enc.write_position(*global_line_index, false)?,
-            StepStreamRecord::DeltaColumn { global_position_index, .. } => enc.write_position(*global_position_index, true)?,
-            StepStreamRecord::Raise { exception_type_id, message } => enc.write_event(StepEvent::Raise {
-                exception_type_id: *exception_type_id,
-                message: message.clone(),
-            })?,
-            StepStreamRecord::Catch { exception_type_id } => enc.write_event(StepEvent::Catch {
-                exception_type_id: *exception_type_id,
-            })?,
-            StepStreamRecord::ThreadSwitch { thread_id } => enc.write_event(StepEvent::ThreadSwitch { thread_id: *thread_id })?,
-            StepStreamRecord::ThreadStart { thread_id } => enc.write_event(StepEvent::ThreadStart { thread_id: *thread_id })?,
-            StepStreamRecord::ThreadExit { thread_id } => enc.write_event(StepEvent::ThreadExit { thread_id: *thread_id })?,
-            StepStreamRecord::SourceReload {
-                reload_ordinal,
-                changed,
-                in_flight_frames,
-            } => enc.write_event(StepEvent::SourceReload {
-                reload_ordinal: *reload_ordinal,
-                changed: changed.clone(),
-                in_flight_frames: *in_flight_frames,
-            })?,
-        }
+        write_record(&mut enc, record)?;
     }
     let encoded = enc.finish()?;
     Ok(EncodedStepStream {
@@ -533,6 +522,35 @@ pub fn encode_step_stream(stream: &StepStream, chunk_size: usize, zstd_level: i3
         idx: encoded.idx,
         record_count: stream.records.len(),
     })
+}
+
+/// Write one execution-stream record into `enc`, whose chunk encoder chooses
+/// each position's form by [`crate::step_rule`].
+pub fn write_record(enc: &mut crate::column_aware::ExecStreamEncoder, record: &StepStreamRecord) -> Result<(), String> {
+    use crate::column_aware::StepEvent;
+    match record {
+        StepStreamRecord::Step { global_line_index } => enc.write_position(*global_line_index, false),
+        StepStreamRecord::DeltaColumn { global_position_index, .. } => enc.write_position(*global_position_index, true),
+        StepStreamRecord::Raise { exception_type_id, message } => enc.write_event(StepEvent::Raise {
+            exception_type_id: *exception_type_id,
+            message: message.clone(),
+        }),
+        StepStreamRecord::Catch { exception_type_id } => enc.write_event(StepEvent::Catch {
+            exception_type_id: *exception_type_id,
+        }),
+        StepStreamRecord::ThreadSwitch { thread_id } => enc.write_event(StepEvent::ThreadSwitch { thread_id: *thread_id }),
+        StepStreamRecord::ThreadStart { thread_id } => enc.write_event(StepEvent::ThreadStart { thread_id: *thread_id }),
+        StepStreamRecord::ThreadExit { thread_id } => enc.write_event(StepEvent::ThreadExit { thread_id: *thread_id }),
+        StepStreamRecord::SourceReload {
+            reload_ordinal,
+            changed,
+            in_flight_frames,
+        } => enc.write_event(StepEvent::SourceReload {
+            reload_ordinal: *reload_ordinal,
+            changed: changed.clone(),
+            in_flight_frames: *in_flight_frames,
+        }),
+    }
 }
 
 #[cfg(test)]

@@ -1509,7 +1509,7 @@ impl TraceWriter for CtfsTraceWriter {
 
                 if let Some(map) = self.step_map_builder.take() {
                     let map_handle = writer.add_file(crate::step_map::STEP_MAP_FILE_NAME)?;
-                    writer.write(map_handle, &map.serialize())?;
+                    writer.write(map_handle, &map.serialize().map_err(|e| -> Box<dyn std::error::Error> { e.into() })?)?;
                 }
             }
 

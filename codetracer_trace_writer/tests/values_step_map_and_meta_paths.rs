@@ -104,34 +104,15 @@ fn a_value_registered_after_a_call_or_a_return_belongs_to_the_next_step() {
 }
 
 /// Decode `step-map.ns` (`internal-files.md` §"`step-map.ns`") into
-/// `(path_id, line, step ids)` triples.
-fn decode_step_map(b: &[u8]) -> Vec<(u64, u32, Vec<i64>)> {
-    let u16_at = |o: usize| u16::from_le_bytes(b[o..o + 2].try_into().unwrap());
-    let u32_at = |o: usize| u32::from_le_bytes(b[o..o + 4].try_into().unwrap());
-    let u64_at = |o: usize| u64::from_le_bytes(b[o..o + 8].try_into().unwrap());
-    assert_eq!(u32_at(0), 0x5354_4D50, "magic");
-    assert_eq!(u16_at(4), 1, "version");
-    let path_count = u32_at(6) as usize;
-    let table = u64_at(10) as usize;
-    let mut out = vec![];
-    for p in 0..path_count {
-        let pe = table + p * 20;
-        let (path_id, line_count, lines) = (u64_at(pe), u32_at(pe + 8) as usize, u64_at(pe + 12) as usize);
-        for l in 0..line_count {
-            let le = lines + l * 32;
-            let (line, n, first, last, ids_at) = (
-                u32_at(le),
-                u32_at(le + 4) as usize,
-                u64_at(le + 8) as i64,
-                u64_at(le + 16) as i64,
-                u64_at(le + 24) as usize,
-            );
-            let ids: Vec<i64> = (0..n).map(|k| u64_at(ids_at + 8 * k) as i64).collect();
-            assert_eq!((ids[0], ids[n - 1]), (first, last), "first/last bound the id list");
-            out.push((path_id, line, ids));
-        }
-    }
-    out
+/// `(path_id, line, step ids)` triples, through the version 2 reader.
+fn decode_step_map(b: &[u8]) -> Vec<(u64, u32, Vec<u64>)> {
+    codetracer_trace_reader::step_map_reader::StepMapReader::from_bytes(b.to_vec())
+        .expect("step-map.ns parses")
+        .load_all()
+        .expect("step-map.ns decodes")
+        .into_iter()
+        .map(|((p, l), ids)| (p, l, ids))
+        .collect()
 }
 
 #[test]

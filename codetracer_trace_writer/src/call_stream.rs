@@ -189,7 +189,15 @@ impl CallStreamRecord {
 
     /// Decode a record from its wire format. `call_key` is supplied by the
     /// reader (it is the record's position, not stored inline).
+    ///
+    /// The record's fields must consume exactly `data`, its framed length
+    /// (`trace-events.md` §"Call Stream", "Each record is framed by its
+    /// length"); a refusal names the record.
     pub fn decode(call_key: u64, data: &[u8]) -> Result<CallStreamRecord, String> {
+        Self::decode_fields(call_key, data).map_err(|e| format!("calls.dat record {call_key}: {}", e.trim_start_matches("calls.dat: ")))
+    }
+
+    fn decode_fields(call_key: u64, data: &[u8]) -> Result<CallStreamRecord, String> {
         let mut pos = 0usize;
         let function_id = decode_varint(data, &mut pos)?;
         let parent_key = decode_signed_varint(data, &mut pos)?;
@@ -230,6 +238,12 @@ impl CallStreamRecord {
         let mut children = Vec::with_capacity(children_count);
         for _ in 0..children_count {
             children.push(decode_varint(data, &mut pos)?);
+        }
+        if pos != data.len() {
+            return Err(format!(
+                "its fields consume {pos} of its {}-byte frame; the record and its frame disagree",
+                data.len()
+            ));
         }
 
         Ok(CallStreamRecord {

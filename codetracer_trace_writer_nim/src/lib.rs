@@ -396,8 +396,6 @@ extern "C" {
     fn ct_meta_dat_workdir(h: *mut std::ffi::c_void, out_len: *mut usize) -> *const u8;
     fn ct_meta_dat_args_count(h: *mut std::ffi::c_void) -> usize;
     fn ct_meta_dat_arg(h: *mut std::ffi::c_void, idx: usize, out_len: *mut usize) -> *const u8;
-    fn ct_meta_dat_paths_count(h: *mut std::ffi::c_void) -> usize;
-    fn ct_meta_dat_path(h: *mut std::ffi::c_void, idx: usize, out_len: *mut usize) -> *const u8;
     fn ct_meta_dat_recorder_id(h: *mut std::ffi::c_void, out_len: *mut usize) -> *const u8;
     fn ct_meta_dat_free(h: *mut std::ffi::c_void);
 
@@ -3471,27 +3469,6 @@ impl MetaDatReader {
         unsafe {
             let mut len: usize = 0;
             let ptr = ct_meta_dat_arg(self.handle, idx, &mut len);
-            if ptr.is_null() {
-                None
-            } else {
-                Some(std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len)))
-            }
-        }
-    }
-
-    /// Number of source paths recorded.
-    pub fn paths_count(&self) -> usize {
-        unsafe { ct_meta_dat_paths_count(self.handle) }
-    }
-
-    /// Get the source path at `idx`, or `None` if out of range.
-    pub fn path(&self, idx: usize) -> Option<&str> {
-        if idx >= self.paths_count() {
-            return None;
-        }
-        unsafe {
-            let mut len: usize = 0;
-            let ptr = ct_meta_dat_path(self.handle, idx, &mut len);
             if ptr.is_null() {
                 None
             } else {

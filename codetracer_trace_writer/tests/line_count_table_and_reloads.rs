@@ -1,9 +1,10 @@
 //! The Rust writer's line-count table, path versions and source reload markers
-//! refuse what the spec forbids, and write version 4 unless a marker exists.
+//! refuse what the spec forbids, and a reload marker is written only in a trace
+//! that declared it before it opened.
 //!
 //! Spec: `codetracer-trace-format-spec/internal-files.md` §"`paths.dat`
 //! line-count table", §"`paths.dat` path versions", §"Extended flags
-//! (`flags_ext`, version 5)"; `trace-events.md` §"Source Reload Marker (Tag
+//! (`flags_ext`)"; `trace-events.md` §"Source Reload Marker (Tag
 //! 0x08)". The agreement of these containers with the Nim writer's is asserted
 //! in `codetracer_trace_writer_nim/tests/source_reload_cross_writer.rs`; this
 //! file covers the refusals, which that differential cannot reach.
@@ -17,12 +18,20 @@ use codetracer_ctfs::CtfsReader;
 use codetracer_trace_types::Line;
 use codetracer_trace_writer::abstract_trace_writer::AbstractTraceWriter;
 use codetracer_trace_writer::ctfs_writer::{CtfsOutput, CtfsTraceWriter};
-use codetracer_trace_writer::meta_dat::{META_DAT_VERSION, META_DAT_VERSION_EXTENDED_FLAGS, decode_meta_dat};
+use codetracer_trace_writer::meta_dat::{FLAG_EXT_HAS_SOURCE_RELOAD, META_DAT_VERSION, decode_meta_dat};
 use codetracer_trace_writer::step_stream::SourceReloadChange;
 use codetracer_trace_writer::trace_writer::TraceWriter;
 
 fn open(program: &str) -> CtfsTraceWriter {
     let mut w = CtfsTraceWriter::new(program, &[]).with_output(CtfsOutput::Memory);
+    TraceWriter::begin_writing_trace_events(&mut w, Path::new(program)).expect("begin");
+    w
+}
+
+/// A writer whose recorder declared, before opening, that reloads may occur.
+fn open_reloading(program: &str) -> CtfsTraceWriter {
+    let mut w = CtfsTraceWriter::new(program, &[]).with_output(CtfsOutput::Memory);
+    w.declare_source_reloads().expect("declared before the trace opens");
     TraceWriter::begin_writing_trace_events(&mut w, Path::new(program)).expect("begin");
     w
 }
@@ -41,21 +50,57 @@ fn meta_of(bytes: &[u8]) -> codetracer_trace_writer::meta_dat::MetaDat {
 }
 
 #[test]
-fn a_trace_without_a_reload_is_version_4_even_with_path_versions() {
+fn a_trace_that_did_not_declare_reloads_has_no_extended_flag_even_with_path_versions() {
     let mut w = open("no_reload");
     w.enable_line_count_table().expect("table");
     w.register_path_with_line_count(Path::new("/a"), 5).unwrap();
     w.register_path_version(Path::new("/a"), 7).unwrap();
     AbstractTraceWriter::register_step(&mut w, Path::new("/a"), Line(6));
     let m = meta_of(&finish(w));
-    assert_eq!(m.version, META_DAT_VERSION, "no extended flag, so version 4");
+    assert_eq!(m.version, META_DAT_VERSION);
     assert_eq!(m.ext_flags, 0);
-    assert_eq!(m.paths, vec!["/a", "/a"]);
+}
+
+/// `internal-files.md` §"Extended flags": bit 0 is a capability declared at
+/// open, and a writer refuses a reload in a trace that did not declare it,
+/// failing the call.
+#[test]
+fn a_reload_in_a_trace_that_did_not_declare_it_is_refused() {
+    let mut w = open("undeclared");
+    w.enable_line_count_table().expect("table");
+    w.register_path_with_line_count(Path::new("/a"), 5).unwrap();
+    let v = w.register_path_version(Path::new("/a"), 7).unwrap().0 as u64;
+    let err = w
+        .register_source_reload(
+            &[SourceReloadChange {
+                old_path_id: 0,
+                new_path_id: v,
+                generation: 2,
+            }],
+            0,
+        )
+        .expect_err("an undeclared reload must be refused");
+    assert!(err.contains("declare"), "the refusal names the missing declaration: {err}");
+    assert_eq!(w.source_reload_count(), 0);
+    let mut late = open("late_declare");
+    assert!(
+        late.declare_source_reloads().is_err(),
+        "the declaration is part of meta.dat, which is fixed when the trace opens"
+    );
+}
+
+/// A trace that declared reloads and recorded none is well-formed.
+#[test]
+fn a_declared_trace_without_a_reload_keeps_the_flag() {
+    let mut w = open_reloading("declared_quiet");
+    AbstractTraceWriter::register_step(&mut w, Path::new("/a"), Line(1));
+    let m = meta_of(&finish(w));
+    assert_eq!(m.ext_flags, FLAG_EXT_HAS_SOURCE_RELOAD);
 }
 
 #[test]
-fn a_reload_makes_the_container_version_5() {
-    let mut w = open("reload");
+fn a_declared_trace_records_its_reloads() {
+    let mut w = open_reloading("reload");
     w.enable_line_count_table().expect("table");
     w.register_path_with_line_count(Path::new("/a"), 5).unwrap();
     AbstractTraceWriter::register_step(&mut w, Path::new("/a"), Line(1));
@@ -69,13 +114,13 @@ fn a_reload_makes_the_container_version_5() {
     assert_eq!(w.register_source_reload(&[change], 0).unwrap(), 1);
     assert_eq!(w.register_source_reload(&[change], 0).unwrap(), 2, "ordinals increase by one");
     let m = meta_of(&finish(w));
-    assert_eq!(m.version, META_DAT_VERSION_EXTENDED_FLAGS);
-    assert_eq!(m.ext_flags, codetracer_trace_writer::meta_dat::FLAG_EXT_HAS_SOURCE_RELOAD);
+    assert_eq!(m.version, META_DAT_VERSION);
+    assert_eq!(m.ext_flags, FLAG_EXT_HAS_SOURCE_RELOAD);
 }
 
 #[test]
 fn a_malformed_reload_is_refused_by_name() {
-    let mut w = open("bad_reload");
+    let mut w = open_reloading("bad_reload");
     w.enable_line_count_table().expect("table");
     w.register_path_with_line_count(Path::new("/a"), 5).unwrap();
     let v = w.register_path_version(Path::new("/a"), 7).unwrap().0 as u64;
@@ -95,7 +140,7 @@ fn a_malformed_reload_is_refused_by_name() {
     }
     assert_eq!(w.source_reload_count(), 0, "a refused marker is not written");
     let m = meta_of(&finish(w));
-    assert_eq!(m.version, META_DAT_VERSION, "no marker was written, so version 4");
+    assert_eq!(m.version, META_DAT_VERSION);
 }
 
 #[test]
@@ -140,6 +185,7 @@ fn the_table_refuses_what_it_cannot_represent() {
 fn a_column_aware_writer_writes_a_reload_marker() {
     let mut w = CtfsTraceWriter::new("col_reload", &[]).with_output(CtfsOutput::Memory);
     w.enable_column_aware_steps();
+    w.declare_source_reloads().expect("declare");
     TraceWriter::begin_writing_trace_events(&mut w, Path::new("col_reload")).unwrap();
     w.register_path_with_line_lengths(Path::new("/a"), &[4, 4]);
     w.register_path_with_line_lengths(Path::new("/b"), &[4, 4]);
@@ -155,7 +201,7 @@ fn a_column_aware_writer_writes_a_reload_marker() {
     .unwrap();
     AbstractTraceWriter::register_step(&mut w, Path::new("/b"), Line(2));
     let bytes = finish(w);
-    assert_eq!(meta_of(&bytes).version, META_DAT_VERSION_EXTENDED_FLAGS);
+    assert_eq!(meta_of(&bytes).ext_flags, FLAG_EXT_HAS_SOURCE_RELOAD);
 }
 
 /// The number of `steps.dat` records.

@@ -336,9 +336,11 @@ pub struct CtfsTraceWriter {
     /// The recorded line count of each path id, when `line_count_table`.
     path_line_counts: Vec<u64>,
     /// How many `SourceReload` markers have been written; the next one's
-    /// ordinal is this plus one, and a non-zero value sets
-    /// `FLAG_EXT_HAS_SOURCE_RELOAD` at close.
+    /// ordinal is this plus one.
     source_reloads: u64,
+    /// Whether the recorder declared, before the trace opened, that source
+    /// reloads may occur (`meta.dat` `flags_ext` bit 0).
+    source_reloads_declared: bool,
     /// Operations this writer refused because honouring them would have
     /// written a location or record the container cannot represent. See
     /// [`CtfsTraceWriter::refusals`].
@@ -429,6 +431,7 @@ impl CtfsTraceWriter {
             pending_line_count: None,
             path_line_counts: Vec::new(),
             source_reloads: 0,
+            source_reloads_declared: false,
             refusals: Vec::new(),
             fatal_refusal: None,
             pending_functions: Vec::new(),
@@ -552,6 +555,12 @@ impl CtfsTraceWriter {
         if self.ctfs_writer.is_none() {
             return Err("register_source_reload called before begin_writing_trace_events".to_string());
         }
+        if !self.source_reloads_declared {
+            return Err("register_source_reload: this trace did not declare source reloads before it opened \
+                        (call declare_source_reloads before begin_writing_trace_events). meta.dat is written \
+                        at open and does not admit a SourceReload record unless it declares one may occur"
+                .to_string());
+        }
         if changed.is_empty() {
             return Err(
                 "register_source_reload: no changed files. A marker that records a reload without recording what \
@@ -602,6 +611,23 @@ impl CtfsTraceWriter {
         self.note_non_step_exec_record();
         self.source_reloads = ordinal;
         Ok(ordinal)
+    }
+
+    /// Declare that this recording may contain source reload markers
+    /// (`meta.dat` `flags_ext` bit 0, `internal-files.md` §"Extended flags").
+    ///
+    /// A capability, declared before the trace opens like column-aware steps
+    /// and the line-count table: `meta.dat` is written at open and never
+    /// rewritten, so it is refused once the trace has begun. A trace that
+    /// declares it and records no reload is well-formed.
+    pub fn declare_source_reloads(&mut self) -> Result<(), String> {
+        if self.ctfs_writer.is_some() {
+            return Err("declare_source_reloads: the trace is already open, and meta.dat, which carries the \
+                        declaration, is fixed when it opens"
+                .to_string());
+        }
+        self.source_reloads_declared = true;
+        Ok(())
     }
 
     /// How many source reload markers this writer has written.
@@ -1524,9 +1550,6 @@ impl TraceWriter for CtfsTraceWriter {
             // interning that feeds events.log / paths.json, so the i-th record in
             // each `.dat` resolves the id the event streams reference. ADDITIVE:
             // the existing paths.json interning above is untouched.
-            // `meta.dat` lists `paths.dat`'s paths, in id order, however they
-            // were interned (`internal-files.md` §"Metadata").
-            let meta_paths: Vec<String> = self.interning_tables_builder.as_ref().map(|b| b.path_strings()).unwrap_or_default();
             {
                 let tables = self
                     .interning_tables_builder
@@ -1584,16 +1607,15 @@ impl TraceWriter for CtfsTraceWriter {
             if self.line_count_table {
                 stream_flags |= FLAG_HAS_LINE_COUNT_TABLE;
             }
-            // Version 5 exactly when an extended flag is set
+            // Extended flags are capabilities declared before the trace opened
             // (`internal-files.md` §"Extended flags").
-            let ext_flags = if self.source_reloads > 0 { FLAG_EXT_HAS_SOURCE_RELOAD } else { 0 };
+            let ext_flags = if self.source_reloads_declared { FLAG_EXT_HAS_SOURCE_RELOAD } else { 0 };
             let meta_dat = encode_meta_dat_ext(
                 &trace_metadata.recording_id,
                 &self.base.program,
                 &self.base.args,
                 &self.base.workdir.to_string_lossy(),
                 "",
-                &meta_paths,
                 stream_flags,
                 ext_flags,
             );

@@ -956,11 +956,20 @@ fn the_two_writers_meta_dat_agrees_on_every_field_except_the_minted_recording_id
     // with args — including dropping them. The fixture passes two now.
     assert_eq!(n.args.len(), FIXTURE_ARGS.len(), "control: the fixture passes real args");
     assert_eq!(n.recorder_id, r.recorder_id, "recorder_id");
-    assert_eq!(n.paths, r.paths, "paths");
     assert_eq!(n.trailing, r.trailing, "trailing extension blocks");
-    // Non-degeneracy: `paths` is the one multi-valued field here, and comparing
-    // two empty vectors would prove nothing.
-    assert_eq!(n.paths.len(), 3, "control: the fixture registers three paths");
+    // `meta.dat` carries no path list (version 6); the paths are `paths.dat`'s,
+    // compared as decoded strings here.
+    let paths_of = |ct: &std::path::Path| -> Vec<String> {
+        let mut rd = codetracer_ctfs::CtfsReader::open(ct).expect("open");
+        let t = codetracer_trace_reader::interning_tables_reader::InterningTablesReader::open(&mut rd)
+            .expect("interning tables decode")
+            .expect("interning tables present");
+        (0..t.path_count() as u64).map(|i| t.path_str(i).expect("path")).collect()
+    };
+    let (np, rp) = (paths_of(&nim_ct), paths_of(&rust_ct));
+    assert_eq!(np, rp, "paths");
+    // Non-degeneracy: comparing two empty lists would prove nothing.
+    assert_eq!(np.len(), 3, "control: the fixture registers three paths");
 
     // The inherent one. Both must be well-formed UUIDs and they must differ,
     // or the exclusion below is not describing reality.

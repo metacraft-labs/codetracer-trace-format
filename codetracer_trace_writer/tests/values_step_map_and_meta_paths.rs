@@ -13,9 +13,11 @@
 //!    step-id index a reader answers a breakpoint from without scanning the
 //!    execution stream (`internal-files.md` §"`step-map.ns`"). The ids it lists
 //!    must be the exec-record indices of the steps at that line, in order.
-//! 3. **`meta.dat`'s path list is `paths.dat`'s**, in id order, however the
-//!    paths were interned — including through `add_event(Path)`, which is how a
-//!    recorder that interns its own ids reaches the writer.
+//! 3. **`paths.dat` is the only list of source paths**, in id order, however
+//!    the paths were interned — including through `add_event(Path)`, which is
+//!    how a recorder that interns its own ids reaches the writer — and
+//!    `meta.dat` carries no copy of it (`internal-files.md` §"`meta.dat`
+//!    carries no path list").
 //!
 //! No mocks: containers are produced by the real writer and read through the
 //! real CTFS and stream readers.
@@ -153,7 +155,7 @@ fn a_line_only_trace_carries_the_step_map() {
 }
 
 #[test]
-fn meta_dat_lists_the_paths_of_paths_dat_whichever_way_they_were_interned() {
+fn paths_dat_lists_the_paths_whichever_way_they_were_interned_and_meta_dat_does_not() {
     let dir = tempfile::tempdir().unwrap();
     let ct = record(dir.path(), "metapaths", |w| {
         for p in ["/src/one.rs", "/src/two.rs", "/src/three.rs"] {
@@ -168,10 +170,17 @@ fn meta_dat_lists_the_paths_of_paths_dat_whichever_way_they_were_interned() {
         );
         let _ = TypeId(0);
     });
-    let meta = decode_meta_dat(&read(&ct, "meta.dat")).expect("meta.dat");
-    assert_eq!(
-        meta.paths,
-        vec!["/src/one.rs", "/src/two.rs", "/src/three.rs"],
-        "meta.dat must list paths.dat's paths in id order"
+    let mut r = CtfsReader::open(&ct).expect("open");
+    let tables = codetracer_trace_reader::interning_tables_reader::InterningTablesReader::open(&mut r)
+        .expect("interning tables decode")
+        .expect("interning tables present");
+    let paths: Vec<String> = (0..tables.path_count() as u64).map(|i| tables.path_str(i).expect("path")).collect();
+    assert_eq!(paths, vec!["/src/one.rs", "/src/two.rs", "/src/three.rs"], "paths.dat in id order");
+    let meta_bytes = read(&ct, "meta.dat");
+    let meta = decode_meta_dat(&meta_bytes).expect("meta.dat");
+    assert!(meta.trailing.is_empty(), "nothing follows recorder_id: {:?}", meta.trailing);
+    assert!(
+        !meta_bytes.windows(b"/src/one.rs".len()).any(|w| w == b"/src/one.rs"),
+        "meta.dat carries no copy of a source path"
     );
 }

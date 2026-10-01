@@ -83,6 +83,7 @@ fn record(writer: Writer, dir: &Path) -> PathBuf {
             w.begin_writing_trace_metadata(&dir.join("m.json")).expect("nim begin_metadata");
             w.begin_writing_trace_paths(&dir.join("p.json")).expect("nim begin_paths");
             w.enable_line_count_table().expect("nim enable_line_count_table");
+            w.declare_source_reload().expect("nim declare_source_reload");
             w.register_path_with_line_count(&game, 12).expect("nim game");
             w.register_path_with_line_count(&util, 6).expect("nim util");
             w.register_function("helper", &util, Line(3));
@@ -336,11 +337,18 @@ fn the_rust_reader_reads_both_containers_alike() {
 #[test]
 fn the_nim_reader_reads_both_containers_alike() {
     let _g = nim_lock();
-    let ct_print = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../codetracer-trace-format-nim/ct-print");
+    // The checkout `build.rs` compiles the Nim library from: the
+    // `CODETRACER_TRACE_FORMAT_NIM_DIR` override, or the sibling repo.
+    let nim_repo = std::env::var("CODETRACER_TRACE_FORMAT_NIM_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../codetracer-trace-format-nim"));
+    let ct_print = nim_repo.join("ct-print");
     assert!(
         ct_print.exists(),
-        "{} is not built; this is the only check that the Nim reader accepts a Rust-written reload",
-        ct_print.display()
+        "{} is not built (`nimble buildCtPrint` in {}); this is the only check that the Nim reader accepts a \
+         Rust-written reload",
+        ct_print.display(),
+        nim_repo.display()
     );
     let dir = tempfile::tempdir().expect("tempdir");
     let (nim, rust) = both(dir.path());

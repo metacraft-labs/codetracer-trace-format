@@ -1448,6 +1448,11 @@ pub struct NimTraceWriter {
     /// does not repeat it after an explicit `close()`.  Kept separate from
     /// `discarded_records` so that reporting never destroys the tally.
     discards_reported: bool,
+    /// Call arguments staged by [`arg`](NimTraceWriter::arg) for the next
+    /// [`register_call`](NimTraceWriter::register_call), which registers them
+    /// as step variables once the caller's step is flushed, so they attach to
+    /// the callee's first step.
+    pending_arg_variables: Vec<(String, ValueRecord)>,
 }
 
 /// Set this to `1` (or `true`) to make an unsupported record a hard error
@@ -1499,6 +1504,7 @@ impl NimTraceWriter {
             discarded_records: std::collections::BTreeMap::new(),
             strict: strict_from_env_value(std::env::var(STRICT_ENV).ok().as_deref()),
             deferred_error: None,
+            pending_arg_variables: Vec::new(),
             discards_reported: false,
         }
     }
@@ -1825,7 +1831,15 @@ impl NimTraceWriter {
         // it carries `VariableId(0)` (the Nim backend manages IDs
         // internally) and the values are already staged via `arg()`.
         // We keep the parameter to preserve the abstract trait signature.
+        //
+        // The FFI call flushes the caller's open step before opening the
+        // call, so the arguments registered as step variables afterwards are
+        // staged with no step open and attach to the callee's first step
+        // (`trace-events.md` §"Recorder Integration — Staging Values").
         unsafe { trace_writer_register_call(self.handle, function_id.0) }
+        for (name, value) in std::mem::take(&mut self.pending_arg_variables) {
+            self.register_variable_with_full_value(&name, value);
+        }
     }
 
     pub fn register_return(&mut self, return_value: ValueRecord) {
@@ -2480,17 +2494,20 @@ impl NimTraceWriter {
 
     pub fn arg(&mut self, name: &str, value: ValueRecord) -> FullValueRecord {
         // Two effects:
-        //   1. The argument is registered as a step variable on the
-        //      *current* step so it appears in `ct/load-locals` for the
-        //      caller.  This matches the historical behaviour of the
-        //      single-stream writer.
+        //   1. The argument becomes a step variable of the callee's first
+        //      step.  It is held here and registered by the next
+        //      `register_call`, after the caller's step is flushed: a
+        //      line-driven recorder still has the caller's step open at this
+        //      point, and registering now would show the callee's argument
+        //      as a variable of the caller (in a recursive call, a second
+        //      value for the caller's own parameter).
         //   2. The argument is also staged on the writer's pending-args
         //      buffer so the next `register_call` attaches it to the
         //      call record.  Without this the call record would have
         //      empty `args`, and the frontend's calltrace pane would
         //      render the call as `format_board()` instead of
         //      `format_board(board=[[5,3,4,...]])`.
-        self.register_variable_with_full_value(name, value.clone());
+        self.pending_arg_variables.push((name.to_string(), value.clone()));
 
         let cbor = self.encode_value(&value).unwrap_or_default();
         let c_name = str_to_cstring(name);

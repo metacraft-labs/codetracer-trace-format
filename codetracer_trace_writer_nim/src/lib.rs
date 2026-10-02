@@ -504,6 +504,11 @@ extern "C" {
     /// file (the legitimate "no per-line data" sentinel).
     fn ct_reader_line_count_raw(h: *mut std::ffi::c_void, file_id: u64) -> u64;
 
+    /// What `paths.dat` records about `file_id`'s size: 0 bare, 1 line
+    /// count, 2 per-line table, 3 the conventional table (`line_count = 0`);
+    /// -1 for a NULL handle or no such path.
+    fn ct_reader_path_table_kind(h: *mut std::ffi::c_void, file_id: u64) -> i32;
+
     /// M-capability-flags — return 1 when the trace's recorder
     /// advertised support for per-column breakpoints (meta.dat bit 6),
     /// 0 otherwise, -1 on a NULL handle.
@@ -3564,6 +3569,21 @@ impl Drop for MetaDatReader {
 // NimTraceReaderHandle — safe wrapper for the Nim ct_reader_* FFI
 // ---------------------------------------------------------------------------
 
+/// What a container's `paths.dat` records about one file's size
+/// (`internal-files.md` §"Interning Tables").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PathTableKind {
+    /// A bare record: no size (neither `meta.dat` bit 4 nor 14).
+    Bare,
+    /// A line count (bit 14).
+    LineCount,
+    /// A per-line table (bit 4, `line_count > 0`).
+    Lines,
+    /// The conventional table, 100000 lines of 1024 positions (bit 4,
+    /// `line_count = 0`).
+    Conventional,
+}
+
 /// Read-only handle for a `.ct` trace file, backed by the Nim `NewTraceReader`.
 ///
 /// All complex data (steps, values, calls, IO events) is returned as JSON
@@ -3918,13 +3938,29 @@ impl NimTraceReaderHandle {
         }
     }
 
-    /// Number of lines in `file_id` per paths.dat Layout A.  Returns
-    /// `0` when no per-line data is available for that file — the same
-    /// legitimate "no data" sentinel [`line_length_raw`] uses.
+    /// Number of lines in `file_id` per paths.dat Layout A — 100000 for the
+    /// conventional table (see [`Self::path_table_kind`]).  Returns `0` when
+    /// no per-line data is available for that file — the same legitimate
+    /// "no data" sentinel [`line_length_raw`] uses.
     ///
     /// [`line_length_raw`]: Self::line_length_raw
     pub fn line_count_raw(&self, file_id: u64) -> u64 {
         unsafe { ct_reader_line_count_raw(self.handle, file_id) }
+    }
+
+    /// What `paths.dat` records about `file_id`'s size; `None` when there is
+    /// no such path. A column-aware record of `line_count = 0` is
+    /// [`PathTableKind::Conventional`], for which [`Self::line_count_raw`]
+    /// answers 100000 and [`Self::line_length_raw`] 1024 per line, by the
+    /// rule (`internal-files.md` §"`paths.dat` Layout A").
+    pub fn path_table_kind(&self, file_id: u64) -> Option<PathTableKind> {
+        match unsafe { ct_reader_path_table_kind(self.handle, file_id) } {
+            0 => Some(PathTableKind::Bare),
+            1 => Some(PathTableKind::LineCount),
+            2 => Some(PathTableKind::Lines),
+            3 => Some(PathTableKind::Conventional),
+            _ => None,
+        }
     }
 
     /// M-capability-flags — true when the trace's recorder

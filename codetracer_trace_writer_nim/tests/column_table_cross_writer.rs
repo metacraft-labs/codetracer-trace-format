@@ -24,11 +24,12 @@ use std::path::{Path, PathBuf};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use codetracer_ctfs::CtfsReader;
+use codetracer_trace_reader::global_position_decoder::FileTable;
 use codetracer_trace_types::{Line, ThreadId, TraceLowLevelEvent, TypeKind};
 use codetracer_trace_writer::abstract_trace_writer::AbstractTraceWriter;
 use codetracer_trace_writer::ctfs_writer::{conventional_line_diagnostic, late_column_table_diagnostic, CtfsTraceWriter};
 use codetracer_trace_writer::trace_writer::TraceWriter;
-use codetracer_trace_writer_nim::{NimTraceWriter, TraceEventsFileFormat};
+use codetracer_trace_writer_nim::{NimTraceReaderHandle, NimTraceWriter, PathTableKind, TraceEventsFileFormat};
 
 static NIM_TEST_LOCK: Mutex<()> = Mutex::new(());
 
@@ -231,6 +232,27 @@ fn both_writers_decide_tables_alike_and_yield_the_same_container() {
             assert_eq!(recs[id], want, "{label}: record {id} ({path}) must be `path_len, path, 0`");
         }
     }
+    // Both readers say which files have the conventional table.
+    let nim_reader = NimTraceReaderHandle::open(nim_ct.to_str().unwrap()).expect("nim reader opens");
+    let mut ctfs = CtfsReader::open(&rust_ct).unwrap();
+    let rust_reader = codetracer_trace_reader::interning_tables_reader::InterningTablesReader::open(&mut ctfs)
+        .unwrap()
+        .unwrap();
+    for id in 0..7u64 {
+        let conventional = (3..=6).contains(&id);
+        let want = if conventional {
+            PathTableKind::Conventional
+        } else {
+            PathTableKind::Lines
+        };
+        assert_eq!(nim_reader.path_table_kind(id), Some(want), "nim reader, path {id}");
+        assert_eq!(
+            rust_reader.path_file_table(id).unwrap().map(|t| t == FileTable::Conventional),
+            Some(conventional),
+            "rust reader, path {id}"
+        );
+    }
+    assert_eq!(nim_reader.path_table_kind(7), None);
     let len = |p: &Path| std::fs::metadata(p).expect("container").len();
     assert_eq!(len(&nim_ct), len(&rust_ct), "the containers differ in size");
 }

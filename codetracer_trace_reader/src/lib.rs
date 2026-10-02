@@ -29,10 +29,8 @@ pub mod step_map_reader;
 
 pub mod value_stream_reader;
 
-#[cfg(not(target_arch = "wasm32"))]
 pub mod io_event_stream_reader;
 
-#[cfg(not(target_arch = "wasm32"))]
 pub mod interning_tables_reader;
 
 /// Assembles a linear event sequence from the split streams, for containers

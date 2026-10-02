@@ -22,6 +22,19 @@ lint:
   cargo fmt --all --check
   cargo clippy --workspace --all-targets -- -D warnings
 
+# Type-check the reader for the browser (wasm32-unknown-unknown).
+#
+# The browser replay engine links `codetracer_trace_reader` for wasm32, where
+# libzstd is replaced by `ruzstd` and the file-backed readers are compiled out.
+# Native builds never compile the wasm32 arms, so a module that is gated out on
+# wasm32 while an ungated one still imports it builds and tests green here and
+# fails only in the browser build. This recipe is what notices.
+#
+# Needs the `wasm32-unknown-unknown` Rust target and a clang that can emit wasm
+# (zstd-sys's build script compiles C for the target even under `cargo check`).
+check-wasm32:
+  CC_wasm32_unknown_unknown="${CC_wasm32_unknown_unknown:-clang}" cargo check -p codetracer_trace_reader --target wasm32-unknown-unknown
+
 # Build all crates
 build:
   cargo build --verbose

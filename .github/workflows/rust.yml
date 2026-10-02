@@ -59,6 +59,23 @@ jobs:
         working-directory: codetracer-trace-format
         run: just lint
 
+  wasm32:
+    runs-on: eph-linux-x64
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: codetracer-trace-format
+      - name: Install capnproto + clang
+        run: sudo apt-get install -y capnproto clang
+      - name: Install just
+        uses: extractions/setup-just@v2
+      - name: Add the wasm32 target
+        run: rustup target add wasm32-unknown-unknown
+      - name: Check the reader for wasm32
+        working-directory: codetracer-trace-format
+        run: just check-wasm32
+
   build-and-test:
     runs-on: eph-linux-x64
 

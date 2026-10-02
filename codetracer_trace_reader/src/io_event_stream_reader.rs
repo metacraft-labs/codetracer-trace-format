@@ -83,9 +83,27 @@ fn decode_varint(data: &[u8], pos: &mut usize) -> Result<u64, String> {
     Ok(result)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn decode_zstd_chunk(compressed: &[u8]) -> Result<Vec<u8>, String> {
+    zstd::decode_all(std::io::Cursor::new(compressed)).map_err(|e| format!("events.dat: zstd decode failed: {e}"))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn decode_zstd_chunk(compressed: &[u8]) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+
+    let mut decoder =
+        ruzstd::decoding::StreamingDecoder::new(std::io::Cursor::new(compressed)).map_err(|e| format!("events.dat: zstd decode failed: {e}"))?;
+    let mut raw = Vec::new();
+    decoder
+        .read_to_end(&mut raw)
+        .map_err(|e| format!("events.dat: zstd decode failed: {e}"))?;
+    Ok(raw)
+}
+
 /// Decompress one chunk and decode all of its length-prefixed I/O event records.
 fn decode_chunk_records(compressed: &[u8], chunk: usize, chunk_size: usize) -> Result<Vec<IoEventRecord>, String> {
-    let raw = zstd::decode_all(std::io::Cursor::new(compressed)).map_err(|e| format!("events.dat: zstd decode failed: {e}"))?;
+    let raw = decode_zstd_chunk(compressed)?;
     let mut records = Vec::new();
     let mut pos = 0usize;
     while pos < raw.len() {

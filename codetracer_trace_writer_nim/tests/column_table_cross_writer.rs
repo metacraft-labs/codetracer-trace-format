@@ -26,7 +26,7 @@ use std::sync::{Mutex, MutexGuard, PoisonError};
 use codetracer_ctfs::CtfsReader;
 use codetracer_trace_types::{Line, ThreadId, TraceLowLevelEvent, TypeKind};
 use codetracer_trace_writer::abstract_trace_writer::AbstractTraceWriter;
-use codetracer_trace_writer::ctfs_writer::{conventional_line_diagnostic, CtfsTraceWriter};
+use codetracer_trace_writer::ctfs_writer::{conventional_line_diagnostic, late_column_table_diagnostic, CtfsTraceWriter};
 use codetracer_trace_writer::trace_writer::TraceWriter;
 use codetracer_trace_writer_nim::{NimTraceWriter, TraceEventsFileFormat};
 
@@ -237,4 +237,33 @@ fn both_writers_refuse_a_line_past_the_conventional_table_alike() {
     let rust_finish = rust_finish(r).expect("the Rust recording must fail");
     assert!(nim_close.contains(&expected), "nim close: {nim_close}\nexpected: {expected}");
     assert!(rust_finish.contains(&expected), "rust finish: {rust_finish}\nexpected: {expected}");
+}
+
+#[test]
+fn both_writers_refuse_a_table_after_the_file_was_interned_alike() {
+    let _g = nim_lock();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let expected = late_column_table_diagnostic(Path::new(STEPPED), 100_000, 2);
+    let mut n = nim(dir.path());
+    let mut r = rust(dir.path());
+    n.register_path_with_line_lengths(Path::new(REAL), &[5, 5]).expect("nim");
+    TraceWriter::register_path_with_line_lengths(&mut r, Path::new(REAL), &[5, 5]).expect("rust");
+    for w in [&mut n as &mut dyn Recorder, &mut r as &mut dyn Recorder] {
+        w.start(REAL, 1);
+        w.step(STEPPED, 1, None);
+        w.step(REAL, 2, None);
+    }
+    let nim_err = n
+        .register_path_with_line_lengths(Path::new(STEPPED), &[3, 4])
+        .expect_err("the Nim writer must refuse")
+        .to_string();
+    let rust_err = TraceWriter::register_path_with_line_lengths(&mut r, Path::new(STEPPED), &[3, 4])
+        .expect_err("the Rust writer must refuse")
+        .to_string();
+    assert_eq!(nim_err, expected, "the Nim writer's refusal");
+    assert_eq!(rust_err, expected, "the Rust writer's refusal");
+    let nim_close = nim_close(n).expect("the Nim recording must fail");
+    let rust_finish = rust_finish(r).expect("the Rust recording must fail");
+    assert!(nim_close.contains(&expected), "nim close: {nim_close}");
+    assert!(rust_finish.contains(&expected), "rust finish: {rust_finish}");
 }

@@ -13,7 +13,11 @@
 //! * on a file with the conventional table a column above 1024 is recorded at
 //!   column 1024 of its line, and a line above 100000 is refused, naming the
 //!   path; the refusal fails the recording (`trace-events.md` §"Recorder
-//!   Integration — A Failed Call Fails the Recording").
+//!   Integration — A Failed Call Fails the Recording");
+//! * a non-empty table offered for a path already interned is refused, naming
+//!   the path, unless it is the recorded table (after the same normalisation),
+//!   including a table offered after a step, a function or an id request first
+//!   mentioned the path.
 //!
 //! The Nim writer applies the same rules to the byte; that is asserted in
 //! `codetracer_trace_writer_nim/tests/column_table_cross_writer.rs`.
@@ -176,6 +180,43 @@ fn a_recorder_built_conventional_table_is_the_conventional_table() {
     AbstractTraceWriter::register_step_with_column(&mut w, Path::new(P), Line(2), Some(Line(5000)));
     let (w, bytes) = finish(w);
     assert_eq!(steps_of(&w, &bytes), vec![(0, 2, Some(1024))]);
+}
+
+#[test]
+fn a_later_different_table_is_refused_naming_the_path() {
+    for (first, later) in [(vec![3u32, 4], vec![3u32, 5]), (vec![3, 4], vec![3, 4, 5]), (vec![], vec![3, 4])] {
+        let mut w = column_aware("late");
+        TraceWriter::register_path_with_line_lengths(&mut w, Path::new(P), &first).unwrap();
+        let err = TraceWriter::register_path_with_line_lengths(&mut w, Path::new(P), &later)
+            .expect_err("a later, different table must be refused")
+            .to_string();
+        assert!(err.contains(P) && err.contains("first interned"), "{first:?} then {later:?}: {err}");
+        let finish = TraceWriter::finish_writing_trace_events(&mut w)
+            .expect_err("the refusal must fail the recording")
+            .to_string();
+        assert!(finish.contains(P), "{finish}");
+    }
+}
+
+#[test]
+fn a_table_after_an_implicit_mention_is_refused() {
+    let mut w = column_aware("after_step");
+    AbstractTraceWriter::register_step(&mut w, Path::new(P), Line(1));
+    let err = TraceWriter::register_path_with_line_lengths(&mut w, Path::new(P), &[3, 4])
+        .expect_err("a table after the step that interned the file must be refused")
+        .to_string();
+    assert!(err.contains(P), "{err}");
+}
+
+#[test]
+fn a_later_table_equal_to_the_recorded_one_is_accepted() {
+    let mut w = column_aware("late_equal");
+    for t in [vec![0u32], vec![0], vec![1]] {
+        TraceWriter::register_path_with_line_lengths(&mut w, Path::new(P), &t).expect("equal after normalisation");
+    }
+    AbstractTraceWriter::ensure_path_id(&mut w, Path::new(Q));
+    TraceWriter::register_path_with_line_lengths(&mut w, Path::new(Q), &vec![1024; 100_000]).expect("the conventional table");
+    assert!(w.refusals().is_empty(), "{:?}", w.refusals());
 }
 
 #[test]

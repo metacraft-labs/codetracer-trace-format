@@ -419,6 +419,18 @@ fn is_record(event: &TraceLowLevelEvent) -> bool {
 /// `paths.dat` index.
 pub const INVALID_PATH_ID: codetracer_trace_types::PathId = codetracer_trace_types::PathId(usize::MAX);
 
+/// THE refusal of a table offered for a path interned with a different one
+/// (`internal-files.md` §"`paths.dat` Layout A"). The Nim writer states it in
+/// the same words.
+pub fn late_column_table_diagnostic(path: &Path, recorded_lines: usize, offered_lines: usize) -> String {
+    format!(
+        "paths.dat: {} was interned with a {recorded_lines}-line table, and a later registration offering a \
+         different {offered_lines}-line table is refused; a file's table is fixed when the file is first interned, \
+         so register it before the file's first step, function or call",
+        path.display()
+    )
+}
+
 /// THE refusal of a step past the last line of a file with the conventional
 /// table (`internal-files.md` §"`paths.dat` Layout A"). The Nim writer states
 /// it in the same words.
@@ -829,11 +841,36 @@ impl CtfsTraceWriter {
     /// conventional table. A recorder that can read a file's source registers
     /// its real table before the file's first mention.
     ///
+    /// For a path already interned, a non-empty table that is not the recorded
+    /// one (after the same normalisation) is refused, naming the path:
+    /// positions already written depend on the file's size. The refusal is
+    /// recorded in [`Self::refusals`], which fails the recording, and
+    /// [`INVALID_PATH_ID`] is returned. The same table again, or none, returns
+    /// the existing id.
+    ///
     /// Mirrors the Nim writer's `registerPath(path, lineLengths)`.
     pub fn register_path_with_line_lengths(&mut self, path: &Path, line_lengths: &[u32]) -> codetracer_trace_types::PathId {
-        if self.base.paths.contains_key(path) {
-            // Already interned; the table was decided when it was first seen.
-            return *self.base.paths.get(path).unwrap();
+        match self.try_register_path_with_line_lengths(path, line_lengths) {
+            Ok(id) => id,
+            Err(refusal) => {
+                self.refusals.push(refusal);
+                INVALID_PATH_ID
+            }
+        }
+    }
+
+    fn try_register_path_with_line_lengths(&mut self, path: &Path, line_lengths: &[u32]) -> Result<codetracer_trace_types::PathId, String> {
+        if let Some(id) = self.base.paths.get(path).copied() {
+            if self.column_aware_active
+                && !line_lengths.is_empty()
+                && let Some(recorded) = self.position_space.line_lengths().get(id.0)
+            {
+                let offered = column_table_at_first_mention(line_lengths);
+                if &offered != recorded {
+                    return Err(late_column_table_diagnostic(path, recorded.len(), offered.len()));
+                }
+            }
+            return Ok(id);
         }
         self.pending_line_lengths = Some(if self.column_aware_active {
             column_table_at_first_mention(line_lengths)
@@ -845,7 +882,7 @@ impl CtfsTraceWriter {
         // table. Clear it defensively so a path that somehow did not emit one
         // cannot leak its table onto the next path registered.
         self.pending_line_lengths = None;
-        id
+        Ok(id)
     }
 
     /// Emit a column-only step: a `DeltaColumn` (tag 0x07) record that advances
@@ -1706,7 +1743,15 @@ impl TraceWriter for CtfsTraceWriter {
         path: &Path,
         line_lengths: &[u32],
     ) -> Result<codetracer_trace_types::PathId, Box<dyn std::error::Error>> {
-        Ok(CtfsTraceWriter::register_path_with_line_lengths(self, path, line_lengths))
+        match self.try_register_path_with_line_lengths(path, line_lengths) {
+            Ok(id) => Ok(id),
+            Err(refusal) => {
+                // Also held, so the recording fails even if the caller drops
+                // this error.
+                self.refusals.push(refusal.clone());
+                Err(refusal.into())
+            }
+        }
     }
 
     fn begin_writing_trace_events(&mut self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {

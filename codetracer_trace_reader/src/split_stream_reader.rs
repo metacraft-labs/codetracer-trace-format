@@ -169,19 +169,21 @@ pub fn read_window(reader: &mut CtfsReader, start_step: u64, max_steps: u64) -> 
 
     // STEP addresses are a different space in a column-aware trace: each
     // `global_position_index` names a `(line, column)` pair, a file with a
-    // per-line table is `sum(line_lengths)` addresses wide and one without is
-    // `DEFAULT_LINES_PER_FILE` (`trace-events.md` §"Source Location
-    // Addressing"). Resolving those through the line space above read a
+    // per-line table is `sum(line_lengths)` addresses wide and one with the
+    // conventional table (`line_count = 0`) 100000 × 1024 (`trace-events.md`
+    // §"Source Location Addressing", `internal-files.md` §"`paths.dat` Layout
+    // A"). Resolving those through the line space above read a
     // column as a line and placed every later file at the wrong base.
     // `funcs.dat` addresses stay line addresses in both modes, so `space`
     // above is still the one functions resolve through.
     let mut step_space = if tables.is_column_aware() {
         let mut ps = codetracer_trace_writer::column_aware::PositionSpace::new(true);
         for path_id in 0..tables.path_count() {
-            let lls = tables
-                .path_line_lengths(path_id as u64)
-                .map_err(|e| format!("split-stream reader: path {path_id}'s line table is unreadable: {e}"))?;
-            ps.push_path(&lls);
+            let table = tables
+                .path_file_table(path_id as u64)
+                .map_err(|e| format!("split-stream reader: path {path_id}'s line table is unreadable: {e}"))?
+                .ok_or_else(|| format!("split-stream reader: path {path_id} has no Layout A table"))?;
+            ps.push_file_table(&table);
         }
         Some(ps)
     } else {

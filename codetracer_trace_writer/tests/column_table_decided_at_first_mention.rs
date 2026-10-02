@@ -17,7 +17,9 @@
 //! * a non-empty table offered for a path already interned is refused, naming
 //!   the path, unless it is the recorded table (after the same normalisation),
 //!   including a table offered after a step, a function or an id request first
-//!   mentioned the path.
+//!   mentioned the path;
+//! * the conventional table is written as `line_count = 0`, its only
+//!   encoding, and held by the writer as a rule rather than an array.
 //!
 //! The Nim writer applies the same rules to the byte; that is asserted in
 //! `codetracer_trace_writer_nim/tests/column_table_cross_writer.rs`.
@@ -41,8 +43,18 @@ fn column_aware(program: &str) -> CtfsTraceWriter {
     w
 }
 
+/// Whether a table the writer holds is the conventional one: held as its
+/// rule, an empty table, never spelled out.
 fn is_conventional(t: &[u32]) -> bool {
-    t.len() == 100_000 && t.iter().all(|l| *l == 1024)
+    t.is_empty()
+}
+
+/// `paths.dat` of a finished container.
+fn paths_dat(bytes: &[u8]) -> Vec<u8> {
+    let dir = tempfile::tempdir().unwrap();
+    let p = dir.path().join("c.ct");
+    std::fs::write(&p, bytes).unwrap();
+    codetracer_ctfs::CtfsReader::open(&p).unwrap().read_file("paths.dat").unwrap()
 }
 
 /// `(path id, line, column)` of every step, resolved through the writer's
@@ -228,4 +240,40 @@ fn a_line_only_writer_ignores_tables() {
     TraceWriter::register_path_with_line_lengths(&mut w, Path::new(Q), &[]).unwrap();
     AbstractTraceWriter::register_step(&mut w, Path::new(P), Line(200_000));
     TraceWriter::finish_writing_trace_events(&mut w).expect("finish");
+}
+
+#[test]
+fn the_conventional_table_is_written_as_line_count_zero() {
+    for (name, table) in [("by_writer", Vec::new()), ("by_recorder", vec![1024u32; 100_000])] {
+        let mut w = column_aware(name);
+        TraceWriter::register_path_with_line_lengths(&mut w, Path::new(P), &table).unwrap();
+        AbstractTraceWriter::register_step(&mut w, Path::new(P), Line(3));
+        assert!(
+            is_conventional(&w.line_lengths()[0]),
+            "{name}: the writer holds the rule, not 100000 entries"
+        );
+        let (w, bytes) = finish(w);
+        let mut want = vec![P.len() as u8];
+        want.extend_from_slice(P.as_bytes());
+        want.push(0);
+        assert_eq!(paths_dat(&bytes), want, "{name}: the record must be `path_len, path, 0`");
+        assert_eq!(steps_of(&w, &bytes), vec![(0, 3, Some(1))], "{name}");
+        let dir = tempfile::tempdir().unwrap();
+        let ct = dir.path().join("c.ct");
+        std::fs::write(&ct, &bytes).unwrap();
+        let mut r = codetracer_ctfs::CtfsReader::open(&ct).unwrap();
+        let tables = codetracer_trace_reader::interning_tables_reader::InterningTablesReader::open(&mut r)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            tables.path_line_lengths(0).unwrap(),
+            vec![1024u32; 100_000],
+            "{name}: line_count 0 reads back as the conventional table"
+        );
+        assert_eq!(
+            tables.path_file_table(0).unwrap(),
+            Some(codetracer_trace_reader::global_position_decoder::FileTable::Conventional),
+            "{name}: the reader says so explicitly"
+        );
+    }
 }

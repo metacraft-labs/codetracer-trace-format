@@ -164,15 +164,10 @@ fn layout_a_records_read_back_with_their_line_lengths() {
         "a column-aware writer declares bit 4 and only bit 4"
     );
     assert_eq!(rb.paths, expected_names(&paths));
-    // No table is recorded as the conventional one, 100000 lines of 1024
-    // (`internal-files.md` §"`paths.dat` Layout A").
-    assert_eq!(
-        rb.layout_a_line_lengths,
-        vec![
-            LINE_LENGTHS[0].to_vec(),
-            codetracer_trace_writer::column_aware::conventional_line_lengths()
-        ]
-    );
+    // No table is recorded as the conventional one, whose only encoding is
+    // `line_count = 0` with no line lengths (`internal-files.md` §"`paths.dat`
+    // Layout A").
+    assert_eq!(rb.layout_a_line_lengths, vec![LINE_LENGTHS[0].to_vec(), Vec::new()]);
     assert_eq!(rb.line_counts, vec![None, None], "bit 4 alone is not the bit-14 table");
     assert_eq!(rb.path_events, paths.to_vec());
 }

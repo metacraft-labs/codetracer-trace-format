@@ -302,7 +302,48 @@ pub use crate::line_position::DEFAULT_LINES_PER_FILE;
 /// `global_line_index.ConventionalLineLength`.
 pub const CONVENTIONAL_LINE_LENGTH: u32 = 1024;
 
-/// The conventional column-aware table.
+/// The positions a file with the conventional table occupies.
+///
+/// The conventional table is written as `line_count = 0` with no line lengths,
+/// its only encoding, and is held as this rule rather than as an array: an
+/// EMPTY column-aware table means the conventional one, in the writer, in
+/// `paths.dat` and in the reader. Port of Nim
+/// `global_line_index.ConventionalFileSize`.
+pub const CONVENTIONAL_FILE_SIZE: u64 = DEFAULT_LINES_PER_FILE * CONVENTIONAL_LINE_LENGTH as u64;
+
+/// A column-aware file's per-line table, as `paths.dat` Layout A records it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileTable {
+    /// The file's addressable column count per line.
+    Lines(Vec<u32>),
+    /// The conventional table, 100000 lines of 1024 positions — a record of
+    /// `line_count = 0` (`internal-files.md` §"`paths.dat` Layout A"). Held
+    /// as that rule, never spelled out.
+    Conventional,
+}
+
+impl FileTable {
+    /// The table a Layout A record states: `line_count = 0` is the
+    /// conventional table.
+    pub fn from_record(line_lengths: Vec<u32>) -> Self {
+        if line_lengths.is_empty() {
+            FileTable::Conventional
+        } else {
+            FileTable::Lines(line_lengths)
+        }
+    }
+
+    /// The positions the file occupies.
+    pub fn size(&self) -> u64 {
+        match self {
+            FileTable::Conventional => CONVENTIONAL_FILE_SIZE,
+            FileTable::Lines(lls) => lls.iter().map(|l| u64::from(*l)).sum(),
+        }
+    }
+}
+
+/// The conventional column-aware table spelled out — for a recorder or a test
+/// that builds it; the writer and the readers never hold it.
 pub fn conventional_line_lengths() -> Vec<u32> {
     vec![CONVENTIONAL_LINE_LENGTH; DEFAULT_LINES_PER_FILE as usize]
 }
@@ -320,9 +361,12 @@ pub fn is_conventional_table(line_lengths: &[u32]) -> bool {
 /// gives its first line one position, keeping its line count (`[0]` → `[1]`,
 /// `[0, 0]` → `[1, 0]`); anything else is recorded as given. Port of Nim
 /// `columnTableAtFirstMention`.
+///
+/// The conventional table is returned in its held form, EMPTY — whether none
+/// was given or the 100000 × 1024 table itself was.
 pub fn column_table_at_first_mention(line_lengths: &[u32]) -> Vec<u32> {
-    if line_lengths.is_empty() {
-        return conventional_line_lengths();
+    if line_lengths.is_empty() || is_conventional_table(line_lengths) {
+        return Vec::new();
     }
     let mut table = line_lengths.to_vec();
     if table.iter().all(|l| *l == 0) {
@@ -339,22 +383,20 @@ pub fn column_table_at_first_mention(line_lengths: &[u32]) -> Vec<u32> {
 ///
 /// A file's slot size is:
 ///
-/// * `max(sum(line_lengths[f]), 1)` when the trace is column-aware **and** that
-///   file has a non-empty `line_lengths` table, or
-/// * [`DEFAULT_LINES_PER_FILE`] otherwise — which includes a column-aware trace
-///   whose recorder did not surface per-line counts for *that* file. The mixed
-///   case is real and the Nim writer handles it this way; reproducing the
-///   fallback is what makes a partially-populated trace match.
+/// * `max(sum(line_lengths[f]), 1)` when the trace is column-aware and that
+///   file has a non-empty `line_lengths` table;
+/// * [`CONVENTIONAL_FILE_SIZE`] when the trace is column-aware and the table
+///   is empty — the conventional table, held as its rule (a `line_count = 0`
+///   record, or the 100000 × 1024 table passed in full);
+/// * [`DEFAULT_LINES_PER_FILE`] in a line-only trace.
 #[derive(Debug, Clone, Default)]
 pub struct PositionSpace {
-    /// Per-file addressable column counts. Empty entry ⇒ no per-line data.
+    /// Per-file addressable column counts. In a column-aware space an empty
+    /// entry is the conventional table; in a line-only one every entry is
+    /// empty and unused.
     line_lengths: Vec<Vec<u32>>,
-    /// Whether each file's table is the conventional one, parallel to
-    /// `line_lengths`.
-    conventional: Vec<bool>,
-    /// Each file's slot size, computed once when it is registered: a
-    /// conventional table is 10^5 entries, and summing every table again on
-    /// every registration is quadratic in the number of such files.
+    /// Each file's slot size, computed once when it is registered, so
+    /// registering a file does not re-sum every earlier table.
     slots: Vec<u64>,
     /// Whether the trace is column-aware. Decides the slot sizing above.
     column_aware: bool,
@@ -371,7 +413,6 @@ impl PositionSpace {
     pub fn new(column_aware: bool) -> Self {
         PositionSpace {
             line_lengths: Vec::new(),
-            conventional: Vec::new(),
             slots: Vec::new(),
             column_aware,
             prefix_sum: Vec::new(),
@@ -389,22 +430,29 @@ impl PositionSpace {
     ///
     /// `line_lengths` is ignored (stored empty) when the space is not
     /// column-aware — the Nim writer does the same, so a line-only trace's
-    /// addresses do not move if a recorder happens to pass a table.
+    /// addresses do not move if a recorder happens to pass a table. In a
+    /// column-aware space an empty table, or the conventional table spelled
+    /// out, is held as the conventional rule.
+    /// Register the next path's table as a reader states it.
+    pub fn push_file_table(&mut self, table: &FileTable) -> u64 {
+        match table {
+            FileTable::Conventional => self.push_path(&[]),
+            FileTable::Lines(lls) => self.push_path(lls),
+        }
+    }
+
     pub fn push_path(&mut self, line_lengths: &[u32]) -> u64 {
         let id = self.line_lengths.len() as u64;
-        let slot = if self.column_aware && !line_lengths.is_empty() {
-            let total: u64 = line_lengths.iter().map(|l| u64::from(*l)).sum();
-            total.max(1)
-        } else {
-            DEFAULT_LINES_PER_FILE
-        };
-        self.slots.push(slot);
-        if self.column_aware {
-            self.conventional.push(is_conventional_table(line_lengths));
-            self.line_lengths.push(line_lengths.to_vec());
-        } else {
-            self.conventional.push(false);
+        if !self.column_aware {
+            self.slots.push(DEFAULT_LINES_PER_FILE);
             self.line_lengths.push(Vec::new());
+        } else if line_lengths.is_empty() || is_conventional_table(line_lengths) {
+            self.slots.push(CONVENTIONAL_FILE_SIZE);
+            self.line_lengths.push(Vec::new());
+        } else {
+            let total: u64 = line_lengths.iter().map(|l| u64::from(*l)).sum();
+            self.slots.push(total.max(1));
+            self.line_lengths.push(line_lengths.to_vec());
         }
         self.dirty = true;
         id
@@ -415,24 +463,22 @@ impl PositionSpace {
         self.line_lengths.len()
     }
 
-    /// The per-file tables, in id order — what a reader's
-    /// `GlobalPositionDecoder::from_line_lengths` needs.
+    /// The per-file tables as held, in id order: in a column-aware space an
+    /// empty table is the conventional one (what
+    /// `GlobalPositionDecoder::from_recorded_line_lengths` takes).
     pub fn line_lengths(&self) -> &[Vec<u32>] {
         &self.line_lengths
     }
 
-    /// Whether `path_id` has a column axis — i.e. a non-empty per-line table.
-    ///
-    /// A file without one is sized by the [`DEFAULT_LINES_PER_FILE`] fallback,
-    /// where one address is one line, so a column delta added to its address
-    /// names a later line instead of a column.
+    /// Whether `path_id` has a column axis: in a column-aware space every
+    /// registered file does — a real table or the conventional one.
     pub fn has_column_axis(&self, path_id: u64) -> bool {
-        self.line_lengths.get(path_id as usize).is_some_and(|lls| !lls.is_empty())
+        self.column_aware && (path_id as usize) < self.line_lengths.len()
     }
 
     /// Whether `path_id`'s table is the conventional one.
     pub fn is_conventional(&self, path_id: u64) -> bool {
-        self.column_aware && self.conventional.get(path_id as usize).copied().unwrap_or(false)
+        self.column_aware && self.line_lengths.get(path_id as usize).is_some_and(Vec::is_empty)
     }
 
     fn rebuild(&mut self) {
@@ -463,9 +509,8 @@ impl PositionSpace {
         let base = self.prefix_sum.get(idx).copied().unwrap_or(0);
         if self.column_aware
             && let Some(lls) = self.line_lengths.get(idx)
-            && !lls.is_empty()
         {
-            if self.conventional[idx] {
+            if lls.is_empty() {
                 // Every line has the same length, so the sum is a product.
                 let up_to = (line.max(1) - 1).min(DEFAULT_LINES_PER_FILE);
                 return base + up_to * u64::from(CONVENTIONAL_LINE_LENGTH);
@@ -483,10 +528,10 @@ impl PositionSpace {
     /// Recover `(path_id, line, column)` from a `global_position_index` — the
     /// inverse of [`position_of`](Self::position_of) plus a column offset.
     ///
-    /// In a file with a per-line table the column is 1-based within its line;
-    /// in a file without one (line-only, or a column-aware trace's untabled
-    /// file, sized [`DEFAULT_LINES_PER_FILE`]) one address is one line and the
-    /// column is `None`. `None` for an address past the end of the space.
+    /// In a column-aware space the column is 1-based within its line, by the
+    /// file's table or by the conventional rule; in a line-only space one
+    /// address is one line and the column is `None`. `None` for an address
+    /// past the end of the space.
     pub fn resolve(&mut self, position: u64) -> Option<(u64, u64, Option<u64>)> {
         if self.dirty {
             self.rebuild();
@@ -498,7 +543,15 @@ impl PositionSpace {
         let base = self.prefix_sum[file];
         let offset = position - base;
         let lls = &self.line_lengths[file];
-        if self.column_aware && !lls.is_empty() {
+        if self.column_aware && lls.is_empty() {
+            // The conventional table, resolved by its rule.
+            if offset >= CONVENTIONAL_FILE_SIZE {
+                return None;
+            }
+            let width = u64::from(CONVENTIONAL_LINE_LENGTH);
+            return Some((file as u64, offset / width + 1, Some(offset % width + 1)));
+        }
+        if self.column_aware {
             let mut line_base: u64 = 0;
             for (i, len) in lls.iter().enumerate() {
                 let len = u64::from(*len);
@@ -906,17 +959,17 @@ mod tests {
     }
 
     #[test]
-    fn position_space_falls_back_per_file_when_a_table_is_missing() {
+    fn position_space_gives_a_file_with_no_table_the_conventional_one() {
         // The mixed case: a column-aware trace where one file has no per-line
-        // data. Nim gives that file DEFAULT_LINES_PER_FILE and addresses it the
-        // legacy way; anything else would silently shift every later file.
+        // table. It has the conventional table, 100000 lines of 1024, exactly
+        // as Nim lays it out; anything else would shift every later file.
         let mut space = PositionSpace::new(true);
         space.push_path(&[8]);
-        space.push_path(&[]); // no table
+        space.push_path(&[]); // the conventional table
         space.push_path(&[4]);
         assert_eq!(space.position_of(0, 1), 0);
-        assert_eq!(space.position_of(1, 7), 8 + 6);
-        assert_eq!(space.position_of(2, 1), 8 + DEFAULT_LINES_PER_FILE);
+        assert_eq!(space.position_of(1, 7), 8 + 6 * 1024);
+        assert_eq!(space.position_of(2, 1), 8 + CONVENTIONAL_FILE_SIZE);
     }
 
     #[test]
@@ -1039,7 +1092,8 @@ mod tests {
     }
 
     /// `resolve` inverts `position_of` at every column of every line, in a
-    /// space mixing tabled and untabled files, and refuses past the end.
+    /// space mixing tabled files and one with the conventional table, and
+    /// refuses past the end.
     #[test]
     fn resolve_inverts_position_of_in_a_mixed_space() {
         let mut space = PositionSpace::new(true);
@@ -1055,10 +1109,10 @@ mod tests {
                 }
             }
         }
-        let untabled = space.position_of(1, 42);
-        assert_eq!(untabled, 8 + 41);
-        assert_eq!(space.resolve(untabled), Some((1, 42, None)));
-        let end = 8 + DEFAULT_LINES_PER_FILE + 4;
+        let conventional = space.position_of(1, 42) + 1023;
+        assert_eq!(conventional, 8 + 41 * 1024 + 1023);
+        assert_eq!(space.resolve(conventional), Some((1, 42, Some(1024))));
+        let end = 8 + CONVENTIONAL_FILE_SIZE + 4;
         assert_eq!(space.resolve(end - 1), Some((2, 1, Some(4))));
         assert_eq!(space.resolve(end), None, "one past the end of the space");
     }

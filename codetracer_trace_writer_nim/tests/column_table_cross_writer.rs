@@ -204,7 +204,7 @@ fn both_writers_decide_tables_alike_and_yield_the_same_container() {
     assert_eq!(tables[1], vec![1]);
     assert_eq!(tables[2], vec![1, 0]);
     for f in [3, 4, 5] {
-        assert_eq!(tables[f].len(), 100_000, "file {f}");
+        assert!(tables[f].is_empty(), "file {f} holds the conventional table as its rule");
     }
 
     let (a, b) = (files(&nim_ct), files(&rust_ct));
@@ -215,7 +215,22 @@ fn both_writers_decide_tables_alike_and_yield_the_same_container() {
     );
     let differing: Vec<&String> = a.keys().filter(|k| a[*k] != b[*k]).collect();
     assert!(differing.is_empty(), "files differ between the writers: {differing:?}");
-    assert!(a["paths.dat"].len() > 400_000, "four conventional tables are in paths.dat");
+    // Every conventional-table file is the record `path_len, path, 0` in both
+    // writers' paths.dat: a one-byte table body (`internal-files.md`
+    // §"`paths.dat` Layout A").
+    let records = |dat: &[u8], off: &[u8]| -> Vec<Vec<u8>> {
+        let o: Vec<usize> = off.chunks(8).map(|c| u64::from_le_bytes(c.try_into().unwrap()) as usize).collect();
+        o.windows(2).map(|w| dat[w[0]..w[1]].to_vec()).collect()
+    };
+    for (label, f) in [("nim", &a), ("rust", &b)] {
+        let recs = records(&f["paths.dat"], &f["paths.off"]);
+        for (id, path) in [(3usize, NO_TABLE), (4, BUILT), (5, STEPPED), (6, DECLARED)] {
+            let mut want = vec![path.len() as u8];
+            want.extend_from_slice(path.as_bytes());
+            want.push(0);
+            assert_eq!(recs[id], want, "{label}: record {id} ({path}) must be `path_len, path, 0`");
+        }
+    }
     let len = |p: &Path| std::fs::metadata(p).expect("container").len();
     assert_eq!(len(&nim_ct), len(&rust_ct), "the containers differ in size");
 }

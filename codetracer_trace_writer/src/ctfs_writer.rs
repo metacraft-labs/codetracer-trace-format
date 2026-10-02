@@ -88,7 +88,7 @@ use crate::{
     chunk_sink::ChunkSink,
     column_aware::{
         CONVENTIONAL_LINE_LENGTH, DEFAULT_LINES_PER_FILE, EXEC_COMPRESSION_LEVEL, ExecStreamEncoder, PositionSpace, StepEncoder,
-        column_table_at_first_mention, conventional_line_lengths,
+        column_table_at_first_mention,
     },
     event_stream::{DEFAULT_EVENTS_CHUNK_SIZE, IoEventStreamBuilder},
     interning_tables::InterningTablesBuilder,
@@ -867,7 +867,9 @@ impl CtfsTraceWriter {
             {
                 let offered = column_table_at_first_mention(line_lengths);
                 if &offered != recorded {
-                    return Err(late_column_table_diagnostic(path, recorded.len(), offered.len()));
+                    // An empty held table is the conventional one.
+                    let lines = |t: &[u32]| if t.is_empty() { DEFAULT_LINES_PER_FILE as usize } else { t.len() };
+                    return Err(late_column_table_diagnostic(path, lines(recorded), lines(&offered)));
                 }
             }
             return Ok(id);
@@ -1528,7 +1530,8 @@ impl AbstractTraceWriter for CtfsTraceWriter {
                 TraceLowLevelEvent::Path(_) => {
                     // A path first mentioned with no table — by a step, a
                     // function or an id request — gets the conventional one.
-                    let lls = self.pending_line_lengths.take().unwrap_or_else(conventional_line_lengths);
+                    // An empty table is the conventional one, held as its rule.
+                    let lls = self.pending_line_lengths.take().unwrap_or_default();
                     let path_id = self.position_space.push_path(&lls) as usize;
                     if let Some(ref mut builder) = self.interning_tables_builder {
                         builder.set_path_line_lengths(path_id, &lls);
@@ -1553,10 +1556,10 @@ impl AbstractTraceWriter for CtfsTraceWriter {
                         column_delta = column_delta.min(i64::from(CONVENTIONAL_LINE_LENGTH) - 1);
                     }
                     self.last_step_location = Some((step.path_id.0 as u64, step.line.0.max(0) as u64));
-                    // A file with no per-line table has no column axis: its
-                    // slot in the position space is sized by the line-only
-                    // fallback, so one address IS one line and a column delta
-                    // added to that address names a LATER LINE. The step is
+                    // Every registered file has a column axis — its table or
+                    // the conventional one — so this guards a path id the
+                    // space does not know, whose column would name a later
+                    // address rather than a column. The step is
                     // kept at its line and the column is dropped, which is
                     // what the spec requires of a column arriving as part of
                     // a step (`trace-events.md` §"A column needs a file with

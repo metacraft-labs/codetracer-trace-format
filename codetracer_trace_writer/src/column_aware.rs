@@ -294,6 +294,43 @@ pub fn decode_step_event_declared(data: &[u8], pos: &mut usize, allow_source_rel
 /// allocation falls back to it.
 pub use crate::line_position::DEFAULT_LINES_PER_FILE;
 
+/// The per-line position count of the conventional column-aware table
+/// (`internal-files.md` §"`paths.dat` Layout A"): a column-aware file first
+/// mentioned with no table is recorded as [`DEFAULT_LINES_PER_FILE`] lines of
+/// this many positions. A column above it is recorded at this column of its
+/// line; a line above [`DEFAULT_LINES_PER_FILE`] is refused. Port of Nim
+/// `global_line_index.ConventionalLineLength`.
+pub const CONVENTIONAL_LINE_LENGTH: u32 = 1024;
+
+/// The conventional column-aware table.
+pub fn conventional_line_lengths() -> Vec<u32> {
+    vec![CONVENTIONAL_LINE_LENGTH; DEFAULT_LINES_PER_FILE as usize]
+}
+
+/// Whether `line_lengths` is the conventional table. Decided by content, so a
+/// file is treated alike whether the writer chose the table or the recorder
+/// built it: the two are the same record on the wire.
+pub fn is_conventional_table(line_lengths: &[u32]) -> bool {
+    line_lengths.len() as u64 == DEFAULT_LINES_PER_FILE && line_lengths.iter().all(|l| *l == CONVENTIONAL_LINE_LENGTH)
+}
+
+/// The table a column-aware writer records for a file first mentioned with
+/// `line_lengths` (`internal-files.md` §"`paths.dat` Layout A"): empty — no
+/// table given — is the conventional table; a table whose lines hold nothing
+/// gives its first line one position, keeping its line count (`[0]` → `[1]`,
+/// `[0, 0]` → `[1, 0]`); anything else is recorded as given. Port of Nim
+/// `columnTableAtFirstMention`.
+pub fn column_table_at_first_mention(line_lengths: &[u32]) -> Vec<u32> {
+    if line_lengths.is_empty() {
+        return conventional_line_lengths();
+    }
+    let mut table = line_lengths.to_vec();
+    if table.iter().all(|l| *l == 0) {
+        table[0] = 1;
+    }
+    table
+}
+
 /// The trace's global position space: one contiguous, gap-free range per
 /// registered file, in file-id order.
 ///
@@ -312,6 +349,13 @@ pub use crate::line_position::DEFAULT_LINES_PER_FILE;
 pub struct PositionSpace {
     /// Per-file addressable column counts. Empty entry ⇒ no per-line data.
     line_lengths: Vec<Vec<u32>>,
+    /// Whether each file's table is the conventional one, parallel to
+    /// `line_lengths`.
+    conventional: Vec<bool>,
+    /// Each file's slot size, computed once when it is registered: a
+    /// conventional table is 10^5 entries, and summing every table again on
+    /// every registration is quadratic in the number of such files.
+    slots: Vec<u64>,
     /// Whether the trace is column-aware. Decides the slot sizing above.
     column_aware: bool,
     /// Exclusive prefix sum of the per-file slot sizes: the first address of
@@ -327,6 +371,8 @@ impl PositionSpace {
     pub fn new(column_aware: bool) -> Self {
         PositionSpace {
             line_lengths: Vec::new(),
+            conventional: Vec::new(),
+            slots: Vec::new(),
             column_aware,
             prefix_sum: Vec::new(),
             dirty: true,
@@ -346,9 +392,18 @@ impl PositionSpace {
     /// addresses do not move if a recorder happens to pass a table.
     pub fn push_path(&mut self, line_lengths: &[u32]) -> u64 {
         let id = self.line_lengths.len() as u64;
+        let slot = if self.column_aware && !line_lengths.is_empty() {
+            let total: u64 = line_lengths.iter().map(|l| u64::from(*l)).sum();
+            total.max(1)
+        } else {
+            DEFAULT_LINES_PER_FILE
+        };
+        self.slots.push(slot);
         if self.column_aware {
+            self.conventional.push(is_conventional_table(line_lengths));
             self.line_lengths.push(line_lengths.to_vec());
         } else {
+            self.conventional.push(false);
             self.line_lengths.push(Vec::new());
         }
         self.dirty = true;
@@ -375,18 +430,17 @@ impl PositionSpace {
         self.line_lengths.get(path_id as usize).is_some_and(|lls| !lls.is_empty())
     }
 
+    /// Whether `path_id`'s table is the conventional one.
+    pub fn is_conventional(&self, path_id: u64) -> bool {
+        self.column_aware && self.conventional.get(path_id as usize).copied().unwrap_or(false)
+    }
+
     fn rebuild(&mut self) {
         let mut prefix = Vec::with_capacity(self.line_lengths.len());
         let mut running: u64 = 0;
-        for lls in &self.line_lengths {
+        for slot in &self.slots {
             prefix.push(running);
-            let slot = if self.column_aware && !lls.is_empty() {
-                let total: u64 = lls.iter().map(|l| u64::from(*l)).sum();
-                total.max(1)
-            } else {
-                DEFAULT_LINES_PER_FILE
-            };
-            running = running.saturating_add(slot);
+            running = running.saturating_add(*slot);
         }
         self.prefix_sum = prefix;
         self.dirty = false;
@@ -411,6 +465,11 @@ impl PositionSpace {
             && let Some(lls) = self.line_lengths.get(idx)
             && !lls.is_empty()
         {
+            if self.conventional[idx] {
+                // Every line has the same length, so the sum is a product.
+                let up_to = (line.max(1) - 1).min(DEFAULT_LINES_PER_FILE);
+                return base + up_to * u64::from(CONVENTIONAL_LINE_LENGTH);
+            }
             // `line` is 1-based, so line 1 sits at offset 0. Nim clamps
             // `upTo` to the known line count and lets the reader's
             // decoder handle a past-end address the same way.
@@ -711,6 +770,11 @@ impl StepEncoder {
     /// Exec records emitted so far.
     pub fn step_count(&self) -> u64 {
         self.step_count
+    }
+
+    /// The running position: the last step's, moved by any column steps since.
+    pub fn last_position(&self) -> u64 {
+        self.last_position
     }
 
     /// The event for a step at `position`, with `column_delta` folded in.

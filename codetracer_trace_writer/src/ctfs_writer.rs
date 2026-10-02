@@ -86,7 +86,10 @@ use crate::{
     abstract_trace_writer::{AbstractTraceWriter, AbstractTraceWriterData},
     call_stream::{CallStreamBuilder, DEFAULT_CALLS_CHUNK_SIZE},
     chunk_sink::ChunkSink,
-    column_aware::{EXEC_COMPRESSION_LEVEL, ExecStreamEncoder, PositionSpace, StepEncoder},
+    column_aware::{
+        CONVENTIONAL_LINE_LENGTH, DEFAULT_LINES_PER_FILE, EXEC_COMPRESSION_LEVEL, ExecStreamEncoder, PositionSpace, StepEncoder,
+        column_table_at_first_mention, conventional_line_lengths,
+    },
     event_stream::{DEFAULT_EVENTS_CHUNK_SIZE, IoEventStreamBuilder},
     interning_tables::InterningTablesBuilder,
     meta_dat::{
@@ -321,6 +324,9 @@ pub struct CtfsTraceWriter {
     /// consume-once way as `pending_line_lengths`. Set by
     /// [`AbstractTraceWriter::register_step_with_column`].
     pending_column_delta: i64,
+    /// `(path id, line)` of the last step written in column-aware mode: the
+    /// line a column-only step moves along.
+    last_step_location: Option<(u64, u64)>,
 
     // --- Per-file line counts, path versions, source reloads ----------------
     //
@@ -413,6 +419,17 @@ fn is_record(event: &TraceLowLevelEvent) -> bool {
 /// `paths.dat` index.
 pub const INVALID_PATH_ID: codetracer_trace_types::PathId = codetracer_trace_types::PathId(usize::MAX);
 
+/// THE refusal of a step past the last line of a file with the conventional
+/// table (`internal-files.md` §"`paths.dat` Layout A"). The Nim writer states
+/// it in the same words.
+pub fn conventional_line_diagnostic(path: &Path, line: i64) -> String {
+    format!(
+        "step at line {line} of {}, which has the conventional table of 100000 lines; its position would fall \
+         inside the next file's range",
+        path.display()
+    )
+}
+
 impl CtfsTraceWriter {
     /// Create a new CTFS trace writer using the default SplitBinary format.
     pub fn new(program: &str, args: &[String]) -> Self {
@@ -480,6 +497,7 @@ impl CtfsTraceWriter {
             exec_encoder: None,
             pending_line_lengths: None,
             pending_column_delta: 0,
+            last_step_location: None,
             line_count_table: false,
             pending_line_count: None,
             path_line_counts: Vec::new(),
@@ -803,13 +821,25 @@ impl CtfsTraceWriter {
     /// the Nim writer ignores it, so a recorder can call this unconditionally
     /// without changing a line-only trace's bytes.
     ///
+    /// In column-aware mode the file's table is decided when the path is first
+    /// mentioned — here, or by a step, a function or an id request naming it —
+    /// by [`column_table_at_first_mention`] (`internal-files.md` §"`paths.dat`
+    /// Layout A"): a given table as given, except that one whose lines hold
+    /// nothing gives its first line a position; an empty table or none, the
+    /// conventional table. A recorder that can read a file's source registers
+    /// its real table before the file's first mention.
+    ///
     /// Mirrors the Nim writer's `registerPath(path, lineLengths)`.
     pub fn register_path_with_line_lengths(&mut self, path: &Path, line_lengths: &[u32]) -> codetracer_trace_types::PathId {
         if self.base.paths.contains_key(path) {
-            // Already interned; the table was attached when it was first seen.
+            // Already interned; the table was decided when it was first seen.
             return *self.base.paths.get(path).unwrap();
         }
-        self.pending_line_lengths = Some(line_lengths.to_vec());
+        self.pending_line_lengths = Some(if self.column_aware_active {
+            column_table_at_first_mention(line_lengths)
+        } else {
+            line_lengths.to_vec()
+        });
         let id = AbstractTraceWriter::ensure_path_id(self, path);
         // `ensure_path_id` emits the `Path` event, which consumes the pending
         // table. Clear it defensively so a path that somehow did not emit one
@@ -837,6 +867,16 @@ impl CtfsTraceWriter {
         }
         if self.exec_encoder.is_none() {
             return Err("register_column_step called before begin_writing_trace_events".to_string());
+        }
+        // On a file with the conventional table a move past column
+        // `CONVENTIONAL_LINE_LENGTH` stops at that column of the current line.
+        let mut column_delta = column_delta;
+        if let Some((path_id, line)) = self.last_step_location
+            && self.position_space.is_conventional(path_id)
+        {
+            let line_base = self.position_space.position_of(path_id, line);
+            let column = self.step_encoder.last_position() as i64 - line_base as i64 + 1;
+            column_delta = (column + column_delta).min(i64::from(CONVENTIONAL_LINE_LENGTH)) - column;
         }
         let event = self.step_encoder.column_step(column_delta)?;
         self.commit_meta();
@@ -1424,6 +1464,19 @@ impl AbstractTraceWriter for CtfsTraceWriter {
     }
 
     fn add_event(&mut self, event: TraceLowLevelEvent) {
+        // A step past the last line of a file with the conventional table would
+        // address the next file's range; it is refused, failing the recording,
+        // as under the line-count table.
+        if self.column_aware_active
+            && let TraceLowLevelEvent::Step(step) = &event
+            && self.position_space.is_conventional(step.path_id.0 as u64)
+            && step.line.0 > DEFAULT_LINES_PER_FILE as i64
+        {
+            let path = self.base.path_list.get(step.path_id.0).cloned().unwrap_or_default();
+            self.refusals.push(conventional_line_diagnostic(&path, step.line.0));
+            self.pending_column_delta = 0;
+            return;
+        }
         if is_record(&event) {
             self.commit_meta();
         }
@@ -1436,7 +1489,9 @@ impl AbstractTraceWriter for CtfsTraceWriter {
         if self.column_aware_active {
             match &event {
                 TraceLowLevelEvent::Path(_) => {
-                    let lls = self.pending_line_lengths.take().unwrap_or_default();
+                    // A path first mentioned with no table — by a step, a
+                    // function or an id request — gets the conventional one.
+                    let lls = self.pending_line_lengths.take().unwrap_or_else(conventional_line_lengths);
                     let path_id = self.position_space.push_path(&lls) as usize;
                     if let Some(ref mut builder) = self.interning_tables_builder {
                         builder.set_path_line_lengths(path_id, &lls);
@@ -1454,6 +1509,13 @@ impl AbstractTraceWriter for CtfsTraceWriter {
                     // column-1 step carries no variables, so a line-granular
                     // step-over lands on it and `variables_at` answers empty.
                     let mut column_delta = std::mem::replace(&mut self.pending_column_delta, 0);
+                    // On a file with the conventional table a column above
+                    // `CONVENTIONAL_LINE_LENGTH` is recorded at that column of
+                    // its line, as a line 0 is recorded as line 1.
+                    if self.position_space.is_conventional(step.path_id.0 as u64) {
+                        column_delta = column_delta.min(i64::from(CONVENTIONAL_LINE_LENGTH) - 1);
+                    }
+                    self.last_step_location = Some((step.path_id.0 as u64, step.line.0.max(0) as u64));
                     // A file with no per-line table has no column axis: its
                     // slot in the position space is sized by the line-only
                     // fallback, so one address IS one line and a column delta

@@ -24,6 +24,8 @@ extern "C" {
 
     fn trace_writer_last_error() -> *const std::os::raw::c_char;
 
+    fn trace_writer_build_config() -> *const std::os::raw::c_char;
+
     fn trace_writer_new(program: *const std::os::raw::c_char, format: i32) -> *mut std::ffi::c_void;
     fn trace_writer_free(handle: *mut std::ffi::c_void);
     fn trace_writer_close(handle: *mut std::ffi::c_void) -> i32;
@@ -628,6 +630,15 @@ pub fn last_error() -> String {
             CStr::from_ptr(ptr).to_string_lossy().into_owned()
         }
     }
+}
+
+/// How the linked Nim archive was compiled, as the archive itself reports it:
+/// `key:value` pairs joined by `;` (app type, threads, memory manager, release
+/// mode, process lock). See `trace_writer_build_config` in
+/// `codetracer_trace_writer.h`.
+pub fn build_config() -> String {
+    // The string is static in the archive and the call cannot fail.
+    unsafe { CStr::from_ptr(trace_writer_build_config()).to_string_lossy().into_owned() }
 }
 
 #[cfg(test)]

@@ -13,7 +13,7 @@
 //! `calls.dat`, simply has no call stream — the unified `events.log` call tree
 //! remains the source of truth.
 
-use codetracer_ctfs::CtfsReader;
+use codetracer_ctfs::{CtfsReader, MemberBytes};
 use codetracer_trace_writer::call_stream::CallStreamRecord;
 
 fn decode_zstd_chunk(compressed: &[u8]) -> Result<Vec<u8>, String> {
@@ -113,7 +113,8 @@ fn frame_records(raw: &[u8], frames: &mut Vec<(usize, usize)>) -> Result<(), Str
 /// sequential or clustered within a chunk.
 pub struct CallStreamReader {
     index: CallsIndex,
-    dat: Vec<u8>,
+    /// `calls.dat`, shared with the container when it is in memory.
+    dat: MemberBytes,
     /// Total number of records (computed by decoding chunks lazily as needed,
     /// but the count is established by walking the last chunk on open).
     record_count: u64,
@@ -123,7 +124,6 @@ pub struct CallStreamReader {
     /// A record is decoded when it is read.
     raw: Vec<u8>,
     frames: Vec<(usize, usize)>,
-    decoder: codetracer_ctfs::zstd_compat::Decoder,
 }
 
 impl CallStreamReader {
@@ -133,13 +133,18 @@ impl CallStreamReader {
     /// were sourced (local file, follow source, HTTP range, overlay) while
     /// preserving the exact same decode/cache path as [`Self::open`].
     pub fn from_files(_meta: &[u8], dat: Vec<u8>, idx: Vec<u8>) -> Result<Option<CallStreamReader>, String> {
+        Self::from_member(_meta, MemberBytes::from(dat), &idx)
+    }
+
+    /// [`Self::from_files`] over a `calls.dat` the reader shares with its
+    /// container rather than owns.
+    pub fn from_member(_meta: &[u8], dat: MemberBytes, idx: &[u8]) -> Result<Option<CallStreamReader>, String> {
         // Existence is STRUCTURAL — the caller resolved `calls.dat` / `calls.idx`
         // by `findFile` + `FileEntry.Size`. The `has_call_stream` hint bit (bit 8)
         // is NOT consulted (trace-format spec: "Stream-presence flags are a hint,
         // not a gate"; a writer may stamp the bit only at close). `_meta` is
         // retained for source compatibility.
-        let index = CallsIndex::parse(&idx)?;
-        let decoder = codetracer_ctfs::zstd_compat::Decoder::new().map_err(|e| format!("calls.dat: {e}"))?;
+        let index = CallsIndex::parse(idx)?;
         let mut reader = CallStreamReader {
             index,
             dat,
@@ -147,7 +152,6 @@ impl CallStreamReader {
             cached_chunk: None,
             raw: Vec::new(),
             frames: Vec::new(),
-            decoder,
         };
 
         // Compute the total record count: all chunks but the last hold
@@ -177,13 +181,12 @@ impl CallStreamReader {
         } else {
             self.dat.len()
         };
-        if start > end || end > self.dat.len() {
-            return Err("calls.dat: chunk offsets out of range".to_string());
-        }
+        let frame = self
+            .dat
+            .get(start, end)
+            .ok_or_else(|| "calls.dat: chunk offsets out of range".to_string())?;
         self.cached_chunk = None;
-        self.decoder
-            .decode_into(&self.dat[start..end], &mut self.raw)
-            .map_err(|e| format!("calls.dat: zstd decode failed: {e}"))?;
+        codetracer_ctfs::zstd_compat::decode_into(&frame, &mut self.raw).map_err(|e| format!("calls.dat: zstd decode failed: {e}"))?;
         frame_records(&self.raw, &mut self.frames)?;
         self.cached_chunk = Some(chunk_number);
         Ok(())
@@ -194,7 +197,7 @@ impl CallStreamReader {
     /// by STRUCTURAL PRESENCE of the stream file, not by the `has_call_stream`
     /// hint bit (see [`Self::from_files`]).
     pub fn open(reader: &mut CtfsReader) -> Result<Option<CallStreamReader>, String> {
-        let dat = match reader.read_file("calls.dat") {
+        let dat = match reader.read_member("calls.dat") {
             Ok(d) => d,
             Err(_) => return Ok(None),
         };
@@ -202,7 +205,7 @@ impl CallStreamReader {
             .read_file("calls.idx")
             .map_err(|e| format!("calls.idx missing despite calls.dat presence: {e}"))?;
         let meta = reader.read_file("meta.dat").unwrap_or_default();
-        CallStreamReader::from_files(&meta, dat, idx)
+        CallStreamReader::from_member(&meta, dat, &idx)
     }
 
     /// Total number of call records in the stream.

@@ -31,7 +31,9 @@
 //! spec's shape only, and refuses a bare-name record with the same message the
 //! Nim reader gives (see `InterningTablesReader::func`).
 
-use codetracer_ctfs::CtfsReader;
+use std::borrow::Cow;
+
+use codetracer_ctfs::{CtfsReader, MemberBytes};
 use codetracer_trace_types::{TypeKind, TypeSpecificInfo};
 use codetracer_trace_writer::column_aware::FileTable;
 use codetracer_trace_writer::line_position::{LinePositionError, LinePositionSpace};
@@ -252,53 +254,54 @@ fn decode_varint_nim(data: &[u8], pos: &mut usize) -> Result<u64, String> {
     Err("varint: too many bytes (>10)".to_string())
 }
 
-/// A single Variable-Size Record Table: the `.dat` data file plus its parsed
-/// `.off` offset index. Records are resolved by 0-based id with O(1) random
-/// access.
+/// A single Variable-Size Record Table: the `.dat` data file plus its `.off`
+/// offset index. Records are resolved by 0-based id with O(1) random access:
+/// two offsets read out of `.off`, then a slice of `.dat`. Both members are
+/// held as read, shared with the container when it is in memory.
 struct VarSizeTable {
     /// The concatenated record bytes.
-    dat: Vec<u8>,
-    /// The offset index: `record_count + 1` `u64` byte offsets (the trailing
-    /// entry is the total data length, so record `i`'s length is
-    /// `offsets[i + 1] - offsets[i]` for every record).
-    offsets: Vec<u64>,
+    dat: MemberBytes,
+    /// The offset index: `record_count + 1` little-endian `u64` byte offsets
+    /// (the trailing entry is the total data length, so record `i`'s length
+    /// is `offsets[i + 1] - offsets[i]` for every record).
+    off: MemberBytes,
 }
 
 impl VarSizeTable {
-    /// Load a table from a `.dat` data file and a `.off` offset index.
-    fn new(name: &str, dat: Vec<u8>, off: &[u8]) -> Result<VarSizeTable, String> {
+    /// A table over a `.dat` data member and a `.off` offset index.
+    fn new(name: &str, dat: MemberBytes, off: MemberBytes) -> Result<VarSizeTable, String> {
         if !off.len().is_multiple_of(8) {
             return Err(format!("{name}.off: length {} is not a multiple of 8", off.len()));
         }
-        let offsets: Vec<u64> = off.chunks_exact(8).map(|b| u64::from_le_bytes(b.try_into().unwrap())).collect();
         // A valid offset index has at least the trailing sentinel. An empty
         // table is exactly one sentinel entry (== 0).
-        if offsets.is_empty() {
+        if off.is_empty() {
             return Err(format!("{name}.off: empty (missing the trailing sentinel offset)"));
         }
-        Ok(VarSizeTable { dat, offsets })
+        Ok(VarSizeTable { dat, off })
     }
 
     /// Number of records in the table.
     fn count(&self) -> usize {
-        self.offsets.len() - 1
+        self.off.len() / 8 - 1
     }
 
     /// Resolve record `id` to its raw bytes via the offset index (random access,
     /// no scan).
-    fn record(&self, id: usize) -> Result<&[u8], String> {
+    fn record(&self, id: usize) -> Result<Cow<'_, [u8]>, String> {
         if id >= self.count() {
             return Err(format!("interning table: id {id} out of range (count {})", self.count()));
         }
-        let start = self.offsets[id] as usize;
-        let end = self.offsets[id + 1] as usize;
-        if start > end || end > self.dat.len() {
-            return Err(format!(
+        // `id < count`, so both offsets lie inside `.off`. An offset this
+        // target cannot address is out of range, not truncated.
+        let offset = |at: usize| self.off.u64_at(at).and_then(|o| usize::try_from(o).ok()).unwrap_or(usize::MAX);
+        let (start, end) = (offset(id * 8), offset(id * 8 + 8));
+        self.dat.get(start, end).ok_or_else(|| {
+            format!(
                 "interning table: record {id} offsets [{start}, {end}) out of range (dat len {})",
                 self.dat.len()
-            ));
-        }
-        Ok(&self.dat[start..end])
+            )
+        })
     }
 }
 
@@ -370,7 +373,7 @@ impl InterningTablesReader {
         let line_counts = if has_line_counts {
             let mut counts = Vec::with_capacity(paths.count());
             for id in 0..paths.count() {
-                counts.push(decode_line_count_path_record(paths.record(id)?, id)?.1);
+                counts.push(decode_line_count_path_record(&paths.record(id)?, id)?.1);
             }
             counts
         } else {
@@ -389,12 +392,12 @@ impl InterningTablesReader {
 
     fn load_table(reader: &mut CtfsReader, name: &str) -> Result<VarSizeTable, String> {
         let dat = reader
-            .read_file(&format!("{name}.dat"))
+            .read_member(&format!("{name}.dat"))
             .map_err(|e| format!("{name}.dat missing despite paths.dat presence: {e}"))?;
         let off = reader
-            .read_file(&format!("{name}.off"))
+            .read_member(&format!("{name}.off"))
             .map_err(|e| format!("{name}.off missing despite paths.dat presence: {e}"))?;
-        VarSizeTable::new(name, dat, &off)
+        VarSizeTable::new(name, dat, off)
     }
 
     /// Number of interned source paths.
@@ -423,14 +426,14 @@ impl InterningTablesReader {
         if self.column_aware {
             // Layout A: the path is the framed payload, and the rest of the
             // record is its per-line table. Bit 4 permits a zero count.
-            return Ok(decode_layout_a_path_record(raw, path_id as usize)?.to_vec());
+            return Ok(decode_layout_a_path_record(&raw, path_id as usize)?.to_vec());
         }
         if self.line_counts.is_empty() {
-            return Ok(raw.to_vec());
+            return Ok(raw.into_owned());
         }
         // The bit-14 line-count record: Layout A's framing without its per-line
         // table. `open` already decoded every one of these whole.
-        Ok(decode_framed_path_record(raw, path_id as usize)?.0.to_vec())
+        Ok(decode_framed_path_record(&raw, path_id as usize)?.0.to_vec())
     }
 
     /// Whether `paths.dat` records are Layout A (`meta.dat` bit 4).
@@ -462,8 +465,8 @@ impl InterningTablesReader {
             return Ok(None);
         }
         let raw = self.paths.record(path_id as usize)?;
-        decode_layout_a_path_record(raw, path_id as usize)?;
-        let (_, lls) = codetracer_trace_writer::column_aware::decode_path_record_layout_a(raw)?;
+        decode_layout_a_path_record(&raw, path_id as usize)?;
+        let (_, lls) = codetracer_trace_writer::column_aware::decode_path_record_layout_a(&raw)?;
         Ok(Some(FileTable::from_record(lls)))
     }
 
@@ -495,14 +498,14 @@ impl InterningTablesReader {
     /// name — see [`Self::bare_record_diagnosis`].
     pub fn func(&self, function_id: u64) -> Result<FuncRecord, String> {
         let raw = self.funcs.record(function_id as usize)?;
-        decode_func_record(raw).map_err(|e| self.bare_record_diagnosis("funcs.dat", function_id, e))
+        decode_func_record(&raw).map_err(|e| self.bare_record_diagnosis("funcs.dat", function_id, e))
     }
 
     /// Resolve a type id to its decoded record (kind / lang_type /
     /// specific_info). Refused by name like [`Self::func`].
     pub fn type_record(&self, type_id: u64) -> Result<DecodedTypeRecord, String> {
         let raw = self.types.record(type_id as usize)?;
-        decode_type_record(raw).map_err(|e| self.bare_record_diagnosis("types.dat", type_id, e))
+        decode_type_record(&raw).map_err(|e| self.bare_record_diagnosis("types.dat", type_id, e))
     }
 
     /// The refusal for a `funcs.dat` / `types.dat` record that does not decode
@@ -531,12 +534,12 @@ impl InterningTablesReader {
 
     /// Resolve a variable-name id to its name (raw bytes; UTF-8 for recorders).
     pub fn varname(&self, name_id: u64) -> Result<Vec<u8>, String> {
-        Ok(self.varnames.record(name_id as usize)?.to_vec())
+        Ok(self.varnames.record(name_id as usize)?.into_owned())
     }
 
     /// Resolve a variable-name id to its name as a `String` (lossy UTF-8).
     pub fn varname_str(&self, name_id: u64) -> Result<String, String> {
-        Ok(String::from_utf8_lossy(self.varnames.record(name_id as usize)?).into_owned())
+        Ok(String::from_utf8_lossy(&self.varnames.record(name_id as usize)?).into_owned())
     }
 }
 

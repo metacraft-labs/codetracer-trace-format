@@ -31,7 +31,7 @@
 //! single seekable byte range with one companion index, so they cannot share
 //! one file).
 
-use codetracer_ctfs::CtfsReader;
+use codetracer_ctfs::{CtfsReader, MemberBytes};
 use codetracer_trace_writer::value_stream::ValueRecordEntry;
 
 fn decode_zstd_chunk(compressed: &[u8]) -> Result<Vec<u8>, String> {
@@ -146,22 +146,33 @@ fn decode_records(compressed: &[u8], at: Option<(usize, usize)>) -> Result<Vec<V
 
 /// One inflated `values.dat` chunk: its bytes, and where each record's frame
 /// lies in them. A record is decoded when it is read, not when its chunk is
-/// inflated, so a point read pays for one record's events.
+/// inflated, and the frames are located only as far as the reads reach, so a
+/// point read pays for one record's events and the lengths before it.
 struct InflatedChunk {
     number: usize,
     raw: Vec<u8>,
-    /// `(start, len)` of each record's events within `raw`.
+    /// `(start, len)` of each record's events within `raw`, for the records
+    /// located so far.
     frames: Vec<(usize, usize)>,
+    /// Where the next record's length prefix starts.
+    pos: usize,
 }
 
 impl InflatedChunk {
-    /// Locate every record's frame in `raw`, refusing a frame that runs past
-    /// the chunk with the message [`decode_chunk_records_at`] gives.
-    fn frame(&mut self, chunk_size: usize) -> Result<(), String> {
-        let (raw, c) = (&self.raw, self.number);
+    /// Start over on a freshly inflated `raw`.
+    fn reset(&mut self, number: usize) {
+        self.number = number;
         self.frames.clear();
-        let mut pos = 0usize;
-        while pos < raw.len() {
+        self.pos = 0;
+    }
+
+    /// Locate records' frames in `raw` until record `target` is located or
+    /// the chunk ends, refusing a frame that runs past the chunk with the
+    /// message [`decode_chunk_records_at`] gives.
+    fn frame_to(&mut self, target: usize, chunk_size: usize) -> Result<(), String> {
+        let (raw, c) = (&self.raw, self.number);
+        let mut pos = self.pos;
+        while self.frames.len() <= target && pos < raw.len() {
             let k = self.frames.len();
             let name = || format!("values.dat record {} (record {k} of chunk {c})", c * chunk_size + k);
             let rec_len = decode_varint(raw, &mut pos).map_err(|e| format!("{}: {e}", name()))? as usize;
@@ -170,6 +181,7 @@ impl InflatedChunk {
             }
             self.frames.push((pos, rec_len));
             pos += rec_len;
+            self.pos = pos;
         }
         Ok(())
     }
@@ -196,14 +208,14 @@ impl InflatedChunk {
 /// kept, so sequential or clustered reads inflate each chunk once.
 pub struct ValueStreamReader {
     index: ValuesIndex,
-    dat: Vec<u8>,
+    /// `values.dat`, shared with the container when it is in memory.
+    dat: MemberBytes,
     /// Total number of value records (== number of steps).
     record_count: u64,
     /// The buffers of the most recently inflated chunk.
     chunk: InflatedChunk,
     /// The chunk `chunk` holds, `None` until the first read.
     cached_chunk: Option<usize>,
-    decoder: codetracer_ctfs::zstd_compat::Decoder,
 }
 
 impl ValueStreamReader {
@@ -213,13 +225,18 @@ impl ValueStreamReader {
     /// were sourced (local file, follow source, HTTP range, overlay) while
     /// preserving the exact same decode/cache path as [`Self::open`].
     pub fn from_files(_meta: &[u8], dat: Vec<u8>, idx: Vec<u8>) -> Result<Option<ValueStreamReader>, String> {
+        Self::from_member(_meta, MemberBytes::from(dat), &idx)
+    }
+
+    /// [`Self::from_files`] over a `values.dat` the reader shares with its
+    /// container rather than owns.
+    pub fn from_member(_meta: &[u8], dat: MemberBytes, idx: &[u8]) -> Result<Option<ValueStreamReader>, String> {
         // Existence is STRUCTURAL — the caller resolved `values.dat` / `values.idx`
         // by `findFile` + `FileEntry.Size`. The `has_value_stream` hint bit (bit
         // 10) is NOT consulted (trace-format spec: "Stream-presence flags are a
         // hint, not a gate"; a writer may stamp the bit only at close). `_meta`
         // is retained for source compatibility.
-        let index = ValuesIndex::parse(&idx)?;
-        let decoder = codetracer_ctfs::zstd_compat::Decoder::new().map_err(|e| format!("values.dat: {e}"))?;
+        let index = ValuesIndex::parse(idx)?;
         let mut reader = ValueStreamReader {
             index,
             dat,
@@ -228,9 +245,9 @@ impl ValueStreamReader {
                 number: 0,
                 raw: Vec::new(),
                 frames: Vec::new(),
+                pos: 0,
             },
             cached_chunk: None,
-            decoder,
         };
 
         // Compute the total record count: all chunks but the last hold
@@ -241,16 +258,18 @@ impl ValueStreamReader {
             if reader.index.chunk_offsets[last_chunk] as usize > reader.dat.len() {
                 return Err("values.idx: last chunk offset past end of values.dat".to_string());
             }
-            let last_records = reader.inflate(last_chunk)?.frames.len();
+            reader.inflate(last_chunk)?;
+            reader.chunk.frame_to(usize::MAX, reader.index.chunk_size)?;
+            let last_records = reader.chunk.frames.len();
             reader.record_count = (last_chunk * reader.index.chunk_size + last_records) as u64;
             reader.cached_chunk = None;
         }
         Ok(Some(reader))
     }
 
-    /// Inflate chunk `chunk_number` into the cache (unless it is already
-    /// there) and locate its records.
-    fn inflate(&mut self, chunk_number: usize) -> Result<&InflatedChunk, String> {
+    /// Inflate chunk `chunk_number` into the cache, unless it is already
+    /// there.
+    fn inflate(&mut self, chunk_number: usize) -> Result<(), String> {
         if self.cached_chunk != Some(chunk_number) {
             let start = self.index.chunk_offsets[chunk_number] as usize;
             let end = if chunk_number + 1 < self.index.chunk_offsets.len() {
@@ -258,18 +277,16 @@ impl ValueStreamReader {
             } else {
                 self.dat.len()
             };
-            if start > end || end > self.dat.len() {
-                return Err("values.dat: chunk offsets out of range".to_string());
-            }
+            let frame = self
+                .dat
+                .get(start, end)
+                .ok_or_else(|| "values.dat: chunk offsets out of range".to_string())?;
             self.cached_chunk = None;
-            self.chunk.number = chunk_number;
-            self.decoder
-                .decode_into(&self.dat[start..end], &mut self.chunk.raw)
-                .map_err(|e| format!("values.dat: zstd decode failed: {e}"))?;
-            self.chunk.frame(self.index.chunk_size)?;
+            codetracer_ctfs::zstd_compat::decode_into(&frame, &mut self.chunk.raw).map_err(|e| format!("values.dat: zstd decode failed: {e}"))?;
+            self.chunk.reset(chunk_number);
             self.cached_chunk = Some(chunk_number);
         }
-        Ok(&self.chunk)
+        Ok(())
     }
 
     /// Open the value stream from an already-open CTFS reader. Returns
@@ -277,7 +294,7 @@ impl ValueStreamReader {
     /// by STRUCTURAL PRESENCE of the stream file, not by the `has_value_stream`
     /// hint bit (see [`Self::from_files`]).
     pub fn open(reader: &mut CtfsReader) -> Result<Option<ValueStreamReader>, String> {
-        let dat = match reader.read_file("values.dat") {
+        let dat = match reader.read_member("values.dat") {
             Ok(d) => d,
             Err(_) => return Ok(None),
         };
@@ -285,7 +302,7 @@ impl ValueStreamReader {
             .read_file("values.idx")
             .map_err(|e| format!("values.idx missing despite values.dat presence: {e}"))?;
         let meta = reader.read_file("meta.dat").unwrap_or_default();
-        ValueStreamReader::from_files(&meta, dat, idx)
+        ValueStreamReader::from_member(&meta, dat, &idx)
     }
 
     /// Total number of value records in the stream (equals the step count, by
@@ -318,11 +335,12 @@ impl ValueStreamReader {
         let chunk_size = self.index.chunk_size;
         let chunk_number = (step_index as usize) / chunk_size;
         let within = (step_index as usize) % chunk_size;
-        let chunk = self.inflate(chunk_number)?;
-        if within >= chunk.frames.len() {
+        self.inflate(chunk_number)?;
+        self.chunk.frame_to(within, chunk_size)?;
+        if within >= self.chunk.frames.len() {
             return Err(format!("value record {within} missing in chunk {chunk_number}"));
         }
-        chunk.decode(within, chunk_size)
+        self.chunk.decode(within, chunk_size)
     }
 
     /// Read all value records (convenience for tests / small traces). Decodes

@@ -231,3 +231,20 @@ fn a_frame_that_does_not_decode_to_its_declared_size_is_refused() {
     let err = refuse(b);
     assert!(err.contains("declare"), "{err}");
 }
+
+/// The first lookup into a chunk checks every record of it, so a defect
+/// anywhere in the chunk refuses the lookup, also of a line before the
+/// defect; a later lookup into the same chunk meets the same refusal.
+#[test]
+fn a_lookup_checks_its_whole_chunk() {
+    let c = [rec(0, 5, 1, &[(1, 1)]), rec(0, 2, 1, &[(0, 1)])].concat();
+    let mut r = StepMapReader::from_bytes(member((1, 2, 2), &[((0, 5), c)])).unwrap();
+    for _ in 0..2 {
+        let err = r.lookup(0, 5).expect_err("the chunk holds a gap of 0");
+        assert!(err.contains("gap") && err.contains("(0, 7)"), "{err}");
+    }
+    let good = [rec(0, 5, 1, &[(1, 1)]), rec(0, 2, 1, &[(4, 1)])].concat();
+    let mut r = StepMapReader::from_bytes(member((1, 2, 2), &[((0, 5), good)])).unwrap();
+    assert_eq!(r.lookup(0, 5).unwrap(), Some(vec![0]), "control");
+    assert_eq!(r.lookup(0, 7).unwrap(), Some(vec![3]), "control");
+}

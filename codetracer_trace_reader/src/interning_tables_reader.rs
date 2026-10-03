@@ -33,6 +33,7 @@
 
 use codetracer_ctfs::CtfsReader;
 use codetracer_trace_types::{TypeKind, TypeSpecificInfo};
+use codetracer_trace_writer::column_aware::FileTable;
 use codetracer_trace_writer::line_position::{LinePositionError, LinePositionSpace};
 use codetracer_trace_writer::meta_dat::{meta_dat_has_column_aware_steps, meta_dat_has_interning_tables, meta_dat_has_line_count_table};
 use num_traits::FromPrimitive;
@@ -450,17 +451,33 @@ impl InterningTablesReader {
         self.column_aware
     }
 
-    /// A Layout A record's per-line addressable column counts; empty for a
-    /// file whose recorder supplied none, and for every record of a trace
-    /// that is not column-aware.
+    /// A Layout A record's per-line addressable column counts, spelled out;
+    /// empty for every record of a trace that is not column-aware.
+    ///
+    /// A `line_count = 0` record is the conventional table and is returned as
+    /// its 100000 entries of 1024 (`internal-files.md` §"`paths.dat` Layout
+    /// A"). A caller that lays out or resolves positions takes
+    /// [`Self::path_file_table`] instead, which says which it is and keeps the
+    /// conventional table as its rule.
     pub fn path_line_lengths(&self, path_id: u64) -> Result<Vec<u32>, String> {
+        Ok(match self.path_file_table(path_id)? {
+            None => Vec::new(),
+            Some(FileTable::Conventional) => codetracer_trace_writer::column_aware::conventional_line_lengths(),
+            Some(FileTable::Lines(lls)) => lls,
+        })
+    }
+
+    /// A Layout A record's table: [`FileTable::Conventional`] for a record of
+    /// `line_count = 0`, [`FileTable::Lines`] otherwise; `None` when the trace
+    /// is not column-aware, whose records carry no table.
+    pub fn path_file_table(&self, path_id: u64) -> Result<Option<FileTable>, String> {
         if !self.column_aware {
-            return Ok(Vec::new());
+            return Ok(None);
         }
         let raw = self.paths.record(path_id as usize)?;
         decode_layout_a_path_record(raw, path_id as usize)?;
         let (_, lls) = codetracer_trace_writer::column_aware::decode_path_record_layout_a(raw)?;
-        Ok(lls)
+        Ok(Some(FileTable::from_record(lls)))
     }
 
     /// Resolve a path id to its file path as a `String` (lossy UTF-8).

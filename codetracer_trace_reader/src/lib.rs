@@ -24,12 +24,13 @@ pub mod call_stream_reader;
 
 pub mod step_stream_reader;
 
+/// `step-map.ns` version 2: the `(path_id, line)` -> step-id index.
+pub mod step_map_reader;
+
 pub mod value_stream_reader;
 
-#[cfg(not(target_arch = "wasm32"))]
 pub mod io_event_stream_reader;
 
-#[cfg(not(target_arch = "wasm32"))]
 pub mod interning_tables_reader;
 
 /// Assembles a linear event sequence from the split streams, for containers

@@ -96,6 +96,33 @@ impl BlockBound {
         self.check(block, what)
     }
 
+    /// The checks for a member's single data block (`MapBlock` carrying
+    /// `CTFS_DIRECT`, `ctfs-container.md` §2): every check a data-block
+    /// pointer is subject to — not null, inside the container — plus the one
+    /// the form adds, that one block holds the member's `Size`.
+    pub(crate) fn check_direct_member(&self, block: u64, size: u64, name: &str) -> Result<(), CtfsError> {
+        if size > self.block_size as u64 {
+            return Err(CtfsError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "internal file {name} is stored as a single data block (its MapBlock carries the direct tag) \
+                     but its Size is {size} bytes, more than one {}-byte block can hold",
+                    self.block_size
+                ),
+            )));
+        }
+        if block == 0 {
+            return Err(CtfsError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "the data block of internal file {name} (single-block form) is null; block 0 is the \
+                     container's root directory and no stream may name it"
+                ),
+            )));
+        }
+        self.check(block, &format!("data block 0 of internal file {name}"))
+    }
+
     fn out_of_bounds(&self, block: u64, what: &str) -> CtfsError {
         CtfsError::Io(std::io::Error::new(
             std::io::ErrorKind::InvalidData,

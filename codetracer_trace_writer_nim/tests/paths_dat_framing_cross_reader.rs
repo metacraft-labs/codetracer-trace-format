@@ -43,7 +43,8 @@ enum Layout {
 }
 
 /// Per-file data registered for the two paths: line lengths under Layout A
-/// (the second file deliberately has none), line counts under bit 14.
+/// (the second file deliberately has none, so the writers record the
+/// conventional table for it), line counts under bit 14.
 const LINE_LENGTHS: [&[u32]; 2] = [&[12, 40, 1, 7, 300], &[]];
 const LINE_COUNTS: [u64; 2] = [5, 200_000];
 
@@ -163,7 +164,10 @@ fn layout_a_records_read_back_with_their_line_lengths() {
         "a column-aware writer declares bit 4 and only bit 4"
     );
     assert_eq!(rb.paths, expected_names(&paths));
-    assert_eq!(rb.layout_a_line_lengths, vec![LINE_LENGTHS[0].to_vec(), LINE_LENGTHS[1].to_vec()]);
+    // No table is recorded as the conventional one, whose only encoding is
+    // `line_count = 0` with no line lengths (`internal-files.md` §"`paths.dat`
+    // Layout A").
+    assert_eq!(rb.layout_a_line_lengths, vec![LINE_LENGTHS[0].to_vec(), Vec::new()]);
     assert_eq!(rb.line_counts, vec![None, None], "bit 4 alone is not the bit-14 table");
     assert_eq!(rb.path_events, paths.to_vec());
 }

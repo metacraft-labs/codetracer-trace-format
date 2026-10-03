@@ -24,6 +24,8 @@ extern "C" {
 
     fn trace_writer_last_error() -> *const std::os::raw::c_char;
 
+    fn trace_writer_build_config() -> *const std::os::raw::c_char;
+
     fn trace_writer_new(program: *const std::os::raw::c_char, format: i32) -> *mut std::ffi::c_void;
     fn trace_writer_free(handle: *mut std::ffi::c_void);
     fn trace_writer_close(handle: *mut std::ffi::c_void) -> i32;
@@ -37,6 +39,7 @@ extern "C" {
 
     fn trace_writer_start(handle: *mut std::ffi::c_void, path: *const std::os::raw::c_char, line: i64);
     fn trace_writer_set_workdir(handle: *mut std::ffi::c_void, workdir: *const std::os::raw::c_char);
+    fn trace_writer_set_recording_id(handle: *mut std::ffi::c_void, recording_id: *const std::os::raw::c_char) -> i32;
     fn trace_writer_set_args(handle: *mut std::ffi::c_void, args: *const *const u8, arg_lens: *const usize, args_count: usize);
     fn trace_writer_register_step(handle: *mut std::ffi::c_void, path: *const std::os::raw::c_char, line: i64);
 
@@ -120,6 +123,16 @@ extern "C" {
     ) -> i32;
     fn trace_writer_register_drop_variables(handle: *mut std::ffi::c_void, names: *const *const std::os::raw::c_char, count: usize) -> i32;
     fn trace_writer_register_drop_variable(handle: *mut std::ffi::c_void, name: *const std::os::raw::c_char) -> i32;
+    // The place model, value-stream tags 1 and 4-8 (`trace-events.md`
+    // §"Value Stream"). Each returns 0, or 1 with the reason in
+    // `trace_writer_last_error`.
+    fn trace_writer_bind_variable(handle: *mut std::ffi::c_void, name: *const std::os::raw::c_char, place: i64) -> i32;
+    fn trace_writer_register_cell_value(handle: *mut std::ffi::c_void, place: i64, value_cbor: *const u8, value_cbor_len: usize) -> i32;
+    fn trace_writer_register_compound_value(handle: *mut std::ffi::c_void, place: i64, value_cbor: *const u8, value_cbor_len: usize) -> i32;
+    fn trace_writer_assign_cell(handle: *mut std::ffi::c_void, place: i64, new_value_cbor: *const u8, new_value_cbor_len: usize) -> i32;
+    fn trace_writer_assign_compound_item(handle: *mut std::ffi::c_void, place: i64, index: u64, item_place: i64) -> i32;
+    fn trace_writer_register_variable_cell(handle: *mut std::ffi::c_void, name: *const std::os::raw::c_char, place: i64) -> i32;
+    fn trace_writer_declare_source_reload(handle: *mut std::ffi::c_void) -> i32;
 
     // ----- Streaming value encoder -----
 
@@ -329,6 +342,12 @@ extern "C" {
     // The id a bare step on `path` is attributed to now; `u64::MAX` on failure.
     fn trace_writer_current_path_id(handle: *mut std::ffi::c_void, path: *const std::os::raw::c_char) -> u64;
 
+    // Intern `path` in paths.dat now and return its id; `u64::MAX` on failure.
+    fn trace_writer_register_path(handle: *mut std::ffi::c_void, path: *const std::os::raw::c_char) -> u64;
+
+    // Intern `name` in varnames.dat now and return its id; `u64::MAX` on failure.
+    fn trace_writer_register_variable_name(handle: *mut std::ffi::c_void, name: *const std::os::raw::c_char) -> u64;
+
     // Write a SourceReload marker (tag 0x08); returns its 1-based ordinal, or
     // 0 on failure.
     fn trace_writer_register_source_reload(
@@ -390,8 +409,6 @@ extern "C" {
     fn ct_meta_dat_workdir(h: *mut std::ffi::c_void, out_len: *mut usize) -> *const u8;
     fn ct_meta_dat_args_count(h: *mut std::ffi::c_void) -> usize;
     fn ct_meta_dat_arg(h: *mut std::ffi::c_void, idx: usize, out_len: *mut usize) -> *const u8;
-    fn ct_meta_dat_paths_count(h: *mut std::ffi::c_void) -> usize;
-    fn ct_meta_dat_path(h: *mut std::ffi::c_void, idx: usize, out_len: *mut usize) -> *const u8;
     fn ct_meta_dat_recorder_id(h: *mut std::ffi::c_void, out_len: *mut usize) -> *const u8;
     fn ct_meta_dat_free(h: *mut std::ffi::c_void);
 
@@ -488,6 +505,11 @@ extern "C" {
     /// Layout A.  Returns 0 when no Layout A data is available for that
     /// file (the legitimate "no per-line data" sentinel).
     fn ct_reader_line_count_raw(h: *mut std::ffi::c_void, file_id: u64) -> u64;
+
+    /// What `paths.dat` records about `file_id`'s size: 0 bare, 1 line
+    /// count, 2 per-line table, 3 the conventional table (`line_count = 0`);
+    /// -1 for a NULL handle or no such path.
+    fn ct_reader_path_table_kind(h: *mut std::ffi::c_void, file_id: u64) -> i32;
 
     /// M-capability-flags — return 1 when the trace's recorder
     /// advertised support for per-column breakpoints (meta.dat bit 6),
@@ -608,6 +630,15 @@ pub fn last_error() -> String {
             CStr::from_ptr(ptr).to_string_lossy().into_owned()
         }
     }
+}
+
+/// How the linked Nim archive was compiled, as the archive itself reports it:
+/// `key:value` pairs joined by `;` (app type, threads, memory manager, release
+/// mode, process lock). See `trace_writer_build_config` in
+/// `codetracer_trace_writer.h`.
+pub fn build_config() -> String {
+    // The string is static in the archive and the call cannot fail.
+    unsafe { CStr::from_ptr(trace_writer_build_config()).to_string_lossy().into_owned() }
 }
 
 #[cfg(test)]
@@ -1244,9 +1275,17 @@ impl StreamingValueEncoder {
         self.check(unsafe { ct_value_begin_tuple(self.handle, type_id.0 as u64, count as i32) });
     }
 
-    /// End a compound value (sequence or tuple) started by
-    /// [`begin_sequence`](Self::begin_sequence) or
-    /// [`begin_tuple`](Self::begin_tuple).
+    /// Begin a struct with a known field count.
+    /// Must be followed by exactly `count` field encodings and one
+    /// [`end_compound`](Self::end_compound) call.
+    pub fn begin_struct(&mut self, type_id: TypeId, count: usize) {
+        self.check(unsafe { ct_value_begin_struct(self.handle, type_id.0 as u64, count as i32) });
+    }
+
+    /// End a compound value (sequence, tuple or struct) started by
+    /// [`begin_sequence`](Self::begin_sequence),
+    /// [`begin_tuple`](Self::begin_tuple) or
+    /// [`begin_struct`](Self::begin_struct).
     pub fn end_compound(&mut self) {
         self.check(unsafe { ct_value_end_compound(self.handle) });
     }
@@ -1417,6 +1456,11 @@ pub struct NimTraceWriter {
     /// does not repeat it after an explicit `close()`.  Kept separate from
     /// `discarded_records` so that reporting never destroys the tally.
     discards_reported: bool,
+    /// Call arguments staged by [`arg`](NimTraceWriter::arg) for the next
+    /// [`register_call`](NimTraceWriter::register_call), which registers them
+    /// as step variables once the caller's step is flushed, so they attach to
+    /// the callee's first step.
+    pending_arg_variables: Vec<(String, ValueRecord)>,
 }
 
 /// Set this to `1` (or `true`) to make an unsupported record a hard error
@@ -1468,6 +1512,7 @@ impl NimTraceWriter {
             discarded_records: std::collections::BTreeMap::new(),
             strict: strict_from_env_value(std::env::var(STRICT_ENV).ok().as_deref()),
             deferred_error: None,
+            pending_arg_variables: Vec::new(),
             discards_reported: false,
         }
     }
@@ -1696,6 +1741,16 @@ impl NimTraceWriter {
         check_result(unsafe { trace_writer_finish_paths(self.handle) })
     }
 
+    /// Pin the recording's UUIDv7 identity instead of having one minted.
+    /// Refused once the trace has begun, naming the reason.
+    pub fn set_recording_id(&mut self, recording_id: &str) -> Result<(), Box<dyn Error>> {
+        let c_id = str_to_cstring(recording_id);
+        if unsafe { trace_writer_set_recording_id(self.handle, c_id.as_ptr()) } != 0 {
+            return Err(last_error().into());
+        }
+        Ok(())
+    }
+
     pub fn set_workdir(&mut self, workdir: &Path) {
         let c_workdir = path_to_cstring(workdir);
         unsafe { trace_writer_set_workdir(self.handle, c_workdir.as_ptr()) }
@@ -1784,7 +1839,15 @@ impl NimTraceWriter {
         // it carries `VariableId(0)` (the Nim backend manages IDs
         // internally) and the values are already staged via `arg()`.
         // We keep the parameter to preserve the abstract trait signature.
+        //
+        // The FFI call flushes the caller's open step before opening the
+        // call, so the arguments registered as step variables afterwards are
+        // staged with no step open and attach to the callee's first step
+        // (`trace-events.md` §"Recorder Integration — Staging Values").
         unsafe { trace_writer_register_call(self.handle, function_id.0) }
+        for (name, value) in std::mem::take(&mut self.pending_arg_variables) {
+            self.register_variable_with_full_value(&name, value);
+        }
     }
 
     pub fn register_return(&mut self, return_value: ValueRecord) {
@@ -2396,22 +2459,40 @@ impl NimTraceWriter {
 
     // --- Methods that are no-ops in the Nim backend ---
 
-    pub fn ensure_path_id(&mut self, _path: &Path) -> PathId {
-        // The Nim library manages path IDs internally
-        PathId(0)
+    /// Intern `path` and return the id the Nim writer gave it.
+    ///
+    /// A path is interned when it is registered, not when a step first
+    /// reaches it, so the ids — and `paths.dat`, `funcs.dat` and every step
+    /// address derived from them — follow the recorder's registrations, as
+    /// they do in the native Nim writer and the pure-Rust writer.
+    pub fn ensure_path_id(&mut self, path: &Path) -> PathId {
+        let c_path = path_to_cstring(path);
+        let id = unsafe { trace_writer_register_path(self.handle, c_path.as_ptr()) };
+        if id == u64::MAX {
+            self.discard_with_reason("register_path", "trace_writer_register_path reported a failure");
+        }
+        PathId(id as usize)
     }
 
     pub fn ensure_raw_type_id(&mut self, typ: TypeRecord) -> TypeId {
         self.ensure_type_id(typ.kind, &typ.lang_type)
     }
 
-    pub fn ensure_variable_id(&mut self, _variable_name: &str) -> VariableId {
-        // The Nim library manages variable IDs internally
-        VariableId(0)
+    /// Intern `variable_name` and return the id the Nim writer gave it; a
+    /// name is interned when it is registered, not when a value first uses
+    /// it.
+    pub fn ensure_variable_id(&mut self, variable_name: &str) -> VariableId {
+        let c_name = str_to_cstring(variable_name);
+        let id = unsafe { trace_writer_register_variable_name(self.handle, c_name.as_ptr()) };
+        if id == u64::MAX {
+            self.discard_with_reason("register_variable_name", "trace_writer_register_variable_name reported a failure");
+        }
+        VariableId(id as usize)
     }
 
-    pub fn register_path(&mut self, _path: &Path) {
-        // Handled internally by the Nim library
+    /// Intern `path` now (see [`Self::ensure_path_id`]).
+    pub fn register_path(&mut self, path: &Path) {
+        self.ensure_path_id(path);
     }
 
     pub fn register_function(&mut self, name: &str, path: &Path, line: Line) {
@@ -2421,17 +2502,20 @@ impl NimTraceWriter {
 
     pub fn arg(&mut self, name: &str, value: ValueRecord) -> FullValueRecord {
         // Two effects:
-        //   1. The argument is registered as a step variable on the
-        //      *current* step so it appears in `ct/load-locals` for the
-        //      caller.  This matches the historical behaviour of the
-        //      single-stream writer.
+        //   1. The argument becomes a step variable of the callee's first
+        //      step.  It is held here and registered by the next
+        //      `register_call`, after the caller's step is flushed: a
+        //      line-driven recorder still has the caller's step open at this
+        //      point, and registering now would show the callee's argument
+        //      as a variable of the caller (in a recursive call, a second
+        //      value for the caller's own parameter).
         //   2. The argument is also staged on the writer's pending-args
         //      buffer so the next `register_call` attaches it to the
         //      call record.  Without this the call record would have
         //      empty `args`, and the frontend's calltrace pane would
         //      render the call as `format_board()` instead of
         //      `format_board(board=[[5,3,4,...]])`.
-        self.register_variable_with_full_value(name, value.clone());
+        self.pending_arg_variables.push((name.to_string(), value.clone()));
 
         let cbor = self.encode_value(&value).unwrap_or_default();
         let c_name = str_to_cstring(name);
@@ -2482,9 +2566,9 @@ impl NimTraceWriter {
         self.discard_unsupported("register_asm");
     }
 
-    pub fn register_variable_name(&mut self, _variable_name: &str) {
-        // Genuinely handled inside Nim (every `register_*` call that takes a
-        // name interns it there), so nothing is lost — not a discard.
+    /// Intern `variable_name` now (see [`Self::ensure_variable_id`]).
+    pub fn register_variable_name(&mut self, variable_name: &str) {
+        self.ensure_variable_id(variable_name);
     }
 
     /// Persist a value by variable id.
@@ -2514,24 +2598,58 @@ impl NimTraceWriter {
         self.register_variable_with_full_value(&name, value);
     }
 
-    pub fn register_compound_value(&mut self, _place: Place, _value: ValueRecord) {
-        self.discard_unsupported("register_compound_value");
+    /// Tag 5 `CompoundValue`. The value is CBOR-encoded here exactly as the
+    /// pure-Rust writer encodes it, so the two writers' `values.dat` agree.
+    pub fn register_compound_value(&mut self, place: Place, value: ValueRecord) {
+        let cbor = place_model_cbor(&value);
+        let rc = unsafe { trace_writer_register_compound_value(self.handle, place.0, cbor.as_ptr(), cbor.len()) };
+        self.check_place_model(rc, "register_compound_value");
     }
 
-    pub fn register_cell_value(&mut self, _place: Place, _value: ValueRecord) {
-        self.discard_unsupported("register_cell_value");
+    /// Tag 4 `CellValue`.
+    pub fn register_cell_value(&mut self, place: Place, value: ValueRecord) {
+        let cbor = place_model_cbor(&value);
+        let rc = unsafe { trace_writer_register_cell_value(self.handle, place.0, cbor.as_ptr(), cbor.len()) };
+        self.check_place_model(rc, "register_cell_value");
     }
 
-    pub fn assign_compound_item(&mut self, _place: Place, _index: usize, _item_place: Place) {
-        self.discard_unsupported("assign_compound_item");
+    /// Tag 7 `AssignCompoundItem`.
+    pub fn assign_compound_item(&mut self, place: Place, index: usize, item_place: Place) {
+        let rc = unsafe { trace_writer_assign_compound_item(self.handle, place.0, index as u64, item_place.0) };
+        self.check_place_model(rc, "assign_compound_item");
     }
 
-    pub fn assign_cell(&mut self, _place: Place, _new_value: ValueRecord) {
-        self.discard_unsupported("assign_cell");
+    /// Tag 6 `AssignCell`.
+    pub fn assign_cell(&mut self, place: Place, new_value: ValueRecord) {
+        let cbor = place_model_cbor(&new_value);
+        let rc = unsafe { trace_writer_assign_cell(self.handle, place.0, cbor.as_ptr(), cbor.len()) };
+        self.check_place_model(rc, "assign_cell");
     }
 
-    pub fn register_variable(&mut self, _variable_name: &str, _place: Place) {
-        self.discard_unsupported("register_variable");
+    /// Tag 8 `VariableCell`: `variable_name` is the cell at `place`.
+    pub fn register_variable(&mut self, variable_name: &str, place: Place) {
+        let c_name = str_to_cstring(variable_name);
+        let rc = unsafe { trace_writer_register_variable_cell(self.handle, c_name.as_ptr(), place.0) };
+        self.check_place_model(rc, "register_variable");
+    }
+
+    /// A place-model entry point that refused: the record is not in the
+    /// trace, so the loss is counted and named rather than passed over.
+    fn check_place_model(&mut self, rc: i32, op: &'static str) {
+        if rc != 0 {
+            let reason = last_error();
+            self.discard_with_reason(op, &reason);
+        }
+    }
+
+    /// Declare, before the first record, that this trace may carry source
+    /// reload markers (`meta.dat` `flags_ext` bit 0). Refused after the first
+    /// record, naming the reason.
+    pub fn declare_source_reload(&mut self) -> Result<(), Box<dyn Error>> {
+        if unsafe { trace_writer_declare_source_reload(self.handle) } != 0 {
+            return Err(last_error().into());
+        }
+        Ok(())
     }
 
     /// Record that one variable has ended its life.
@@ -2591,8 +2709,11 @@ impl NimTraceWriter {
         }
     }
 
-    pub fn bind_variable(&mut self, _variable_name: &str, _place: Place) {
-        self.discard_unsupported("bind_variable");
+    /// Tag 1 `BindVariable`: `variable_name` is bound to `place`.
+    pub fn bind_variable(&mut self, variable_name: &str, place: Place) {
+        let c_name = str_to_cstring(variable_name);
+        let rc = unsafe { trace_writer_bind_variable(self.handle, c_name.as_ptr(), place.0) };
+        self.check_place_model(rc, "bind_variable");
     }
 
     /// Record a scope exit: `variable_names` are going out of scope together.
@@ -3390,6 +3511,12 @@ impl TraceWriter for NimTraceWriter {
     }
 }
 
+/// The CBOR of a place-model value, encoded as the pure-Rust writer's
+/// `value_stream` encodes it.
+fn place_model_cbor(value: &ValueRecord) -> Vec<u8> {
+    cbor4ii::serde::to_vec(Vec::new(), value).expect("CBOR encode of a ValueRecord failed")
+}
+
 // ---------------------------------------------------------------------------
 // MetaDatReader — read binary meta.dat blobs
 // ---------------------------------------------------------------------------
@@ -3455,27 +3582,6 @@ impl MetaDatReader {
         }
     }
 
-    /// Number of source paths recorded.
-    pub fn paths_count(&self) -> usize {
-        unsafe { ct_meta_dat_paths_count(self.handle) }
-    }
-
-    /// Get the source path at `idx`, or `None` if out of range.
-    pub fn path(&self, idx: usize) -> Option<&str> {
-        if idx >= self.paths_count() {
-            return None;
-        }
-        unsafe {
-            let mut len: usize = 0;
-            let ptr = ct_meta_dat_path(self.handle, idx, &mut len);
-            if ptr.is_null() {
-                None
-            } else {
-                Some(std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len)))
-            }
-        }
-    }
-
     /// The recorder identifier string.
     pub fn recorder_id(&self) -> &str {
         unsafe {
@@ -3499,6 +3605,21 @@ impl Drop for MetaDatReader {
 // NimTraceReaderHandle — safe wrapper for the Nim ct_reader_* FFI
 // ---------------------------------------------------------------------------
 
+/// What a container's `paths.dat` records about one file's size
+/// (`internal-files.md` §"Interning Tables").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PathTableKind {
+    /// A bare record: no size (neither `meta.dat` bit 4 nor 14).
+    Bare,
+    /// A line count (bit 14).
+    LineCount,
+    /// A per-line table (bit 4, `line_count > 0`).
+    Lines,
+    /// The conventional table, 100000 lines of 1024 positions (bit 4,
+    /// `line_count = 0`).
+    Conventional,
+}
+
 /// Read-only handle for a `.ct` trace file, backed by the Nim `NewTraceReader`.
 ///
 /// All complex data (steps, values, calls, IO events) is returned as JSON
@@ -3517,11 +3638,19 @@ impl std::fmt::Debug for NimTraceReaderHandle {
 unsafe impl Send for NimTraceReaderHandle {}
 
 /// Helper: read a heap-allocated buffer from Nim into a Rust `String`, then free it.
+///
+/// A null pointer is the C ABI's failure signal and callers check it first;
+/// an empty name is a NON-null buffer of length 0, which still has to be
+/// freed. Freeing only when `len > 0` leaked every empty name's buffer.
 fn read_nim_buffer(ptr: *mut u8, len: usize) -> String {
-    if ptr.is_null() || len == 0 {
+    if ptr.is_null() {
         return String::new();
     }
-    let s = unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len)) }.to_string();
+    let s = if len == 0 {
+        String::new()
+    } else {
+        unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len)) }.to_string()
+    };
     unsafe { ct_free_buffer(ptr) };
     s
 }
@@ -3845,13 +3974,29 @@ impl NimTraceReaderHandle {
         }
     }
 
-    /// Number of lines in `file_id` per paths.dat Layout A.  Returns
-    /// `0` when no per-line data is available for that file — the same
-    /// legitimate "no data" sentinel [`line_length_raw`] uses.
+    /// Number of lines in `file_id` per paths.dat Layout A — 100000 for the
+    /// conventional table (see [`Self::path_table_kind`]).  Returns `0` when
+    /// no per-line data is available for that file — the same legitimate
+    /// "no data" sentinel [`line_length_raw`] uses.
     ///
     /// [`line_length_raw`]: Self::line_length_raw
     pub fn line_count_raw(&self, file_id: u64) -> u64 {
         unsafe { ct_reader_line_count_raw(self.handle, file_id) }
+    }
+
+    /// What `paths.dat` records about `file_id`'s size; `None` when there is
+    /// no such path. A column-aware record of `line_count = 0` is
+    /// [`PathTableKind::Conventional`], for which [`Self::line_count_raw`]
+    /// answers 100000 and [`Self::line_length_raw`] 1024 per line, by the
+    /// rule (`internal-files.md` §"`paths.dat` Layout A").
+    pub fn path_table_kind(&self, file_id: u64) -> Option<PathTableKind> {
+        match unsafe { ct_reader_path_table_kind(self.handle, file_id) } {
+            0 => Some(PathTableKind::Bare),
+            1 => Some(PathTableKind::LineCount),
+            2 => Some(PathTableKind::Lines),
+            3 => Some(PathTableKind::Conventional),
+            _ => None,
+        }
     }
 
     /// M-capability-flags — true when the trace's recorder

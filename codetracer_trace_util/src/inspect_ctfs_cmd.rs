@@ -28,6 +28,31 @@ fn format_size(bytes: u64) -> String {
     }
 }
 
+/// Mapping blocks a closed container gives a member of `size` bytes
+/// (`ctfs-container.md` §2 and §4): none for an empty member or one of at
+/// most one block, which is stored as a single direct data block; otherwise
+/// the level-1 block, and for each further level its own block plus the
+/// lower-level blocks that hold that level's share of the data blocks.
+pub(crate) fn mapping_blocks_of(size: u64, block_size: u64) -> u64 {
+    if size <= block_size {
+        return 0;
+    }
+    let usable = block_size / 8 - 1;
+    let mut remaining = size.div_ceil(block_size).saturating_sub(usable);
+    let mut total = 1u64;
+    let mut level = 2u32;
+    while remaining > 0 && level <= 5 {
+        let here = remaining.min(usable.saturating_pow(level));
+        total += 1;
+        for k in 1..level {
+            total += here.div_ceil(usable.saturating_pow(k));
+        }
+        remaining -= here;
+        level += 1;
+    }
+    total
+}
+
 pub(crate) fn run(cmd: InspectCtfsCommand) {
     let path = Path::new(&cmd.input_file);
     let file_size = fs::metadata(path)
@@ -49,7 +74,7 @@ pub(crate) fn run(cmd: InspectCtfsCommand) {
     println!("CTFS Container: {}", cmd.input_file);
     println!("  File size:      {} bytes", file_size);
     println!("  Block size:     {} bytes", block_size);
-    println!("  Version:        2");
+    println!("  Version:        {}", codetracer_ctfs::header::VERSION);
     println!("  Max entries:    {}", max_entries);
     println!("  Files:          {}", files.len());
     println!();
@@ -65,21 +90,7 @@ pub(crate) fn run(cmd: InspectCtfsCommand) {
         let size = reader.file_size(name).unwrap_or(0);
         let data_blocks = if size == 0 { 0 } else { size.div_ceil(block_size) };
 
-        // Each file has at least one mapping block (the root mapping block).
-        // For multi-level mappings there could be more, but for a simple
-        // estimate we count 1 mapping block per file plus additional ones
-        // for files that need more than (block_size/8 - 1) data blocks.
-        let n = block_size / 8;
-        let usable = n - 1;
-        let mapping_blocks = if size == 0 {
-            0
-        } else if data_blocks <= usable {
-            1
-        } else {
-            // Level 2+: rough estimate of mapping overhead
-            let extra = (data_blocks - usable).div_ceil(usable);
-            1 + extra
-        };
+        let mapping_blocks = mapping_blocks_of(size, block_size);
 
         let allocated = (data_blocks + mapping_blocks) * block_size;
         let waste = allocated.saturating_sub(size);
@@ -147,5 +158,29 @@ pub(crate) fn run(cmd: InspectCtfsCommand) {
                 println!("    (no events.log found: {})", e);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::mapping_blocks_of;
+
+    /// `ctfs-container.md` §2 and §4: an empty member and a member of at most
+    /// one block own no mapping block; past that, one level-1 block, then one
+    /// block per level plus the lower-level blocks beneath it.
+    #[test]
+    fn mapping_blocks_follow_the_member_layout() {
+        let bs = 4096u64;
+        let usable = bs / 8 - 1;
+        assert_eq!(mapping_blocks_of(0, bs), 0, "an empty member");
+        assert_eq!(mapping_blocks_of(1, bs), 0, "a one-byte member is direct");
+        assert_eq!(mapping_blocks_of(bs, bs), 0, "a full one-block member is direct");
+        assert_eq!(mapping_blocks_of(bs + 1, bs), 1, "two data blocks: one level-1 block");
+        assert_eq!(mapping_blocks_of(usable * bs, bs), 1, "a full level 1");
+        // One more data block: a level-2 block and the level-1 block below it.
+        assert_eq!(mapping_blocks_of(usable * bs + 1, bs), 3);
+        // Level 1 full plus 2 * usable + 1 data blocks at level 2: the level-2
+        // block and three level-1 blocks below it.
+        assert_eq!(mapping_blocks_of((usable + 2 * usable + 1) * bs, bs), 1 + 1 + 3);
     }
 }

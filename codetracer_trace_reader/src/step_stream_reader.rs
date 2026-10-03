@@ -18,13 +18,13 @@
 //!
 //! # Independent chunk decode
 //!
-//! Each chunk is decoded with its own running absolute `global_line_index`
-//! (reset to `None` at the chunk start), because the writer guarantees the
-//! first `Step` record of every chunk is AbsoluteStep
-//! (`step_stream::encode_step_stream`, encoding rule 5). DeltaStep records
-//! within a chunk resolve against the running absolute carried forward inside
-//! that chunk only — so any chunk decodes correctly without touching its
-//! neighbours.
+//! Each chunk is decoded with its own cursor, starting without one: the first
+//! position record of every chunk is an AbsoluteStep (`trace-events.md`
+//! §"Encoding Rules"), and deltas resolve against the cursor carried forward
+//! inside that chunk only — so any chunk decodes without touching its
+//! neighbours. A DeltaStep or DeltaColumn before the chunk's first
+//! AbsoluteStep is refused, naming the chunk: resolving it against `0`, or
+//! against the previous chunk, would invent positions nobody recorded.
 
 use codetracer_ctfs::CtfsReader;
 use codetracer_trace_writer::meta_dat::{FLAG_EXT_HAS_SOURCE_RELOAD, read_meta_dat_ext_flags};
@@ -98,7 +98,8 @@ pub fn decode_chunk_records(compressed: &[u8]) -> Result<Vec<StepStreamRecord>, 
 }
 
 /// [`decode_chunk_records`], accepting tag 8 exactly when
-/// `allow_source_reload`.
+/// `allow_source_reload`. A caller that knows the chunk's number uses
+/// [`decode_chunk_records_at`], whose refusals name it.
 pub fn decode_chunk_records_declared(compressed: &[u8], allow_source_reload: bool) -> Result<Vec<StepStreamRecord>, String> {
     let raw = decode_zstd_chunk(compressed)?;
     let mut records = Vec::new();
@@ -110,6 +111,12 @@ pub fn decode_chunk_records_declared(compressed: &[u8], allow_source_reload: boo
         records.push(rec);
     }
     Ok(records)
+}
+
+/// [`decode_chunk_records_declared`] for chunk number `chunk`, whose refusals
+/// name the chunk.
+pub fn decode_chunk_records_at(compressed: &[u8], chunk: usize, allow_source_reload: bool) -> Result<Vec<StepStreamRecord>, String> {
+    decode_chunk_records_declared(compressed, allow_source_reload).map_err(|e| format!("steps.dat chunk {chunk}: {e}"))
 }
 
 /// A seekable reader over a container's `steps.dat` stream.
@@ -169,7 +176,7 @@ impl StepStreamReader {
             if start > end {
                 return Err("steps.idx: last chunk offset past end of steps.dat".to_string());
             }
-            let last_records = decode_chunk_records_declared(&dat[start..end], allow_source_reload)?.len();
+            let last_records = decode_chunk_records_at(&dat[start..end], last_chunk, allow_source_reload)?.len();
             (last_chunk * index.chunk_size + last_records) as u64
         };
 
@@ -240,7 +247,7 @@ impl StepStreamReader {
             if start > end || end > self.dat.len() {
                 return Err("steps.dat: chunk offsets out of range".to_string());
             }
-            let records = decode_chunk_records_declared(&self.dat[start..end], self.allow_source_reload)?;
+            let records = decode_chunk_records_at(&self.dat[start..end], chunk_number, self.allow_source_reload)?;
             self.cached_chunk = Some((chunk_number, records));
         }
 

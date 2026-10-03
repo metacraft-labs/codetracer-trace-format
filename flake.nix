@@ -44,7 +44,7 @@
               toolchainsPkgs.nimble
 
               # Native dependencies for crates
-              pkgs.llvmPackages.clang-unwrapped # wasm C uses no host compiler flags
+              pkgs.clang # native compiler includes the pinned platform headers
               pkgs.capnproto # capnpc for codetracer_trace_format_capnp
               pkgs.pkg-config
               pkgs.zstd # libzstd for zeekstd/zstd-sys

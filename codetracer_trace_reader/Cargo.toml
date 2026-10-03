@@ -8,6 +8,13 @@ repository = "https://github.com/metacraft-labs/runtime_tracing"
 license = "MIT"
 keywords = ["debugging", "development-tools"]
 
+# The zstd codec of every stream reader here is `codetracer_ctfs`'s, chosen by
+# feature on every target (`chunk_codec`). `pure-rust-zstd` wins when both are
+# on, as it does in `codetracer_ctfs`.
+[features]
+default = []
+pure-rust-zstd = ["codetracer_ctfs/pure-rust-zstd", "codetracer_trace_writer/pure-rust-zstd"]
+
 [dependencies]
 codetracer_trace_types.workspace = true
 codetracer_trace_format_capnp.workspace = true

@@ -92,18 +92,8 @@ fn declared_content_size(frame: &[u8]) -> Option<u64> {
     Some(if fcs_size == 2 { v + 256 } else { v })
 }
 
-#[cfg(not(target_arch = "wasm32"))]
 fn inflate(frame: &[u8]) -> Result<Vec<u8>, String> {
-    zstd::decode_all(std::io::Cursor::new(frame)).map_err(|e| e.to_string())
-}
-
-#[cfg(target_arch = "wasm32")]
-fn inflate(frame: &[u8]) -> Result<Vec<u8>, String> {
-    use std::io::Read;
-    let mut decoder = ruzstd::decoding::StreamingDecoder::new(std::io::Cursor::new(frame)).map_err(|e| e.to_string())?;
-    let mut raw = Vec::new();
-    decoder.read_to_end(&mut raw).map_err(|e| e.to_string())?;
-    Ok(raw)
+    codetracer_ctfs::zstd_compat::decode_all(frame).map_err(|e| e.to_string())
 }
 
 impl StepMapReader {

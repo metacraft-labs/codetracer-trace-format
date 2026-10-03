@@ -30,20 +30,8 @@ use codetracer_ctfs::CtfsReader;
 use codetracer_trace_writer::meta_dat::{FLAG_EXT_HAS_SOURCE_RELOAD, read_meta_dat_ext_flags};
 use codetracer_trace_writer::step_stream::{StepStreamRecord, decode_record_declared};
 
-#[cfg(not(target_arch = "wasm32"))]
 fn decode_zstd_chunk(compressed: &[u8]) -> Result<Vec<u8>, String> {
-    zstd::decode_all(std::io::Cursor::new(compressed)).map_err(|e| format!("steps.dat: zstd decode failed: {e}"))
-}
-
-#[cfg(target_arch = "wasm32")]
-fn decode_zstd_chunk(compressed: &[u8]) -> Result<Vec<u8>, String> {
-    use std::io::Read;
-
-    let mut decoder =
-        ruzstd::decoding::StreamingDecoder::new(std::io::Cursor::new(compressed)).map_err(|e| format!("steps.dat: zstd decode failed: {e}"))?;
-    let mut raw = Vec::new();
-    decoder.read_to_end(&mut raw).map_err(|e| format!("steps.dat: zstd decode failed: {e}"))?;
-    Ok(raw)
+    crate::chunk_codec::inflate("steps.dat", compressed)
 }
 
 /// A loaded `steps.idx`: the per-chunk byte offsets into `steps.dat`.

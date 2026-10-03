@@ -20,6 +20,8 @@ pub mod seekable_reader;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod ctfs_reader;
 
+mod chunk_codec;
+
 pub mod call_stream_reader;
 
 pub mod step_stream_reader;

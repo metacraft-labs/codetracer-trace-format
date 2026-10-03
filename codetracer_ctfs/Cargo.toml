@@ -34,7 +34,13 @@ urlencoding = "2.1"
 
 # libzstd (C, via `zstd-sys`): faster, and its output is the byte-for-byte
 # reference the golden fixtures pin.  See `zstd_compat`.
-zstd = { version = "0.13", optional = true }
+#
+# Without the crate's default features: `legacy` links decoders for the
+# pre-1.0 frame formats (v0.4-v0.7, 2015-2016), which no CTFS writer has ever
+# produced, and is a quarter of a browser reader's module; `zdict_builder` and
+# `arrays` are unused. The Nim library builds libzstd the same way
+# (`ZSTD_LEGACY_SUPPORT=0`).
+zstd = { version = "0.13", optional = true, default-features = false }
 # Pure-Rust Zstandard codec.  0.8 has both a decoder and an encoder, and its
 # frames are standard-conformant, so containers written through it are read
 # back by the ordinary libzstd-backed host readers (`ct-print`, the Nim

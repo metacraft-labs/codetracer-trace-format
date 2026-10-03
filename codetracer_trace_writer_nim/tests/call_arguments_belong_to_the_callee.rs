@@ -29,7 +29,7 @@
 
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
-use codetracer_trace_types::{FunctionId, Line, TraceLowLevelEvent, TypeKind, ValueRecord};
+use codetracer_trace_types::{Line, TraceLowLevelEvent, TypeKind, ValueRecord};
 use codetracer_trace_writer_nim::{NimTraceWriter, TraceEventsFileFormat};
 
 static NIM_TEST_LOCK: Mutex<()> = Mutex::new(());

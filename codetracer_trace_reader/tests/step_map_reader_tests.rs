@@ -112,9 +112,22 @@ fn a_lookup_inflates_one_chunk_and_finds_the_line_or_nothing() {
     for (key, ids) in expected(&hits).iter().step_by(37) {
         assert_eq!(r.lookup(key.0, key.1).unwrap().as_ref(), Some(ids), "{key:?}");
     }
-    assert_eq!(r.lookup(0, 0).unwrap(), None, "a key before the first chunk");
     assert_eq!(r.lookup(2, 401).unwrap(), None, "a line that never ran");
     assert_eq!(r.lookup(99, 1).unwrap(), None, "a key past the last chunk");
+}
+
+/// A step registered at line 0 is filed under line 1, so a lookup of line 0
+/// is a lookup of line 1: the same ids, including on a path whose only steps
+/// were registered at line 0.
+#[test]
+fn a_lookup_of_line_0_is_a_lookup_of_line_1() {
+    let hits = [(0, 0, 3), (0, 1, 5), (0, 2, 6), (1, 0, 9), (2, 7, 11)];
+    let mut r = StepMapReader::from_bytes(writer_map(&hits)).unwrap();
+    assert_eq!(r.lookup(0, 1).unwrap(), Some(vec![3, 5]));
+    assert_eq!(r.lookup(0, 0).unwrap(), Some(vec![3, 5]));
+    assert_eq!(r.lookup(1, 0).unwrap(), Some(vec![9]));
+    assert_eq!(r.lookup(1, 1).unwrap(), Some(vec![9]));
+    assert_eq!(r.lookup(2, 0).unwrap(), None, "line 1 of path 2 never ran");
 }
 
 /// The reader keeps the chunk its last lookup inflated. Lookups that jump

@@ -280,8 +280,12 @@ impl StepMapReader {
     /// `Ok(None)` when no step ran on that line. The records scanned past are
     /// checked as [`load_all`](Self::load_all) checks them, without
     /// materialising their ids.
+    ///
+    /// Line 0 is looked up as line 1, the key a writer files a step
+    /// registered at line 0 under (`internal-files.md` §"`step-map.ns`",
+    /// "Reading").
     pub fn lookup(&mut self, path_id: u64, line: u32) -> Result<Option<Vec<u64>>, String> {
-        let target = (path_id, line);
+        let target = (path_id, line.max(1));
         let c = self.chunks.partition_point(|ch| ch.first <= target);
         if c == 0 {
             return Ok(None);

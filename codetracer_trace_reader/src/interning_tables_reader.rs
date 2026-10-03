@@ -270,12 +270,7 @@ impl VarSizeTable {
         if !off.len().is_multiple_of(8) {
             return Err(format!("{name}.off: length {} is not a multiple of 8", off.len()));
         }
-        let mut offsets = Vec::with_capacity(off.len() / 8);
-        let mut pos = 0usize;
-        while pos + 8 <= off.len() {
-            offsets.push(u64::from_le_bytes(off[pos..pos + 8].try_into().unwrap()));
-            pos += 8;
-        }
+        let offsets: Vec<u64> = off.chunks_exact(8).map(|b| u64::from_le_bytes(b.try_into().unwrap())).collect();
         // A valid offset index has at least the trailing sentinel. An empty
         // table is exactly one sentinel entry (== 0).
         if offsets.is_empty() {
@@ -340,29 +335,21 @@ impl InterningTablesReader {
     /// EXISTENCE is decided by STRUCTURAL PRESENCE of `paths.dat`, not by
     /// `meta.dat` bit 12, which is only a hint (see the module docs).
     pub fn open(reader: &mut CtfsReader) -> Result<Option<InterningTablesReader>, String> {
-        // `meta.dat` is read best-effort: a still-recording trace has none yet.
-        let interning_tables_declared = match reader.read_file("meta.dat") {
-            Ok(meta) => meta_dat_has_interning_tables(&meta),
-            Err(_) => false,
-        };
+        // `meta.dat` is read best-effort: a still-recording trace has none yet,
+        // and each flag below then reads as unset.
+        let meta = reader.read_file("meta.dat").ok();
+        let interning_tables_declared = meta.as_deref().is_some_and(meta_dat_has_interning_tables);
         // Bit 14 selects the `paths.dat` RECORD layout, independently of bit
-        // 12's `funcs.dat`/`types.dat` selector. Read best-effort for the same
-        // reason bit 12 is: a still-recording trace has no `meta.dat` yet, and
-        // that reads as the bare layout, which is what it is.
-        let has_line_counts = match reader.read_file("meta.dat") {
-            Ok(meta) => meta_dat_has_line_count_table(&meta),
-            Err(_) => false,
-        };
+        // 12's `funcs.dat`/`types.dat` selector. A still-recording trace with
+        // no `meta.dat` yet reads as the bare layout, which is what it is.
+        let has_line_counts = meta.as_deref().is_some_and(meta_dat_has_line_count_table);
         // Bit 4 frames `paths.dat` too. A column-aware trace writes Layout A —
         // `path_len, path, line_count, line_lengths…` — for EVERY path,
         // including one whose recorder surfaced no per-line counts, where the
         // record is still framed and simply states `line_count = 0`. Reading
         // that as a bare record hands the caller its own length prefix and a
         // trailing NUL as part of the file name.
-        let column_aware = match reader.read_file("meta.dat") {
-            Ok(meta) => meta_dat_has_column_aware_steps(&meta),
-            Err(_) => false,
-        };
+        let column_aware = meta.as_deref().is_some_and(meta_dat_has_column_aware_steps);
         // `paths.dat` is written first and unconditionally by both writers, so
         // its presence is the container's own answer to "do I carry interning
         // tables". Absent ⇒ no binary tables (legacy path).

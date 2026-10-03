@@ -84,17 +84,25 @@ fn decode_varint(data: &[u8], pos: &mut usize) -> Result<u64, String> {
 /// [`CallStreamRecord::decode`].
 pub fn decode_chunk_records(compressed: &[u8]) -> Result<Vec<Vec<u8>>, String> {
     let raw = decode_zstd_chunk(compressed)?;
-    let mut records = Vec::new();
+    let mut frames = Vec::new();
+    frame_records(&raw, &mut frames)?;
+    Ok(frames.into_iter().map(|(s, n)| raw[s..s + n].to_vec()).collect())
+}
+
+/// Locate each length-prefixed record of an inflated chunk: `(start, len)`
+/// into `raw`, replacing the contents of `frames`.
+fn frame_records(raw: &[u8], frames: &mut Vec<(usize, usize)>) -> Result<(), String> {
+    frames.clear();
     let mut pos = 0usize;
     while pos < raw.len() {
-        let rec_len = decode_varint(&raw, &mut pos)? as usize;
-        if pos + rec_len > raw.len() {
+        let rec_len = decode_varint(raw, &mut pos)? as usize;
+        if rec_len > raw.len() - pos {
             return Err("calls.dat: record extends past end of chunk".to_string());
         }
-        records.push(raw[pos..pos + rec_len].to_vec());
+        frames.push((pos, rec_len));
         pos += rec_len;
     }
-    Ok(records)
+    Ok(())
 }
 
 /// A seekable reader over a container's `calls.dat` stream.
@@ -109,8 +117,13 @@ pub struct CallStreamReader {
     /// Total number of records (computed by decoding chunks lazily as needed,
     /// but the count is established by walking the last chunk on open).
     record_count: u64,
-    /// Cache of the most-recently-decompressed chunk: (chunk_number, records).
-    cached_chunk: Option<(usize, Vec<Vec<u8>>)>,
+    /// The chunk `raw` holds, `None` until the first read.
+    cached_chunk: Option<usize>,
+    /// The most recently inflated chunk, and where each record lies in it.
+    /// A record is decoded when it is read.
+    raw: Vec<u8>,
+    frames: Vec<(usize, usize)>,
+    decoder: codetracer_ctfs::zstd_compat::Decoder,
 }
 
 impl CallStreamReader {
@@ -126,29 +139,54 @@ impl CallStreamReader {
         // not a gate"; a writer may stamp the bit only at close). `_meta` is
         // retained for source compatibility.
         let index = CallsIndex::parse(&idx)?;
-
-        // Compute the total record count: all chunks but the last hold
-        // chunk_size records; the last holds however many records decode out of
-        // it. Empty stream ⇒ zero records.
-        let record_count = if index.chunk_offsets.is_empty() {
-            0
-        } else {
-            let last_chunk = index.chunk_offsets.len() - 1;
-            let start = index.chunk_offsets[last_chunk] as usize;
-            let end = dat.len();
-            if start > end {
-                return Err("calls.idx: last chunk offset past end of calls.dat".to_string());
-            }
-            let last_records = decode_chunk_records(&dat[start..end])?.len();
-            (last_chunk * index.chunk_size + last_records) as u64
-        };
-
-        Ok(Some(CallStreamReader {
+        let decoder = codetracer_ctfs::zstd_compat::Decoder::new().map_err(|e| format!("calls.dat: {e}"))?;
+        let mut reader = CallStreamReader {
             index,
             dat,
-            record_count,
+            record_count: 0,
             cached_chunk: None,
-        }))
+            raw: Vec::new(),
+            frames: Vec::new(),
+            decoder,
+        };
+
+        // Compute the total record count: all chunks but the last hold
+        // chunk_size records; the last holds however many records are framed
+        // in it. Empty stream ⇒ zero records. Counting is not a read: the
+        // cache starts empty, as `cached_chunk` reports.
+        if let Some(last_chunk) = reader.index.chunk_offsets.len().checked_sub(1) {
+            if reader.index.chunk_offsets[last_chunk] as usize > reader.dat.len() {
+                return Err("calls.idx: last chunk offset past end of calls.dat".to_string());
+            }
+            reader.inflate(last_chunk)?;
+            reader.record_count = (last_chunk * reader.index.chunk_size + reader.frames.len()) as u64;
+            reader.cached_chunk = None;
+        }
+        Ok(Some(reader))
+    }
+
+    /// Inflate chunk `chunk_number` and locate its records, unless it is the
+    /// one already held.
+    fn inflate(&mut self, chunk_number: usize) -> Result<(), String> {
+        if self.cached_chunk == Some(chunk_number) {
+            return Ok(());
+        }
+        let start = self.index.chunk_offsets[chunk_number] as usize;
+        let end = if chunk_number + 1 < self.index.chunk_offsets.len() {
+            self.index.chunk_offsets[chunk_number + 1] as usize
+        } else {
+            self.dat.len()
+        };
+        if start > end || end > self.dat.len() {
+            return Err("calls.dat: chunk offsets out of range".to_string());
+        }
+        self.cached_chunk = None;
+        self.decoder
+            .decode_into(&self.dat[start..end], &mut self.raw)
+            .map_err(|e| format!("calls.dat: zstd decode failed: {e}"))?;
+        frame_records(&self.raw, &mut self.frames)?;
+        self.cached_chunk = Some(chunk_number);
+        Ok(())
     }
 
     /// Open the call stream from an already-open CTFS reader. Returns
@@ -184,7 +222,7 @@ impl CallStreamReader {
     /// `None` if nothing has been decompressed yet. Lets a downstream reader
     /// observe exactly which chunks were inflated (bounded-decompression probe).
     pub fn cached_chunk(&self) -> Option<usize> {
-        self.cached_chunk.as_ref().map(|(c, _)| *c)
+        self.cached_chunk
     }
 
     /// Read the call record at `call_key`, decompressing only its chunk.
@@ -195,27 +233,11 @@ impl CallStreamReader {
         let chunk_number = (call_key as usize) / self.index.chunk_size;
         let within = (call_key as usize) % self.index.chunk_size;
 
-        // Use the cache when the target chunk is already decompressed.
-        let need_decompress = !matches!(&self.cached_chunk, Some((c, _)) if *c == chunk_number);
-        if need_decompress {
-            let start = self.index.chunk_offsets[chunk_number] as usize;
-            let end = if chunk_number + 1 < self.index.chunk_offsets.len() {
-                self.index.chunk_offsets[chunk_number + 1] as usize
-            } else {
-                self.dat.len()
-            };
-            if start > end || end > self.dat.len() {
-                return Err("calls.dat: chunk offsets out of range".to_string());
-            }
-            let records = decode_chunk_records(&self.dat[start..end])?;
-            self.cached_chunk = Some((chunk_number, records));
+        self.inflate(chunk_number)?;
+        match self.frames.get(within) {
+            Some(&(start, len)) => CallStreamRecord::decode(call_key, &self.raw[start..start + len]),
+            None => Err(format!("call record {within} missing in chunk {chunk_number}")),
         }
-
-        let records = &self.cached_chunk.as_ref().unwrap().1;
-        if within >= records.len() {
-            return Err(format!("call record {within} missing in chunk {chunk_number}"));
-        }
-        CallStreamRecord::decode(call_key, &records[within])
     }
 
     /// Read all call records (convenience for tests / small traces). Decodes

@@ -91,14 +91,21 @@ pub fn decode_chunk_records(compressed: &[u8]) -> Result<Vec<StepStreamRecord>, 
 pub fn decode_chunk_records_declared(compressed: &[u8], allow_source_reload: bool) -> Result<Vec<StepStreamRecord>, String> {
     let raw = decode_zstd_chunk(compressed)?;
     let mut records = Vec::new();
+    decode_raw_records(&raw, allow_source_reload, &mut records)?;
+    Ok(records)
+}
+
+/// Decode an inflated chunk's records into `records`, replacing its contents.
+fn decode_raw_records(raw: &[u8], allow_source_reload: bool, records: &mut Vec<StepStreamRecord>) -> Result<(), String> {
+    records.clear();
     let mut pos = 0usize;
     let mut prev_abs: Option<u64> = None;
     while pos < raw.len() {
-        let (rec, next) = decode_record_declared(&raw, &mut pos, prev_abs, allow_source_reload)?;
+        let (rec, next) = decode_record_declared(raw, &mut pos, prev_abs, allow_source_reload)?;
         prev_abs = next;
         records.push(rec);
     }
-    Ok(records)
+    Ok(())
 }
 
 /// [`decode_chunk_records_declared`] for chunk number `chunk`, whose refusals
@@ -118,8 +125,13 @@ pub struct StepStreamReader {
     dat: Vec<u8>,
     /// Total number of records.
     record_count: u64,
-    /// Cache of the most-recently-decompressed chunk: (chunk_number, records).
-    cached_chunk: Option<(usize, Vec<StepStreamRecord>)>,
+    /// The chunk `records` holds, `None` until the first read.
+    cached_chunk: Option<usize>,
+    /// The records of the most recently inflated chunk.
+    records: Vec<StepStreamRecord>,
+    /// The inflated bytes of that chunk; kept as a buffer to reuse.
+    raw: Vec<u8>,
+    decoder: codetracer_ctfs::zstd_compat::Decoder,
     /// Whether `meta.dat` declares `FLAG_EXT_HAS_SOURCE_RELOAD`, which is what
     /// admits tag 8 to this stream.
     allow_source_reload: bool,
@@ -151,30 +163,56 @@ impl StepStreamReader {
         // whether tag 8 is admitted.
         let allow_source_reload = meta_declares_source_reload(meta)?;
         let index = StepsIndex::parse(&idx)?;
+        let decoder = codetracer_ctfs::zstd_compat::Decoder::new().map_err(|e| format!("steps.dat: {e}"))?;
+        let mut reader = StepStreamReader {
+            index,
+            dat,
+            record_count: 0,
+            cached_chunk: None,
+            records: Vec::new(),
+            raw: Vec::new(),
+            decoder,
+            allow_source_reload,
+        };
 
         // Compute the total record count: all chunks but the last hold
         // chunk_size records; the last holds however many records decode out of
-        // it. Empty stream ⇒ zero records.
-        let record_count = if index.chunk_offsets.is_empty() {
-            0
-        } else {
-            let last_chunk = index.chunk_offsets.len() - 1;
-            let start = index.chunk_offsets[last_chunk] as usize;
-            let end = dat.len();
-            if start > end {
+        // it. Empty stream ⇒ zero records. Counting is not a read: the cache
+        // starts empty, as `cached_chunk` reports.
+        if let Some(last_chunk) = reader.index.chunk_offsets.len().checked_sub(1) {
+            if reader.index.chunk_offsets[last_chunk] as usize > reader.dat.len() {
                 return Err("steps.idx: last chunk offset past end of steps.dat".to_string());
             }
-            let last_records = decode_chunk_records_at(&dat[start..end], last_chunk, allow_source_reload)?.len();
-            (last_chunk * index.chunk_size + last_records) as u64
-        };
+            reader.inflate(last_chunk)?;
+            reader.record_count = (last_chunk * reader.index.chunk_size + reader.records.len()) as u64;
+            reader.cached_chunk = None;
+        }
+        Ok(Some(reader))
+    }
 
-        Ok(Some(StepStreamReader {
-            index,
-            dat,
-            record_count,
-            cached_chunk: None,
-            allow_source_reload,
-        }))
+    /// Inflate and decode chunk `chunk_number` into `records`, unless they
+    /// already hold it.
+    fn inflate(&mut self, chunk_number: usize) -> Result<(), String> {
+        if self.cached_chunk == Some(chunk_number) {
+            return Ok(());
+        }
+        let start = self.index.chunk_offsets[chunk_number] as usize;
+        let end = if chunk_number + 1 < self.index.chunk_offsets.len() {
+            self.index.chunk_offsets[chunk_number + 1] as usize
+        } else {
+            self.dat.len()
+        };
+        if start > end || end > self.dat.len() {
+            return Err("steps.dat: chunk offsets out of range".to_string());
+        }
+        self.cached_chunk = None;
+        self.decoder
+            .decode_into(&self.dat[start..end], &mut self.raw)
+            .map_err(|e| format!("steps.dat chunk {chunk_number}: steps.dat: zstd decode failed: {e}"))?;
+        decode_raw_records(&self.raw, self.allow_source_reload, &mut self.records)
+            .map_err(|e| format!("steps.dat chunk {chunk_number}: {e}"))?;
+        self.cached_chunk = Some(chunk_number);
+        Ok(())
     }
 
     /// Open the step stream from an already-open CTFS reader. Returns
@@ -210,7 +248,7 @@ impl StepStreamReader {
     /// `None` if nothing has been decompressed yet. Lets a downstream reader
     /// observe exactly which chunks were inflated (bounded-decompression probe).
     pub fn cached_chunk(&self) -> Option<usize> {
-        self.cached_chunk.as_ref().map(|(c, _)| *c)
+        self.cached_chunk
     }
 
     /// Read the execution-stream record at `index`, decompressing only its
@@ -223,27 +261,11 @@ impl StepStreamReader {
         let chunk_number = (index as usize) / self.index.chunk_size;
         let within = (index as usize) % self.index.chunk_size;
 
-        // Use the cache when the target chunk is already decompressed.
-        let need_decompress = !matches!(&self.cached_chunk, Some((c, _)) if *c == chunk_number);
-        if need_decompress {
-            let start = self.index.chunk_offsets[chunk_number] as usize;
-            let end = if chunk_number + 1 < self.index.chunk_offsets.len() {
-                self.index.chunk_offsets[chunk_number + 1] as usize
-            } else {
-                self.dat.len()
-            };
-            if start > end || end > self.dat.len() {
-                return Err("steps.dat: chunk offsets out of range".to_string());
-            }
-            let records = decode_chunk_records_at(&self.dat[start..end], chunk_number, self.allow_source_reload)?;
-            self.cached_chunk = Some((chunk_number, records));
+        self.inflate(chunk_number)?;
+        match self.records.get(within) {
+            Some(rec) => Ok(rec.clone()),
+            None => Err(format!("step record {within} missing in chunk {chunk_number}")),
         }
-
-        let records = &self.cached_chunk.as_ref().unwrap().1;
-        if within >= records.len() {
-            return Err(format!("step record {within} missing in chunk {chunk_number}"));
-        }
-        Ok(records[within].clone())
     }
 
     /// Read all execution-stream records (convenience for tests / small traces).

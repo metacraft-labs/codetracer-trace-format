@@ -28,16 +28,23 @@
         { pkgs, system, ... }:
         let
           toolchainsPkgs = inputs."codetracer-toolchains".packages.${system};
+          fenixPkgs = inputs."codetracer-toolchains".inputs.fenix.packages.${system};
+          # Match the pinned native compiler for the declared wasm32 gate.
+          rustWithWasm = fenixPkgs.combine [
+            toolchainsPkgs.rust-stable
+            fenixPkgs.targets.wasm32-unknown-unknown.stable.rust-std
+          ];
         in
         {
           devShells.default = pkgs.mkShell {
             packages = [
               # Rust toolchain
-              toolchainsPkgs.rust-stable
+              rustWithWasm
               toolchainsPkgs.nim-2_2
               toolchainsPkgs.nimble
 
               # Native dependencies for crates
+              pkgs.llvmPackages.clang-unwrapped # wasm C uses no host compiler flags
               pkgs.capnproto # capnpc for codetracer_trace_format_capnp
               pkgs.pkg-config
               pkgs.zstd # libzstd for zeekstd/zstd-sys
@@ -47,6 +54,7 @@
             ];
 
             # For zstd-sys to find libzstd
+            CC_wasm32_unknown_unknown = "${pkgs.llvmPackages.clang-unwrapped}/bin/clang";
             PKG_CONFIG_PATH = "${pkgs.zstd.dev}/lib/pkgconfig";
           };
         };

@@ -63,25 +63,57 @@ jobs:
           private-key: ${{ secrets.CI_TOKEN_PROVIDER_PRIVATE_KEY }}
           owner: metacraft-labs
 
+      - name: Install Nix for the declared platform shell
+        if: runner.os != 'Windows'
+        uses: metacraft-labs/metacraft-github-actions/setup-nix@dev
+        with:
+          gh-token: ${{ steps.ci_token.outputs.token }}
+
+      - name: Expose the declared non-SIP shell
+        if: runner.os != 'Windows'
+        run: |
+          nix develop --command bash -c '
+            shell_path="$(command -v bash)"
+            case "$shell_path" in
+              /nix/store/*/bin/bash) dirname "$shell_path" >> "$GITHUB_PATH" ;;
+              *) echo "Expected declared Nix bash, got $shell_path" >&2; exit 1 ;;
+            esac
+          '
+
       - name: Setup dev env (reprobuild flavor)
         # setup-dev-env clones the siblings listed in .github/sibling-repos
-        # (codetracer-trace-format, codetracer-trace-format-nim) at the
+        # (the six recorded integration/FFI/storage dependencies) at the
         # workspace-lock-pinned revisions before materialising the env.
         uses: metacraft-labs/metacraft-github-actions/setup-dev-env@dev
         with:
           env-flavor: reprobuild
+          repro-from-source: ${{ runner.os != 'Windows' && 'true' || 'false' }}
+          repro-build-pin: "76659f5730ecf698b1963c656494d2cb66eb256d"
           gh-token: ${{ steps.ci_token.outputs.token }}
+
+      - name: Report measured Repro source identity
+        if: runner.os != 'Windows'
+        run: |
+          pwd
+          git rev-parse HEAD
+          engine_source="$(git -C .reprobuild-src rev-parse HEAD)"
+          echo "Repro source: $engine_source"
+          test "$engine_source" = 76659f5730ecf698b1963c656494d2cb66eb256d
+          test -z "$(git -C .reprobuild-src status --porcelain)"
+          test "$(command -v repro)" = "$GITHUB_WORKSPACE/.reprobuild-src/build/bin/repro"
+          command -v repro
+          repro --version
 
       - name: repro build
         # Builds the conventional `build` collection declared in
         # `repro.nim`. Verifies the primary shipping artefact (the
         # recorder binary or extension) materialises through the
         # reprobuild engine identically to `just build`.
-        run: dev-exec repro build
+        run: dev-exec repro build ${{ runner.os != 'Windows' && '--tool-provisioning=nix' || '' }}
 
       - name: repro test
         # Materialises the `test` collection.
-        run: dev-exec repro test
+        run: dev-exec repro test ${{ runner.os != 'Windows' && '--tool-provisioning=nix' || '' }}
 
       - name: just build (cross-check)
         # Re-runs the legacy `just build` path inside the same env so

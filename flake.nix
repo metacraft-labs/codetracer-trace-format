@@ -49,6 +49,9 @@
               pkgs.pkg-config
               pkgs.zstd # libzstd for zeekstd/zstd-sys
 
+              # Monitored launches require a non-SIP shell on macOS.
+              pkgs.bash
+
               # Development tools
               pkgs.cargo-edit
             ];

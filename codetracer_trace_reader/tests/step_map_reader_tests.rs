@@ -108,7 +108,7 @@ fn a_full_load_returns_every_list() {
 #[test]
 fn a_lookup_inflates_one_chunk_and_finds_the_line_or_nothing() {
     let hits = many_hits();
-    let r = StepMapReader::from_bytes(writer_map(&hits)).unwrap();
+    let mut r = StepMapReader::from_bytes(writer_map(&hits)).unwrap();
     for (key, ids) in expected(&hits).iter().step_by(37) {
         assert_eq!(r.lookup(key.0, key.1).unwrap().as_ref(), Some(ids), "{key:?}");
     }
@@ -117,9 +117,28 @@ fn a_lookup_inflates_one_chunk_and_finds_the_line_or_nothing() {
     assert_eq!(r.lookup(99, 1).unwrap(), None, "a key past the last chunk");
 }
 
+/// The reader keeps the chunk its last lookup inflated. Lookups that jump
+/// between chunks, return to one, and repeat a key must answer as the full
+/// load does, and so must a lookup for a line that never ran inside a chunk
+/// that is cached.
+#[test]
+fn lookups_in_any_order_agree_with_the_full_load() {
+    let hits = many_hits();
+    let mut r = StepMapReader::from_bytes(writer_map(&hits)).unwrap();
+    let all = r.load_all().unwrap();
+    let keys: Vec<(u64, u32)> = all.keys().copied().collect();
+    let mut s: u64 = 11;
+    for _ in 0..3_000 {
+        s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+        let key = keys[(s >> 33) as usize % keys.len()];
+        assert_eq!(r.lookup(key.0, key.1).unwrap().as_ref(), all.get(&key), "{key:?}");
+        assert_eq!(r.lookup(key.0, 401).unwrap(), None, "({}, 401) never ran", key.0);
+    }
+}
+
 #[test]
 fn an_empty_map_loads_empty() {
-    let r = StepMapReader::from_bytes(writer_map(&[])).unwrap();
+    let mut r = StepMapReader::from_bytes(writer_map(&[])).unwrap();
     assert!(r.load_all().unwrap().is_empty());
     assert_eq!(r.lookup(0, 1).unwrap(), None);
 }

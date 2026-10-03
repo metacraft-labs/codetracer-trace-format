@@ -31,14 +31,19 @@ struct Chunk {
 }
 
 /// A parsed `step-map.ns`: its header and chunk table, with the frames
-/// inflated on demand.
-#[derive(Debug, Clone)]
+/// inflated on demand. The chunk the last [`lookup`](Self::lookup) inflated is
+/// kept, so lookups that land in one chunk inflate it once.
+#[derive(Debug)]
 pub struct StepMapReader {
     bytes: Vec<u8>,
     path_count: u32,
     line_count: u32,
     step_count: u64,
     chunks: Vec<Chunk>,
+    decoder: codetracer_ctfs::zstd_compat::Decoder,
+    /// The chunk `raw` holds, if any.
+    cached_chunk: Option<usize>,
+    raw: Vec<u8>,
 }
 
 fn u32_at(b: &[u8], o: usize) -> u32 {
@@ -92,8 +97,34 @@ fn declared_content_size(frame: &[u8]) -> Option<u64> {
     Some(if fcs_size == 2 { v + 256 } else { v })
 }
 
-fn inflate(frame: &[u8]) -> Result<Vec<u8>, String> {
-    codetracer_ctfs::zstd_compat::decode_all(frame).map_err(|e| e.to_string())
+/// What [`StepMapReader::each_record`] does with a line record once it has
+/// read its key.
+enum Visit {
+    /// Check the record's runs and move on.
+    Skip,
+    /// Decode its step ids and hand them over.
+    Take,
+    /// Stop the scan here.
+    Stop,
+}
+
+/// Inflate chunk `c` of a member into `raw`, checking it decodes to the size
+/// its frame declares.
+fn inflate(bytes: &[u8], chunks: &[Chunk], c: usize, decoder: &mut codetracer_ctfs::zstd_compat::Decoder, raw: &mut Vec<u8>) -> Result<(), String> {
+    let name = STEP_MAP_FILE_NAME;
+    let chunk = chunks[c];
+    let frame = &bytes[chunk.start..chunk.end];
+    let declared = declared_content_size(frame).ok_or_else(|| format!("{name}: chunk {c}'s frame does not declare its content size"))?;
+    decoder
+        .decode_into(frame, raw)
+        .map_err(|e| format!("{name}: chunk {c}'s frame does not decode: {e}"))?;
+    if raw.len() as u64 != declared {
+        return Err(format!(
+            "{name}: chunk {c}'s frames decode to {} bytes, not the {declared} its frame header declares",
+            raw.len()
+        ));
+    }
+    Ok(())
 }
 
 impl StepMapReader {
@@ -177,6 +208,9 @@ impl StepMapReader {
             line_count,
             step_count,
             chunks,
+            decoder: codetracer_ctfs::zstd_compat::Decoder::new().map_err(|e| format!("{name}: {e}"))?,
+            cached_chunk: None,
+            raw: Vec::new(),
         })
     }
 
@@ -207,8 +241,11 @@ impl StepMapReader {
         let mut last: Option<(u64, u32)> = None;
         let mut steps = 0u64;
         let mut paths = 0u32;
+        let mut decoder = codetracer_ctfs::zstd_compat::Decoder::new().map_err(|e| format!("{STEP_MAP_FILE_NAME}: {e}"))?;
+        let mut raw = Vec::new();
         for c in 0..self.chunks.len() {
-            self.each_record(c, |key, ids| {
+            inflate(&self.bytes, &self.chunks, c, &mut decoder, &mut raw)?;
+            self.each_record(c, &raw, |_| Visit::Take, |key, ids| {
                 if let Some(prev) = last
                     && key <= prev
                 {
@@ -222,7 +259,7 @@ impl StepMapReader {
                 last = Some(key);
                 steps += ids.len() as u64;
                 map.insert(key, ids);
-                Ok(false)
+                Ok(())
             })?;
         }
         for (what, decoded, header) in [
@@ -240,44 +277,57 @@ impl StepMapReader {
     }
 
     /// One line's step ids, inflating only the chunk that can hold it.
-    /// `Ok(None)` when no step ran on that line.
-    pub fn lookup(&self, path_id: u64, line: u32) -> Result<Option<Vec<u64>>, String> {
+    /// `Ok(None)` when no step ran on that line. The records scanned past are
+    /// checked as [`load_all`](Self::load_all) checks them, without
+    /// materialising their ids.
+    pub fn lookup(&mut self, path_id: u64, line: u32) -> Result<Option<Vec<u64>>, String> {
         let target = (path_id, line);
         let c = self.chunks.partition_point(|ch| ch.first <= target);
         if c == 0 {
             return Ok(None);
         }
+        let c = c - 1;
+        if self.cached_chunk != Some(c) {
+            self.cached_chunk = None;
+            inflate(&self.bytes, &self.chunks, c, &mut self.decoder, &mut self.raw)?;
+            self.cached_chunk = Some(c);
+        }
         let mut found = None;
-        self.each_record(c - 1, |key, ids| {
-            if key == target {
+        self.each_record(
+            c,
+            &self.raw,
+            |key| match key.cmp(&target) {
+                std::cmp::Ordering::Less => Visit::Skip,
+                std::cmp::Ordering::Equal => Visit::Take,
+                std::cmp::Ordering::Greater => Visit::Stop,
+            },
+            |_, ids| {
                 found = Some(ids);
-                return Ok(true);
-            }
-            Ok(key > target)
-        })?;
+                Ok(())
+            },
+        )?;
         Ok(found)
     }
 
-    /// Inflate chunk `c` and hand each line record to `f` until it returns
-    /// `true`, checking everything that can be checked within a chunk.
-    fn each_record(&self, c: usize, mut f: impl FnMut((u64, u32), Vec<u64>) -> Result<bool, String>) -> Result<(), String> {
+    /// Scan the line records of chunk `c`, inflated in `raw`, checking
+    /// everything that can be checked within a chunk. `visit` sees each key
+    /// first and says whether to skip the record, take its ids — decoded and
+    /// handed to `take` — or stop.
+    fn each_record(
+        &self,
+        c: usize,
+        raw: &[u8],
+        mut visit: impl FnMut((u64, u32)) -> Visit,
+        mut take: impl FnMut((u64, u32), Vec<u64>) -> Result<(), String>,
+    ) -> Result<(), String> {
         let name = STEP_MAP_FILE_NAME;
         let chunk = self.chunks[c];
-        let frame = &self.bytes[chunk.start..chunk.end];
-        let declared = declared_content_size(frame).ok_or_else(|| format!("{name}: chunk {c}'s frame does not declare its content size"))?;
-        let raw = inflate(frame).map_err(|e| format!("{name}: chunk {c}'s frame does not decode: {e}"))?;
-        if raw.len() as u64 != declared {
-            return Err(format!(
-                "{name}: chunk {c}'s frames decode to {} bytes, not the {declared} its frame header declares",
-                raw.len()
-            ));
-        }
         let mut pos = 0usize;
         let (mut path, mut line) = chunk.first;
         let mut first = true;
         while pos < raw.len() {
-            let path_delta = varint(&raw, &mut pos, c)?;
-            let line_field = varint(&raw, &mut pos, c)?;
+            let path_delta = varint(raw, &mut pos, c)?;
+            let line_field = varint(raw, &mut pos, c)?;
             let key = if first {
                 let key = (path.wrapping_add(path_delta), line_field as u32);
                 if path_delta != 0 || line_field != chunk.first.1 as u64 {
@@ -309,7 +359,12 @@ impl StepMapReader {
             };
             first = false;
             (path, line) = key;
-            let count = varint(&raw, &mut pos, c)?;
+            let wanted = match visit(key) {
+                Visit::Stop => return Ok(()),
+                Visit::Skip => false,
+                Visit::Take => true,
+            };
+            let count = varint(raw, &mut pos, c)?;
             if count == 0 {
                 return Err(format!("{name}: chunk {c}: line {key:?} has a count of 0"));
             }
@@ -321,12 +376,12 @@ impl StepMapReader {
                     self.step_count
                 ));
             }
-            let mut ids = Vec::new();
+            let mut ids = if wanted { Vec::with_capacity(count as usize) } else { Vec::new() };
             let mut prev: i128 = -1;
             let mut have = 0u64;
             while have < count {
-                let gap = varint(&raw, &mut pos, c)?;
-                let repeat = varint(&raw, &mut pos, c)?;
+                let gap = varint(raw, &mut pos, c)?;
+                let repeat = varint(raw, &mut pos, c)?;
                 if gap == 0 {
                     return Err(format!("{name}: chunk {c}: line {key:?} has a gap of 0"));
                 }
@@ -339,15 +394,22 @@ impl StepMapReader {
                         have.saturating_add(repeat)
                     ));
                 }
-                for _ in 0..repeat {
-                    prev += gap as i128;
-                    let id = u64::try_from(prev).map_err(|_| format!("{name}: chunk {c}: line {key:?}'s step ids overflow 64 bits"))?;
-                    ids.push(id);
+                if wanted {
+                    for _ in 0..repeat {
+                        prev += gap as i128;
+                        let id = u64::try_from(prev).map_err(|_| format!("{name}: chunk {c}: line {key:?}'s step ids overflow 64 bits"))?;
+                        ids.push(id);
+                    }
+                } else {
+                    prev += gap as i128 * repeat as i128;
+                    if prev > u64::MAX as i128 {
+                        return Err(format!("{name}: chunk {c}: line {key:?}'s step ids overflow 64 bits"));
+                    }
                 }
                 have += repeat;
             }
-            if f(key, ids)? {
-                return Ok(());
+            if wanted {
+                take(key, ids)?;
             }
         }
         Ok(())

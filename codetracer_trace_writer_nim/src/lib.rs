@@ -1275,9 +1275,17 @@ impl StreamingValueEncoder {
         self.check(unsafe { ct_value_begin_tuple(self.handle, type_id.0 as u64, count as i32) });
     }
 
-    /// End a compound value (sequence or tuple) started by
-    /// [`begin_sequence`](Self::begin_sequence) or
-    /// [`begin_tuple`](Self::begin_tuple).
+    /// Begin a struct with a known field count.
+    /// Must be followed by exactly `count` field encodings and one
+    /// [`end_compound`](Self::end_compound) call.
+    pub fn begin_struct(&mut self, type_id: TypeId, count: usize) {
+        self.check(unsafe { ct_value_begin_struct(self.handle, type_id.0 as u64, count as i32) });
+    }
+
+    /// End a compound value (sequence, tuple or struct) started by
+    /// [`begin_sequence`](Self::begin_sequence),
+    /// [`begin_tuple`](Self::begin_tuple) or
+    /// [`begin_struct`](Self::begin_struct).
     pub fn end_compound(&mut self) {
         self.check(unsafe { ct_value_end_compound(self.handle) });
     }

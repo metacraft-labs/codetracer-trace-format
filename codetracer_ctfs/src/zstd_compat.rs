@@ -70,9 +70,110 @@ pub fn decode_all(data: &[u8]) -> std::io::Result<Vec<u8>> {
     Ok(out)
 }
 
+/// The largest content size a frame may pledge before [`Decoder`] stops
+/// trusting the pledge to size its output, per compressed byte. Zstandard's
+/// densest block (an RLE block of 128 KiB in 4 bytes) stays well under it, so
+/// only a corrupt or hostile header crosses it, and such a frame is decoded by
+/// growing the buffer instead of by one allocation of the claimed size.
+#[cfg(not(feature = "pure-rust-zstd"))]
+const MAX_PLEDGE_RATIO: u64 = 1 << 16;
+
+/// A decompression context kept across calls, for a reader that inflates one
+/// chunk after another.
+///
+/// [`decode_all`] builds a streaming decoder per call — a fresh context with
+/// its own window buffers — and grows its output as it goes. A reader that
+/// seeks around a stream pays that set-up per chunk. `Decoder` keeps the
+/// context, and decodes a frame that pledges its content size (every stream
+/// chunk does: `zstd_frame::compress_pledged`) in one call into a buffer the
+/// caller reuses. Anything else — several frames back to back, a frame
+/// without a pledge — decodes exactly as [`decode_all`] does.
+pub struct Decoder {
+    #[cfg(not(feature = "pure-rust-zstd"))]
+    ctx: zstd::bulk::Decompressor<'static>,
+}
+
+impl std::fmt::Debug for Decoder {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Decoder")
+    }
+}
+
+impl Decoder {
+    pub fn new() -> std::io::Result<Decoder> {
+        Ok(Decoder {
+            #[cfg(not(feature = "pure-rust-zstd"))]
+            ctx: zstd::bulk::Decompressor::new()?,
+        })
+    }
+
+    /// Decompress `data` into `out`, replacing its contents. The bytes are the
+    /// ones [`decode_all`] returns for the same input.
+    #[cfg(not(feature = "pure-rust-zstd"))]
+    pub fn decode_into(&mut self, data: &[u8], out: &mut Vec<u8>) -> std::io::Result<()> {
+        use zstd::zstd_safe;
+        out.clear();
+        let single_frame = zstd_safe::find_frame_compressed_size(data).is_ok_and(|n| n == data.len());
+        let pledge = match zstd_safe::get_frame_content_size(data) {
+            Ok(Some(n)) if single_frame && n <= (data.len() as u64).saturating_mul(MAX_PLEDGE_RATIO) => n as usize,
+            _ => {
+                out.extend_from_slice(&decode_all(data)?);
+                return Ok(());
+            }
+        };
+        out.reserve(pledge);
+        let written = self.ctx.decompress_to_buffer(data, out)?;
+        if written != pledge {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("zstd frame pledges {pledge} bytes but decodes to {written}"),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Decompress `data` into `out`, replacing its contents.
+    #[cfg(feature = "pure-rust-zstd")]
+    pub fn decode_into(&mut self, data: &[u8], out: &mut Vec<u8>) -> std::io::Result<()> {
+        *out = decode_all(data)?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_reused_decoder_agrees_with_decode_all() {
+        let mut d = Decoder::new().unwrap();
+        let mut out = vec![0xAA; 7];
+        let big: Vec<u8> = (0..300_000u32).map(|i| (i % 253) as u8).collect();
+        let pledged = crate::zstd_frame::compress_pledged(&big, 3, "test").unwrap();
+        let unpledged = encode_all(&big, 3).unwrap();
+        let mut two = crate::zstd_frame::compress_pledged(b"hello ", 3, "test").unwrap();
+        two.extend_from_slice(&crate::zstd_frame::compress_pledged(b"world", 3, "test").unwrap());
+        let empty = crate::zstd_frame::compress_pledged(b"", 3, "test").unwrap();
+        for input in [&pledged, &unpledged, &two, &empty, &pledged] {
+            d.decode_into(input, &mut out).unwrap();
+            assert_eq!(out, decode_all(input).unwrap());
+        }
+        assert_eq!(out, big);
+    }
+
+    #[test]
+    fn the_reused_decoder_refuses_what_decode_all_refuses() {
+        let mut d = Decoder::new().unwrap();
+        let mut out = Vec::new();
+        let frame = crate::zstd_frame::compress_pledged(&[7u8; 5000], 3, "test").unwrap();
+        let truncated = &frame[..frame.len() - 3];
+        assert!(decode_all(truncated).is_err());
+        assert!(d.decode_into(truncated, &mut out).is_err());
+        let mut garbage = frame.clone();
+        let mid = garbage.len() / 2;
+        garbage[mid] ^= 0xFF;
+        assert_eq!(decode_all(&garbage).is_err(), d.decode_into(&garbage, &mut out).is_err());
+    }
 
     #[test]
     fn roundtrips_through_the_active_codec() {

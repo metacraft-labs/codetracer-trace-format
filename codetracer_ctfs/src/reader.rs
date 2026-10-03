@@ -1,20 +1,23 @@
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
+use std::sync::Arc;
 
 use crate::base40::base40_decode;
 use crate::block_bounds::BlockBound;
 use crate::file_entry::{FileEntry, MemberLayout};
 use crate::header::{CompressionMethod, EncryptionMethod, ExtendedHeader, Header};
+use crate::member::MemberBytes;
 use crate::pread_compat::pread_exact;
 use crate::CtfsError;
 
 /// Where a [`CtfsReader`]'s container bytes are: a file it reads from as it
 /// is asked, or the whole container already in memory (a browser, which is
-/// handed bytes; a container fetched over the network).
+/// handed bytes; a container fetched over the network). In-memory bytes are
+/// shared with the members read out of them ([`CtfsReader::read_member`]).
 enum Source {
     File(File),
-    Bytes(Vec<u8>),
+    Bytes(Arc<Vec<u8>>),
 }
 
 impl Source {
@@ -121,7 +124,7 @@ impl CtfsReader {
     pub fn from_bytes(bytes: Vec<u8>) -> Result<Self, CtfsError> {
         let (header, ext_header, entries) = Self::read_root(&mut bytes.as_slice())?;
         Ok(CtfsReader {
-            source: Source::Bytes(bytes),
+            source: Source::Bytes(Arc::new(bytes)),
             block_size: ext_header.block_size,
             entries,
             compression: header.compression,
@@ -179,10 +182,43 @@ impl CtfsReader {
     /// whose last, short data block landed past the last whole block used to be
     /// read back *successfully* out of bytes the container does not own.
     pub fn read_file(&mut self, name: &str) -> Result<Vec<u8>, CtfsError> {
+        let (size, runs) = self.member_runs(name)?;
+        let mut data = Vec::with_capacity(size);
+        for (offset, len) in runs {
+            self.source.append_at(&mut data, len, offset)?;
+        }
+        Ok(data)
+    }
+
+    /// A member's bytes, without copying them out of a container that is in
+    /// memory: the [`MemberBytes`] shares the container's buffer and reads
+    /// across the member's blocks wherever they lie. From a file, the member
+    /// is read whole, as [`read_file`](Self::read_file) reads it. Every check
+    /// `read_file` makes is made here, before the member is returned.
+    pub fn read_member(&mut self, name: &str) -> Result<MemberBytes, CtfsError> {
+        match &self.source {
+            Source::File(_) => Ok(MemberBytes::from(self.read_file(name)?)),
+            Source::Bytes(bytes) => {
+                let image = Arc::clone(bytes);
+                let (_, runs) = self.member_runs(name)?;
+                let mut stretches = Vec::with_capacity(runs.len());
+                for (offset, len) in runs {
+                    // `Source::slice` is the same bound `read_file` applies.
+                    Source::slice(&image, offset, len)?;
+                    stretches.push((offset as usize, len));
+                }
+                Ok(MemberBytes::in_image(image, stretches))
+            }
+        }
+    }
+
+    /// A member's size and its bytes as `(container offset, length)` runs of
+    /// physically consecutive blocks, in member order.
+    fn member_runs(&mut self, name: &str) -> Result<(usize, Vec<(u64, usize)>), CtfsError> {
         let entry = *self.find_entry(name).ok_or_else(|| CtfsError::FileNotFound(name.to_string()))?;
 
         if entry.size == 0 {
-            return Ok(Vec::new());
+            return Ok((0, Vec::new()));
         }
 
         let bound = BlockBound::with_len(self.source.len()?, self.block_size);
@@ -204,17 +240,17 @@ impl CtfsReader {
         for block_idx in 0..num_blocks {
             physical.push(self.resolve_block(&entry, block_idx, name, &bound, &mut maps)?);
         }
-        let mut data = Vec::with_capacity(size);
+        let mut runs = Vec::new();
         let mut run_start = 0usize;
         for i in 1..=physical.len() {
             if i < physical.len() && physical[i] == physical[i - 1] + 1 {
                 continue;
             }
             let len = (i * bs as usize).min(size) - run_start * bs as usize;
-            self.source.append_at(&mut data, len, physical[run_start] * bs)?;
+            runs.push((physical[run_start] * bs, len));
             run_start = i;
         }
-        Ok(data)
+        Ok((size, runs))
     }
 
     /// Read from an arbitrary position within a file.
@@ -267,14 +303,7 @@ impl CtfsReader {
     /// mapping blocks below, and the data block in `navigate_to_data_block`.
     /// That is §5d's "all three paths"; leaving any of them out is what turns a
     /// truncated container into wrong content.
-    fn resolve_block(
-        &self,
-        entry: &FileEntry,
-        block_index: u64,
-        name: &str,
-        bound: &BlockBound,
-        maps: &mut MappingBlocks,
-    ) -> Result<u64, CtfsError> {
+    fn resolve_block(&self, entry: &FileEntry, block_index: u64, name: &str, bound: &BlockBound, maps: &mut MappingBlocks) -> Result<u64, CtfsError> {
         let n = self.block_size as u64 / 8;
         let usable = n - 1;
 

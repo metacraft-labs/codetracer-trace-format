@@ -140,6 +140,30 @@ impl Decoder {
     }
 }
 
+std::thread_local! {
+    /// The context [`decode_into`] decodes with: one per thread, made on the
+    /// first decode and freed when the thread ends.
+    static SHARED: std::cell::RefCell<Option<Decoder>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Decompress `data` into `out`, replacing its contents, with a context this
+/// thread keeps for every caller: what [`Decoder::decode_into`] does, without
+/// each reader holding a context of its own. The bytes are the ones
+/// [`decode_all`] returns for the same input.
+pub fn decode_into(data: &[u8], out: &mut Vec<u8>) -> std::io::Result<()> {
+    SHARED.with(|shared| match shared.try_borrow_mut() {
+        Ok(mut slot) => {
+            if slot.is_none() {
+                *slot = Some(Decoder::new()?);
+            }
+            slot.as_mut().map_or(Ok(()), |d| d.decode_into(data, out))
+        }
+        // Only reachable from inside a decode on this thread, which nothing
+        // in this crate does; a context of its own keeps it correct.
+        Err(_) => Decoder::new()?.decode_into(data, out),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -159,6 +183,21 @@ mod tests {
             assert_eq!(out, decode_all(input).unwrap());
         }
         assert_eq!(out, big);
+    }
+
+    #[test]
+    fn the_shared_context_agrees_with_decode_all() {
+        let big: Vec<u8> = (0..300_000u32).map(|i| (i % 251) as u8).collect();
+        let pledged = crate::zstd_frame::compress_pledged(&big, 3, "test").unwrap();
+        let unpledged = encode_all(b"no pledge", 3).unwrap();
+        let mut out = vec![1, 2, 3];
+        for input in [&pledged, &unpledged, &pledged] {
+            decode_into(input, &mut out).unwrap();
+            assert_eq!(out, decode_all(input).unwrap());
+        }
+        assert!(decode_into(&pledged[..pledged.len() - 3], &mut out).is_err());
+        decode_into(&pledged, &mut out).unwrap();
+        assert_eq!(out, big, "a refused frame leaves the context usable");
     }
 
     #[test]

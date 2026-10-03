@@ -1,5 +1,7 @@
 //! `CtfsReader::from_bytes`: a container already in memory reads back exactly
-//! as the same bytes do from a file, and is refused where they are refused.
+//! as the same bytes do from a file, and is refused where they are refused --
+//! through `read_file`, which copies a member out, and through `read_member`,
+//! which shares the container's bytes and reads across the member's blocks.
 //!
 //! The containers are written by the production `CtfsWriter` and read through
 //! both constructors of the real reader; the file-backed one is the oracle.
@@ -73,6 +75,42 @@ fn every_member_reads_back_from_bytes_as_from_a_file() {
     }
 }
 
+/// `read_member` answers every byte range of every member as the member's
+/// content: ranges inside one block, ranges that cross from one block into a
+/// block that is not next to it, and the whole member.
+#[test]
+fn a_shared_member_reads_back_every_range_from_bytes_as_from_a_file() {
+    let (data, members) = container();
+    let (_dir, mut from_file) = file_reader(&data);
+    let mut from_bytes = CtfsReader::from_bytes(data).unwrap();
+    let bs = BS as usize;
+    for (name, content) in &members {
+        let shared = from_bytes.read_member(name).unwrap();
+        let owned = from_file.read_member(name).unwrap();
+        assert_eq!(shared.len(), content.len(), "{name}");
+        assert_eq!(shared.to_vec(), *content, "{name} from bytes");
+        assert_eq!(owned.to_vec(), *content, "{name} from a file");
+        let len = content.len();
+        let mut ranges = vec![(0, len), (len / 3, len / 2)];
+        for boundary in (bs..len).step_by(bs).take(50) {
+            ranges.extend([
+                (boundary - 5, (boundary + 5).min(len)),
+                (boundary - 1, boundary),
+                (boundary, boundary + 1),
+            ]);
+        }
+        for (start, end) in ranges {
+            assert_eq!(shared.get(start, end).unwrap().as_ref(), &content[start..end], "{name} {start}..{end}");
+            assert_eq!(owned.get(start, end).unwrap().as_ref(), &content[start..end], "{name} {start}..{end}");
+        }
+        assert!(shared.get(0, len + 1).is_none(), "{name}: past the end");
+        if len >= 8 {
+            let at = len - 8;
+            assert_eq!(shared.u64_at(at), Some(u64::from_le_bytes(content[at..].try_into().unwrap())));
+        }
+    }
+}
+
 #[test]
 fn ranges_read_back_from_bytes_as_from_a_file() {
     let (data, members) = container();
@@ -105,6 +143,8 @@ fn a_truncated_container_is_refused_from_bytes_as_from_a_file() {
         let a = from_file.read_file(name).map_err(|e| e.to_string());
         let b = from_bytes.read_file(name).map_err(|e| e.to_string());
         assert_eq!(a, b, "{name}");
+        let shared = from_bytes.read_member(name).map(|m| m.to_vec()).map_err(|e| e.to_string());
+        assert_eq!(shared, b, "{name}: read_member refuses what read_file refuses");
         if let Err(e) = b {
             assert!(e.contains("out of bounds"), "{name}: {e}");
             refused += 1;

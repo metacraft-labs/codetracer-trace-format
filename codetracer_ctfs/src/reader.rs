@@ -1,16 +1,89 @@
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::Read;
 use std::path::Path;
 
 use crate::base40::base40_decode;
 use crate::block_bounds::BlockBound;
 use crate::file_entry::{FileEntry, MemberLayout};
 use crate::header::{CompressionMethod, EncryptionMethod, ExtendedHeader, Header};
+use crate::pread_compat::pread_exact;
 use crate::CtfsError;
+
+/// Where a [`CtfsReader`]'s container bytes are: a file it reads from as it
+/// is asked, or the whole container already in memory (a browser, which is
+/// handed bytes; a container fetched over the network).
+enum Source {
+    File(File),
+    Bytes(Vec<u8>),
+}
+
+impl Source {
+    /// The container's length now. A file is asked every time, because a
+    /// container can grow between reads (`BlockBound::of`).
+    fn len(&self) -> Result<u64, CtfsError> {
+        Ok(match self {
+            Source::File(f) => f.metadata()?.len(),
+            Source::Bytes(b) => b.len() as u64,
+        })
+    }
+
+    /// Append the `len` bytes at `offset` to `out`.
+    fn append_at(&self, out: &mut Vec<u8>, len: usize, offset: u64) -> Result<(), CtfsError> {
+        match self {
+            Source::Bytes(b) => {
+                out.extend_from_slice(Self::slice(b, offset, len)?);
+                Ok(())
+            }
+            Source::File(f) => {
+                let start = out.len();
+                out.resize(start + len, 0);
+                Ok(pread_exact(f, &mut out[start..], offset)?)
+            }
+        }
+    }
+
+    /// `len` bytes of an in-memory container at `offset`, or `UnexpectedEof`.
+    fn slice(b: &[u8], offset: u64, len: usize) -> Result<&[u8], CtfsError> {
+        usize::try_from(offset)
+            .ok()
+            .and_then(|start| b.get(start..start.checked_add(len)?))
+            .ok_or_else(|| {
+                CtfsError::Io(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    format!("read of {len} bytes at offset {offset} runs past the container's {} bytes", b.len()),
+                ))
+            })
+    }
+
+    /// Fill `buf` from byte `offset`. Running past the end is an
+    /// `UnexpectedEof`, from either source.
+    fn read_exact_at(&self, buf: &mut [u8], offset: u64) -> Result<(), CtfsError> {
+        match self {
+            Source::File(f) => Ok(pread_exact(f, buf, offset)?),
+            Source::Bytes(b) => {
+                buf.copy_from_slice(Self::slice(b, offset, buf.len())?);
+                Ok(())
+            }
+        }
+    }
+}
+
+/// Mapping blocks a file-backed read has already fetched, so resolving the
+/// data blocks of one member reads each mapping block once rather than once
+/// per data block. Lives for one call: a container being written can change
+/// its mapping blocks between calls.
+#[derive(Default)]
+struct MappingBlocks {
+    blocks: Vec<(u64, Vec<u8>)>,
+}
+
+/// One level of the chain per slot is enough to never re-read a block while
+/// walking a member in order.
+const MAPPING_BLOCKS_KEPT: usize = 6;
 
 /// Reader for CTFS containers.
 pub struct CtfsReader {
-    file: File,
+    source: Source,
     block_size: u32,
     entries: Vec<FileEntry>,
     compression: CompressionMethod,
@@ -30,23 +103,41 @@ impl CtfsReader {
     /// [`crate::header::VERSION`], naming the one it found.
     pub fn open(path: &Path) -> Result<Self, CtfsError> {
         let mut file = File::open(path)?;
-
-        let header = Header::read_from(&mut file)?;
-        let ext_header = ExtendedHeader::read_from(&mut file)?;
-
-        let mut entries = Vec::new();
-        for _ in 0..ext_header.max_root_entries {
-            let entry = FileEntry::read_from(&mut file)?;
-            entries.push(entry);
-        }
-
+        let (header, ext_header, entries) = Self::read_root(&mut std::io::BufReader::new(&mut file))?;
         Ok(CtfsReader {
-            file,
+            source: Source::File(file),
             block_size: ext_header.block_size,
             entries,
             compression: header.compression,
             encryption: header.encryption,
         })
+    }
+
+    /// Open a container that is already in memory. Every check [`open`]
+    /// makes is made, and members read back exactly as they do from a file:
+    /// the bound on block numbers is the length of `bytes`.
+    ///
+    /// [`open`]: Self::open
+    pub fn from_bytes(bytes: Vec<u8>) -> Result<Self, CtfsError> {
+        let (header, ext_header, entries) = Self::read_root(&mut bytes.as_slice())?;
+        Ok(CtfsReader {
+            source: Source::Bytes(bytes),
+            block_size: ext_header.block_size,
+            entries,
+            compression: header.compression,
+            encryption: header.encryption,
+        })
+    }
+
+    /// The header, the extended header and the root directory.
+    fn read_root(r: &mut impl Read) -> Result<(Header, ExtendedHeader, Vec<FileEntry>), CtfsError> {
+        let header = Header::read_from(r)?;
+        let ext_header = ExtendedHeader::read_from(r)?;
+        let mut entries = Vec::new();
+        for _ in 0..ext_header.max_root_entries {
+            entries.push(FileEntry::read_from(r)?);
+        }
+        Ok((header, ext_header, entries))
     }
 
     /// Get the compression method from the container header.
@@ -94,23 +185,35 @@ impl CtfsReader {
             return Ok(Vec::new());
         }
 
-        let bound = BlockBound::of(&self.file, self.block_size)?;
-        let mut data = Vec::with_capacity(entry.size as usize);
+        let bound = BlockBound::with_len(self.source.len()?, self.block_size);
         let bs = self.block_size as u64;
+        let size = usize::try_from(entry.size).map_err(|_| {
+            CtfsError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("internal file {name} claims {} bytes, more than this target can address", entry.size),
+            ))
+        })?;
         let num_blocks = entry.size.div_ceil(bs);
-
+        // Each data block is resolved -- and bounds-checked -- before any byte
+        // of it is read; then runs of physically consecutive blocks are read
+        // in one call each.
+        let mut maps = MappingBlocks::default();
+        // Sized by what the container can hold, not by what the entry claims:
+        // a corrupt `Size` is refused block by block below, not allocated.
+        let mut physical = Vec::with_capacity(num_blocks.min(bound.whole_blocks()) as usize);
         for block_idx in 0..num_blocks {
-            let data_block = self.resolve_block(&entry, block_idx, name, &bound)?;
-            let block_offset = data_block * bs;
-            self.file.seek(SeekFrom::Start(block_offset))?;
-
-            let remaining = entry.size as usize - data.len();
-            let to_read = remaining.min(bs as usize);
-            let mut buf = vec![0u8; to_read];
-            self.file.read_exact(&mut buf)?;
-            data.extend_from_slice(&buf);
+            physical.push(self.resolve_block(&entry, block_idx, name, &bound, &mut maps)?);
         }
-
+        let mut data = Vec::with_capacity(size);
+        let mut run_start = 0usize;
+        for i in 1..=physical.len() {
+            if i < physical.len() && physical[i] == physical[i - 1] + 1 {
+                continue;
+            }
+            let len = (i * bs as usize).min(size) - run_start * bs as usize;
+            self.source.append_at(&mut data, len, physical[run_start] * bs)?;
+            run_start = i;
+        }
         Ok(data)
     }
 
@@ -125,23 +228,22 @@ impl CtfsReader {
             return Ok(0);
         }
 
-        let bound = BlockBound::of(&self.file, self.block_size)?;
+        let bound = BlockBound::with_len(self.source.len()?, self.block_size);
         let bs = self.block_size as u64;
         let available = (entry.size - offset) as usize;
         let to_read = buf.len().min(available);
         let mut bytes_read = 0;
+        let mut maps = MappingBlocks::default();
 
         while bytes_read < to_read {
             let current_offset = offset + bytes_read as u64;
             let block_idx = current_offset / bs;
             let offset_in_block = (current_offset % bs) as usize;
 
-            let data_block = self.resolve_block(&entry, block_idx, name, &bound)?;
+            let data_block = self.resolve_block(&entry, block_idx, name, &bound, &mut maps)?;
             let block_offset = data_block * bs + offset_in_block as u64;
-            self.file.seek(SeekFrom::Start(block_offset))?;
-
             let chunk = (bs as usize - offset_in_block).min(to_read - bytes_read);
-            self.file.read_exact(&mut buf[bytes_read..bytes_read + chunk])?;
+            self.source.read_exact_at(&mut buf[bytes_read..bytes_read + chunk], block_offset)?;
             bytes_read += chunk;
         }
 
@@ -165,7 +267,14 @@ impl CtfsReader {
     /// mapping blocks below, and the data block in `navigate_to_data_block`.
     /// That is §5d's "all three paths"; leaving any of them out is what turns a
     /// truncated container into wrong content.
-    fn resolve_block(&mut self, entry: &FileEntry, block_index: u64, name: &str, bound: &BlockBound) -> Result<u64, CtfsError> {
+    fn resolve_block(
+        &self,
+        entry: &FileEntry,
+        block_index: u64,
+        name: &str,
+        bound: &BlockBound,
+        maps: &mut MappingBlocks,
+    ) -> Result<u64, CtfsError> {
         let n = self.block_size as u64 / 8;
         let usable = n - 1;
 
@@ -187,7 +296,7 @@ impl CtfsReader {
         let mut level = 1u32;
 
         // Path 1 of 3: the entry's mapping root.
-        bound.check_mapping_root(current_level_block, &format!("mapping root block of internal file {name}"))?;
+        bound.check_mapping_root(current_level_block, || format!("mapping root block of internal file {name}"))?;
 
         // Walk up through levels to find which level contains this index
         loop {
@@ -204,7 +313,7 @@ impl CtfsReader {
                 )));
             }
             // Follow chain pointer at entries[N-1] to the next higher level
-            let chain_ptr = self.read_block_ptr(current_level_block, usable as usize)?;
+            let chain_ptr = self.read_block_ptr(current_level_block, usable as usize, maps)?;
             if chain_ptr == 0 {
                 return Err(CtfsError::Io(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
@@ -212,12 +321,12 @@ impl CtfsReader {
                 )));
             }
             // Path 2a of 3: a mapping block reached through the chain.
-            bound.check(chain_ptr, &format!("chain pointer at level {level} of internal file {name}"))?;
+            bound.check(chain_ptr, || format!("chain pointer at level {level} of internal file {name}"))?;
             current_level_block = chain_ptr;
         }
 
         // Navigate down within this level's block to find the data block
-        self.navigate_to_data_block(current_level_block, level, idx, usable, block_index, name, bound)
+        self.navigate_to_data_block(current_level_block, level, idx, usable, block_index, name, bound, maps)
     }
 
     /// Navigate within a level-k block to find the data block pointer.
@@ -225,7 +334,7 @@ impl CtfsReader {
     /// For level k>1: compute which sub-entry, follow to child, recurse.
     #[allow(clippy::too_many_arguments)]
     fn navigate_to_data_block(
-        &mut self,
+        &self,
         mapping_block: u64,
         level: u32,
         idx_within_level: u64,
@@ -233,9 +342,10 @@ impl CtfsReader {
         block_index: u64,
         name: &str,
         bound: &BlockBound,
+        maps: &mut MappingBlocks,
     ) -> Result<u64, CtfsError> {
         if level == 1 {
-            let ptr = self.read_block_ptr(mapping_block, idx_within_level as usize)?;
+            let ptr = self.read_block_ptr(mapping_block, idx_within_level as usize, maps)?;
             if ptr == 0 {
                 return Err(CtfsError::Io(std::io::Error::new(
                     std::io::ErrorKind::InvalidData,
@@ -247,7 +357,7 @@ impl CtfsReader {
             // whose last data block landed in the partial region was served
             // successfully out of bytes the container does not own. Check the
             // block NUMBER, before any of its bytes are touched.
-            bound.check(ptr, &format!("data block {block_index} of internal file {name}"))?;
+            bound.check(ptr, || format!("data block {block_index} of internal file {name}"))?;
             return Ok(ptr);
         }
 
@@ -255,7 +365,7 @@ impl CtfsReader {
         let entry_idx = idx_within_level / sub_cap;
         let sub_idx = idx_within_level % sub_cap;
 
-        let child_block = self.read_block_ptr(mapping_block, entry_idx as usize)?;
+        let child_block = self.read_block_ptr(mapping_block, entry_idx as usize, maps)?;
         if child_block == 0 {
             return Err(CtfsError::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
@@ -263,17 +373,35 @@ impl CtfsReader {
             )));
         }
         // Path 2b of 3: a mapping block reached by descending the hierarchy.
-        bound.check(child_block, &format!("child block pointer at level {level} of internal file {name}"))?;
+        bound.check(child_block, || format!("child block pointer at level {level} of internal file {name}"))?;
 
-        self.navigate_to_data_block(child_block, level - 1, sub_idx, usable, block_index, name, bound)
+        self.navigate_to_data_block(child_block, level - 1, sub_idx, usable, block_index, name, bound, maps)
     }
 
     /// Read a u64 pointer at a given entry index within a mapping block.
-    fn read_block_ptr(&mut self, block_num: u64, index: usize) -> Result<u64, CtfsError> {
-        let offset = block_num * self.block_size as u64 + (index * 8) as u64;
-        self.file.seek(SeekFrom::Start(offset))?;
+    /// From a file, the whole mapping block is read once into `maps`.
+    fn read_block_ptr(&self, block_num: u64, index: usize, maps: &mut MappingBlocks) -> Result<u64, CtfsError> {
+        let bs = self.block_size as usize;
+        let at = index * 8;
         let mut buf = [0u8; 8];
-        self.file.read_exact(&mut buf)?;
+        match &self.source {
+            Source::Bytes(_) => self.source.read_exact_at(&mut buf, block_num * bs as u64 + at as u64)?,
+            Source::File(_) => {
+                let slot = match maps.blocks.iter().position(|(b, _)| *b == block_num) {
+                    Some(slot) => slot,
+                    None => {
+                        let mut block = vec![0u8; bs];
+                        self.source.read_exact_at(&mut block, block_num * bs as u64)?;
+                        if maps.blocks.len() == MAPPING_BLOCKS_KEPT {
+                            maps.blocks.remove(0);
+                        }
+                        maps.blocks.push((block_num, block));
+                        maps.blocks.len() - 1
+                    }
+                };
+                buf.copy_from_slice(&maps.blocks[slot].1[at..at + 8]);
+            }
+        }
         Ok(u64::from_le_bytes(buf))
     }
 

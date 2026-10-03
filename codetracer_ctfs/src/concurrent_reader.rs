@@ -197,7 +197,7 @@ impl ConcurrentCtfsReader {
         let mut level = 1u32;
 
         // Path 1 of 3: the entry's mapping root.
-        bound.check_mapping_root(current_level_block, &format!("mapping root block of internal file {name}"))?;
+        bound.check_mapping_root(current_level_block, || format!("mapping root block of internal file {name}"))?;
 
         loop {
             let cap = level_capacity(usable, level);
@@ -220,7 +220,7 @@ impl ConcurrentCtfsReader {
                 )));
             }
             // Path 2a of 3: a mapping block reached through the chain.
-            bound.check(chain_ptr, &format!("chain pointer at level {level} of internal file {name}"))?;
+            bound.check(chain_ptr, || format!("chain pointer at level {level} of internal file {name}"))?;
             current_level_block = chain_ptr;
         }
 
@@ -252,7 +252,7 @@ impl ConcurrentCtfsReader {
             // bytes the container does not own — and before `pread_exact`, out
             // of a zero-filled buffer when those bytes were not there at all.
             // Check the block NUMBER, before any of its bytes are touched.
-            bound.check(ptr, &format!("data block {block_index} of internal file {name}"))?;
+            bound.check(ptr, || format!("data block {block_index} of internal file {name}"))?;
             return Ok(ptr);
         }
 
@@ -268,7 +268,7 @@ impl ConcurrentCtfsReader {
             )));
         }
         // Path 2b of 3: a mapping block reached by descending the hierarchy.
-        bound.check(child_block, &format!("child block pointer at level {level} of internal file {name}"))?;
+        bound.check(child_block, || format!("child block pointer at level {level} of internal file {name}"))?;
 
         self.navigate_to_data_block(child_block, level - 1, sub_idx, usable, block_index, name, bound)
     }

@@ -200,6 +200,12 @@ pub struct CtfsTraceWriter {
     output: CtfsOutput,
     /// The finished container, when `output` is [`CtfsOutput::Memory`].
     container_bytes: Option<Vec<u8>>,
+    /// The `.ct` file being written, when `output` is [`CtfsOutput::File`].
+    ct_path: Option<std::path::PathBuf>,
+    /// The raw-byte threshold under which the finished container is
+    /// converted to the compact profile; `0` writes the full profile always.
+    /// See [`with_compact_threshold`](CtfsTraceWriter::with_compact_threshold).
+    compact_threshold: u64,
     /// Overrides the `recording_id` that would otherwise be minted
     /// when `meta.dat` is written. See
     /// [`set_recording_id`](CtfsTraceWriter::set_recording_id).
@@ -470,6 +476,8 @@ impl CtfsTraceWriter {
             events_handle: None,
             output: CtfsOutput::File,
             container_bytes: None,
+            ct_path: None,
+            compact_threshold: 0,
             recording_id: None,
             serialization_format: format,
             encoder: None,
@@ -1017,6 +1025,36 @@ impl CtfsTraceWriter {
         self.output
     }
 
+    /// Choose the container profile at close (`ctfs-container.md` §1e, §1f).
+    ///
+    /// The writer always records the full profile, streamed as it goes. With
+    /// a non-zero `raw_bytes`, finishing the trace then converts the finished
+    /// container: when the members of a compact container of it -- every zstd
+    /// frame inflated -- total fewer than `raw_bytes` bytes, the compact
+    /// container replaces the full one (in the file, through a sibling
+    /// temporary and a rename, or in the in-memory bytes). `0`, the default,
+    /// writes the full profile always. The Nim writer's
+    /// `trace_writer_set_compact_threshold` makes the same choice, and the two
+    /// writers' compact containers are byte-identical.
+    /// [`compact_profile::DEFAULT_RAW_BYTE_THRESHOLD`](crate::compact_profile::DEFAULT_RAW_BYTE_THRESHOLD)
+    /// is §1e's recommended figure.
+    pub fn with_compact_threshold(mut self, raw_bytes: u64) -> Self {
+        self.compact_threshold = raw_bytes;
+        self
+    }
+
+    /// [`with_compact_threshold`](Self::with_compact_threshold) on a writer
+    /// already built. May be called at any time before the trace is finished.
+    pub fn set_compact_threshold(&mut self, raw_bytes: u64) {
+        self.compact_threshold = raw_bytes;
+    }
+
+    /// The raw-byte threshold the profile is chosen by; `0` when the full
+    /// profile is always written.
+    pub fn compact_threshold(&self) -> u64 {
+        self.compact_threshold
+    }
+
     /// Take the finished container bytes.
     ///
     /// Returns `Some` only for an in-memory writer whose
@@ -1030,6 +1068,41 @@ impl CtfsTraceWriter {
     /// Borrow the finished container bytes without consuming them.
     pub fn container_bytes(&self) -> Option<&[u8]> {
         self.container_bytes.as_deref()
+    }
+
+    /// Replace the finished full container with its compact one when the
+    /// compact members total fewer than the threshold's raw bytes
+    /// (`ctfs-container.md` §1e). A file is replaced through a sibling
+    /// temporary and a rename, so it holds the full container or the compact
+    /// one and never a partial write.
+    fn choose_profile(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        use crate::compact_profile::select_profile;
+        let choosing = |e: String| format!("choosing the container profile: {e}");
+        match self.output {
+            CtfsOutput::Memory => {
+                if let Some(full) = self.container_bytes.take() {
+                    let (_, chosen, _) = select_profile(full, self.compact_threshold).map_err(choosing)?;
+                    self.container_bytes = Some(chosen);
+                }
+            }
+            CtfsOutput::File => {
+                let Some(ct_path) = self.ct_path.clone() else {
+                    return Ok(());
+                };
+                let full = std::fs::read(&ct_path)?;
+                let (profile, chosen, _) = select_profile(full, self.compact_threshold).map_err(choosing)?;
+                if profile == codetracer_ctfs::compact::Profile::Compact {
+                    let mut tmp = ct_path.clone().into_os_string();
+                    tmp.push(".compact.tmp");
+                    let tmp = std::path::PathBuf::from(tmp);
+                    if let Err(e) = std::fs::write(&tmp, &chosen).and_then(|_| std::fs::rename(&tmp, &ct_path)) {
+                        let _ = std::fs::remove_file(&tmp);
+                        return Err(format!("replacing {} with its compact container: {e}", ct_path.display()).into());
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Pin the `recording_id` stamped into `meta.json` and `meta.dat`.
@@ -1772,9 +1845,15 @@ impl TraceWriter for CtfsTraceWriter {
             );
         }
 
+        self.ct_path = None;
         let writer = match self.output {
             // Create .ct file at path (replace any existing extension)
-            CtfsOutput::File => CtfsWriter::create(&path.with_extension("ct"), 4096, 31)?,
+            CtfsOutput::File => {
+                let ct_path = path.with_extension("ct");
+                let writer = CtfsWriter::create(&ct_path, 4096, 31)?;
+                self.ct_path = Some(ct_path);
+                writer
+            }
             CtfsOutput::Memory => CtfsWriter::create_in_memory(4096, 31, codetracer_ctfs::CompressionMethod::None)?,
         };
         self.container_bytes = None;
@@ -1957,6 +2036,9 @@ impl TraceWriter for CtfsTraceWriter {
             match self.output {
                 CtfsOutput::File => writer.close()?,
                 CtfsOutput::Memory => self.container_bytes = Some(writer.finish_to_bytes()?),
+            }
+            if self.compact_threshold > 0 {
+                self.choose_profile()?;
             }
         }
 

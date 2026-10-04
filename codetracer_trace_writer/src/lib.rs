@@ -11,6 +11,9 @@ mod cbor_zstd_writer;
 
 pub mod ctfs_writer;
 
+/// The compact profile of a finished container, chosen at close.
+pub mod compact_profile;
+
 /// A Chunked Compressed Table written as its records arrive.
 pub mod chunk_sink;
 

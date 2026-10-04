@@ -241,11 +241,30 @@ fn both_refuse(path: &Path) -> [String; 2] {
     [a.to_string(), b.to_string()]
 }
 
+/// Version 6 is read by `CtfsReader` (`compact_profile.rs`), and not by the
+/// concurrent reader or the appending writer, which work on containers being
+/// written, and every writer writes version 5.
 #[test]
 fn readers_refuse_every_version_but_5_by_name() {
     let dir = tempfile::tempdir().unwrap();
     let (p, c) = one_small_member(dir.path());
-    for v in [1u8, 2, 3, 4, 6, 255] {
+    let mut relabelled = c.clone();
+    relabelled[5] = 6;
+    std::fs::write(&p, &relabelled).unwrap();
+    for msg in [
+        ConcurrentCtfsReader::open(&p)
+            .err()
+            .expect("ConcurrentCtfsReader must refuse")
+            .to_string(),
+        CtfsWriter::open_append(&p).err().expect("open_append must refuse").to_string(),
+    ] {
+        assert!(msg.contains("version 6") && msg.contains('5'), "{msg}");
+    }
+    // A version-5 body under a version-6 stamp is not a version-6 container:
+    // its byte 16 is read as the profile, and refused by value.
+    let msg = CtfsReader::open(&p).err().expect("CtfsReader must refuse").to_string();
+    assert!(msg.contains("profile"), "{msg}");
+    for v in [1u8, 2, 3, 4, 7, 255] {
         let mut old = c.clone();
         old[5] = v;
         std::fs::write(&p, &old).unwrap();

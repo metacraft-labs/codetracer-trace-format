@@ -130,6 +130,16 @@ impl Header {
     }
 
     pub fn read_from<R: Read>(r: &mut R) -> Result<Self, CtfsError> {
+        Self::read_versions(r, &[VERSION])
+    }
+
+    /// [`Self::read_from`], also accepting version 6, whose eight further
+    /// header bytes the caller reads (`crate::compact`).
+    pub(crate) fn read_from_any_version<R: Read>(r: &mut R) -> Result<Self, CtfsError> {
+        Self::read_versions(r, &[VERSION, crate::compact::VERSION_6])
+    }
+
+    fn read_versions<R: Read>(r: &mut R, versions: &[u8]) -> Result<Self, CtfsError> {
         let mut id = [0u8; 5];
         r.read_exact(&mut id)?;
         if id != MAGIC {
@@ -137,7 +147,7 @@ impl Header {
         }
         let mut ver = [0u8; 1];
         r.read_exact(&mut ver)?;
-        if ver[0] != VERSION {
+        if !versions.contains(&ver[0]) {
             return Err(CtfsError::InvalidVersion(ver[0]));
         }
         let mut tag_bytes = [0u8; 2];

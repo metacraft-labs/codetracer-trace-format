@@ -5,8 +5,12 @@ use std::sync::Arc;
 
 use crate::base40::base40_decode;
 use crate::block_bounds::BlockBound;
+use crate::compact::{self, Profile, WholeFileCompression};
 use crate::file_entry::{FileEntry, MemberLayout};
 use crate::header::{CompressionMethod, EncryptionMethod, ExtendedHeader, Header};
+
+/// A version-5 header with its extended header: 16 bytes.
+const HEADER_SIZE_V5: usize = crate::header::HEADER_SIZE + crate::header::EXTENDED_HEADER_SIZE;
 use crate::member::MemberBytes;
 use crate::pread_compat::pread_exact;
 use crate::CtfsError;
@@ -89,6 +93,11 @@ pub struct CtfsReader {
     source: Source,
     block_size: u32,
     entries: Vec<FileEntry>,
+    /// For a compact-profile container, the image offset of each entry's
+    /// bytes (`entries[i].size` of them); `None` for a full-profile one.
+    compact_offsets: Option<Vec<u64>>,
+    profile: Profile,
+    whole_file_compression: WholeFileCompression,
     compression: CompressionMethod,
     encryption: EncryptionMethod,
 }
@@ -102,15 +111,35 @@ fn level_capacity(usable: u64, level: u32) -> u64 {
 }
 
 impl CtfsReader {
-    /// Open an existing CTFS container. Refuses every version but
-    /// [`crate::header::VERSION`], naming the one it found.
+    /// Open an existing CTFS container: version 5, or version 6 in either
+    /// profile (`ctfs-container.md` §1a). Refuses every other version, and
+    /// every version-6 header field it does not implement, naming the value
+    /// it found (§1c).
+    ///
+    /// A full-profile container stored as-is is read from the file as it is
+    /// asked. A compact one, and one stored under a whole-file scheme, is read
+    /// whole and opened as by [`from_bytes`](Self::from_bytes): the compact
+    /// profile is for a container that is resident before its first query,
+    /// and a whole-file scheme has to be undone before any offset holds.
     pub fn open(path: &Path) -> Result<Self, CtfsError> {
         let mut file = File::open(path)?;
-        let (header, ext_header, entries) = Self::read_root(&mut std::io::BufReader::new(&mut file))?;
+        let mut head = Vec::with_capacity(compact::V6_HEADER_SIZE);
+        (&mut file).take(compact::V6_HEADER_SIZE as u64).read_to_end(&mut head)?;
+        let v6 = compact::read_v6_header(&head)?;
+        if matches!(v6, Some((profile, compression)) if profile == Profile::Compact || compression != WholeFileCompression::None) {
+            return Self::from_bytes(std::fs::read(path)?);
+        }
+        let header_size = if v6.is_some() { compact::V6_HEADER_SIZE } else { HEADER_SIZE_V5 };
+        let mut r = std::io::BufReader::new(&mut file);
+        std::io::Seek::seek(&mut r, std::io::SeekFrom::Start(0))?;
+        let (header, ext_header, entries) = Self::read_root(&mut r, header_size)?;
         Ok(CtfsReader {
             source: Source::File(file),
             block_size: ext_header.block_size,
             entries,
+            compact_offsets: None,
+            profile: Profile::Full,
+            whole_file_compression: WholeFileCompression::None,
             compression: header.compression,
             encryption: header.encryption,
         })
@@ -120,27 +149,83 @@ impl CtfsReader {
     /// makes is made, and members read back exactly as they do from a file:
     /// the bound on block numbers is the length of `bytes`.
     ///
+    /// A version-6 container is read in the profile it declares; one stored
+    /// under a whole-file scheme is reconstructed first, as
+    /// `header || decompress(rest)` (`ctfs-container.md` §1a). A compact
+    /// container's directory is checked as §1d requires before any member is
+    /// served.
+    ///
     /// [`open`]: Self::open
     pub fn from_bytes(bytes: Vec<u8>) -> Result<Self, CtfsError> {
-        let (header, ext_header, entries) = Self::read_root(&mut bytes.as_slice())?;
+        let Some((profile, compression)) = compact::read_v6_header(&bytes)? else {
+            return Self::full_from_bytes(bytes, HEADER_SIZE_V5, WholeFileCompression::None);
+        };
+        let image = compact::reconstruct_image(bytes)?;
+        match profile {
+            Profile::Full => Self::full_from_bytes(image, compact::V6_HEADER_SIZE, compression),
+            Profile::Compact => {
+                let directory = compact::read_compact_directory(&image, true)?;
+                let entries = directory
+                    .iter()
+                    .map(|e| FileEntry {
+                        size: e.length,
+                        map_block: 0,
+                        name: e.encoded_name,
+                    })
+                    .collect();
+                Ok(CtfsReader {
+                    encryption: EncryptionMethod::from_byte(image[6]),
+                    source: Source::Bytes(Arc::new(image)),
+                    block_size: 0,
+                    entries,
+                    compact_offsets: Some(directory.iter().map(|e| e.offset).collect()),
+                    profile,
+                    whole_file_compression: compression,
+                    compression: CompressionMethod::None,
+                })
+            }
+        }
+    }
+
+    fn full_from_bytes(image: Vec<u8>, header_size: usize, whole_file_compression: WholeFileCompression) -> Result<Self, CtfsError> {
+        let (header, ext_header, entries) = Self::read_root(&mut image.as_slice(), header_size)?;
         Ok(CtfsReader {
-            source: Source::Bytes(Arc::new(bytes)),
+            source: Source::Bytes(Arc::new(image)),
             block_size: ext_header.block_size,
             entries,
+            compact_offsets: None,
+            profile: Profile::Full,
+            whole_file_compression,
             compression: header.compression,
             encryption: header.encryption,
         })
     }
 
-    /// The header, the extended header and the root directory.
-    fn read_root(r: &mut impl Read) -> Result<(Header, ExtendedHeader, Vec<FileEntry>), CtfsError> {
-        let header = Header::read_from(r)?;
+    /// The header, the extended header and the root directory of a
+    /// full-profile container whose header is `header_size` bytes: 16
+    /// through version 5, 24 at version 6, whose last eight bytes the caller
+    /// has already checked.
+    fn read_root(r: &mut impl Read, header_size: usize) -> Result<(Header, ExtendedHeader, Vec<FileEntry>), CtfsError> {
+        let header = Header::read_from_any_version(r)?;
         let ext_header = ExtendedHeader::read_from(r)?;
+        std::io::copy(&mut r.take((header_size - HEADER_SIZE_V5) as u64), &mut std::io::sink())?;
         let mut entries = Vec::new();
         for _ in 0..ext_header.max_root_entries {
             entries.push(FileEntry::read_from(r)?);
         }
         Ok((header, ext_header, entries))
+    }
+
+    /// The body layout the container declares: [`Profile::Full`] for every
+    /// version-5 container.
+    pub fn profile(&self) -> Profile {
+        self.profile
+    }
+
+    /// The whole-file scheme the container was stored under. The reader holds
+    /// the reconstructed image either way.
+    pub fn whole_file_compression(&self) -> WholeFileCompression {
+        self.whole_file_compression
     }
 
     /// Get the compression method from the container header.
@@ -153,7 +238,8 @@ impl CtfsReader {
         self.encryption
     }
 
-    /// Get the block size of this container.
+    /// Get the block size of this container: `0` for a compact one, which
+    /// has no blocks.
     pub fn block_size(&self) -> u32 {
         self.block_size
     }
@@ -215,10 +301,15 @@ impl CtfsReader {
     /// A member's size and its bytes as `(container offset, length)` runs of
     /// physically consecutive blocks, in member order.
     fn member_runs(&mut self, name: &str) -> Result<(usize, Vec<(u64, usize)>), CtfsError> {
-        let entry = *self.find_entry(name).ok_or_else(|| CtfsError::FileNotFound(name.to_string()))?;
+        let index = self.find_index(name).ok_or_else(|| CtfsError::FileNotFound(name.to_string()))?;
+        let entry = self.entries[index];
 
         if entry.size == 0 {
             return Ok((0, Vec::new()));
+        }
+        if let Some(offsets) = &self.compact_offsets {
+            // The directory was checked at open: the member lies in the image.
+            return Ok((entry.size as usize, vec![(offsets[index], entry.size as usize)]));
         }
 
         let bound = BlockBound::with_len(self.source.len()?, self.block_size);
@@ -258,10 +349,16 @@ impl CtfsReader {
     /// Returns the number of bytes actually read (may be less than buf.len()
     /// if the read extends past the end of the file).
     pub fn read_at(&mut self, name: &str, offset: u64, buf: &mut [u8]) -> Result<usize, CtfsError> {
-        let entry = *self.find_entry(name).ok_or_else(|| CtfsError::FileNotFound(name.to_string()))?;
+        let index = self.find_index(name).ok_or_else(|| CtfsError::FileNotFound(name.to_string()))?;
+        let entry = self.entries[index];
 
         if offset >= entry.size {
             return Ok(0);
+        }
+        if let Some(offsets) = &self.compact_offsets {
+            let n = buf.len().min((entry.size - offset) as usize);
+            self.source.read_exact_at(&mut buf[..n], offsets[index] + offset)?;
+            return Ok(n);
         }
 
         let bound = BlockBound::with_len(self.source.len()?, self.block_size);
@@ -453,7 +550,28 @@ impl CtfsReader {
     }
 
     fn find_entry(&self, name: &str) -> Option<&FileEntry> {
+        self.find_index(name).map(|i| &self.entries[i])
+    }
+
+    fn find_index(&self, name: &str) -> Option<usize> {
         let encoded = crate::base40::base40_encode(name).ok()?;
-        self.entries.iter().find(|e| e.name == encoded && !e.is_empty())
+        self.entries.iter().position(|e| e.name == encoded && !e.is_empty())
+    }
+
+    /// Every member's name and bytes, in the order the container lists them:
+    /// the member set a compact container of this recording carries
+    /// (`ctfs-container.md` §1d, "Member names are carried unchanged"). Pass
+    /// it to [`compact::encode_compact_container`] to lay the container out
+    /// in the compact profile. Payloads are as stored: a member whose format
+    /// compresses itself is copied compressed.
+    pub fn members(&mut self) -> Result<Vec<(String, Vec<u8>)>, CtfsError> {
+        let names = self.list_files();
+        names
+            .into_iter()
+            .map(|name| {
+                let bytes = self.read_file(&name)?;
+                Ok((name, bytes))
+            })
+            .collect()
     }
 }

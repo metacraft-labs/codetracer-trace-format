@@ -17,6 +17,7 @@ pub mod base40;
 pub mod block_alloc;
 pub(crate) mod block_bounds;
 pub mod chunked;
+pub mod compact;
 pub mod concurrent_reader;
 pub mod concurrent_writer;
 pub mod file_entry;
@@ -73,9 +74,10 @@ impl fmt::Display for CtfsError {
             CtfsError::InvalidMagic => write!(f, "invalid CTFS magic bytes"),
             CtfsError::InvalidVersion(v) => write!(
                 f,
-                "unsupported CTFS container version {v}: this reader reads version {} only, and a container of any other \
-                 version is re-recorded rather than read (ctfs-container.md §2, \"Older versions are refused\")",
-                header::VERSION
+                "unsupported CTFS container version {v}: this reader reads version {} and version {}, and a container of \
+                 any other version is re-recorded rather than read (ctfs-container.md §2, \"Older versions are refused\")",
+                header::VERSION,
+                compact::VERSION_6
             ),
             CtfsError::InvalidBlockSize(s) => write!(f, "invalid block size: {}", s),
             CtfsError::FileNotFound(n) => write!(f, "file not found: {}", n),

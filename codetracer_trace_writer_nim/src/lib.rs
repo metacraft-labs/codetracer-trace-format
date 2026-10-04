@@ -40,6 +40,7 @@ extern "C" {
     fn trace_writer_start(handle: *mut std::ffi::c_void, path: *const std::os::raw::c_char, line: i64);
     fn trace_writer_set_workdir(handle: *mut std::ffi::c_void, workdir: *const std::os::raw::c_char);
     fn trace_writer_set_recording_id(handle: *mut std::ffi::c_void, recording_id: *const std::os::raw::c_char) -> i32;
+    fn trace_writer_set_compact_threshold(handle: *mut std::ffi::c_void, raw_bytes: u64) -> i32;
     fn trace_writer_set_args(handle: *mut std::ffi::c_void, args: *const *const u8, arg_lens: *const usize, args_count: usize);
     fn trace_writer_register_step(handle: *mut std::ffi::c_void, path: *const std::os::raw::c_char, line: i64);
 
@@ -1741,6 +1742,15 @@ impl NimTraceWriter {
             return Err(last_error().into());
         }
         Ok(())
+    }
+
+    /// Choose the container profile at close (`ctfs-container.md` §1e):
+    /// compact when the compact container's members -- every zstd frame
+    /// inflated -- total fewer than `raw_bytes`, full otherwise; `0` writes
+    /// the full profile always. Refused for a writer that is not writing a
+    /// CTFS container.
+    pub fn set_compact_threshold(&mut self, raw_bytes: u64) -> Result<(), Box<dyn Error>> {
+        check_result(unsafe { trace_writer_set_compact_threshold(self.handle, raw_bytes) })
     }
 
     pub fn set_workdir(&mut self, workdir: &Path) {

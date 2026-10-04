@@ -21,6 +21,7 @@ pub mod seekable_reader;
 pub mod ctfs_reader;
 
 mod chunk_codec;
+pub use chunk_codec::ChunkForm;
 
 pub mod call_stream_reader;
 

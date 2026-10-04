@@ -149,9 +149,46 @@ pub fn pledge_frame_content_size(frame: Vec<u8>, content_size: u64) -> Result<Ve
     Ok(out)
 }
 
+/// The content size a zstd frame declares in its header, if it declares one
+/// (RFC 8878 §3.1.1.1). Read from the header alone, so it is the same under
+/// either zstd backend.
+pub fn declared_content_size(frame: &[u8]) -> Option<u64> {
+    if frame.len() < 5 || frame[0..4] != [0x28, 0xb5, 0x2f, 0xfd] {
+        return None;
+    }
+    let fhd = frame[4];
+    let single_segment = fhd & 0x20 != 0;
+    let fcs_size = match fhd >> 6 {
+        0 if single_segment => 1,
+        0 => return None,
+        1 => 2,
+        2 => 4,
+        _ => 8,
+    };
+    let dict_size = [0usize, 1, 2, 4][(fhd & 3) as usize];
+    let at = 5 + usize::from(!single_segment) + dict_size;
+    let field = frame.get(at..at + fcs_size)?;
+    let mut buf = [0u8; 8];
+    buf[..fcs_size].copy_from_slice(field);
+    let v = u64::from_le_bytes(buf);
+    Some(if fcs_size == 2 { v + 256 } else { v })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_declared_content_size_is_read_from_every_field_width() {
+        for len in [0usize, 1, 255, 256, 65_791, 65_792, 100_000] {
+            let raw = vec![7u8; len];
+            let frame = compress_pledged(&raw, 3, "test.dat").expect("compress");
+            assert_eq!(declared_content_size(&frame), Some(len as u64), "len {len}");
+        }
+        let unpledged = zstd::encode_all(std::io::Cursor::new(&[1u8; 1000][..]), 3).expect("encode_all");
+        assert_eq!(declared_content_size(&unpledged), None);
+        assert_eq!(declared_content_size(b"not a frame"), None);
+    }
 
     /// The property the whole module exists for, with its negative control
     /// beside it: the helper pledges, and the call it replaced does not. Without

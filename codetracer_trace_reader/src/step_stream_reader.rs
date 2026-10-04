@@ -26,6 +26,7 @@
 //! AbsoluteStep is refused, naming the chunk: resolving it against `0`, or
 //! against the previous chunk, would invent positions nobody recorded.
 
+use crate::ChunkForm;
 use codetracer_ctfs::{CtfsReader, MemberBytes};
 use codetracer_trace_writer::meta_dat::{FLAG_EXT_HAS_SOURCE_RELOAD, read_meta_dat_ext_flags};
 use codetracer_trace_writer::step_stream::{StepStreamRecord, decode_record_declared};
@@ -198,6 +199,8 @@ pub struct StepStreamReader {
     /// Whether `meta.dat` declares `FLAG_EXT_HAS_SOURCE_RELOAD`, which is what
     /// admits tag 8 to this stream.
     allow_source_reload: bool,
+    /// Whether a chunk is a frame to inflate or its content.
+    form: ChunkForm,
 }
 
 /// Whether a `meta.dat` declares source reload markers. An absent `meta.dat`
@@ -222,6 +225,12 @@ impl StepStreamReader {
     /// [`Self::from_files`] over a `steps.dat` the reader shares with its
     /// container rather than owns.
     pub fn from_member(meta: &[u8], dat: MemberBytes, idx: &[u8]) -> Result<Option<StepStreamReader>, String> {
+        Self::from_member_as(meta, dat, idx, ChunkForm::Framed)
+    }
+
+    /// [`Self::from_member`] over chunks stored in `form`: the form of the
+    /// container the members came from ([`ChunkForm::of`]).
+    pub fn from_member_as(meta: &[u8], dat: MemberBytes, idx: &[u8], form: ChunkForm) -> Result<Option<StepStreamReader>, String> {
         // Existence is answered by STRUCTURAL PRESENCE — the caller resolved
         // `steps.dat` / `steps.idx` by `findFile` + `FileEntry.Size` and handed
         // their bytes here. The `meta.dat` `has_step_stream` hint bit (bit 9) is
@@ -239,6 +248,7 @@ impl StepStreamReader {
             cached_chunk: None,
             chunk: StepChunk::default(),
             allow_source_reload,
+            form,
         };
 
         // Compute the total record count: all chunks but the last hold
@@ -279,7 +289,8 @@ impl StepStreamReader {
             .get(start, end)
             .ok_or_else(|| "steps.dat: chunk offsets out of range".to_string())?;
         self.cached_chunk = None;
-        codetracer_ctfs::zstd_compat::decode_into(&frame, &mut self.chunk.raw)
+        self.form
+            .content_into(&frame, &mut self.chunk.raw)
             .map_err(|e| format!("steps.dat chunk {chunk_number}: steps.dat: zstd decode failed: {e}"))?;
         self.chunk.reset();
         self.cached_chunk = Some(chunk_number);
@@ -299,7 +310,7 @@ impl StepStreamReader {
             .read_file("steps.idx")
             .map_err(|e| format!("steps.idx missing despite steps.dat presence: {e}"))?;
         let meta = reader.read_file("meta.dat").unwrap_or_default();
-        StepStreamReader::from_member(&meta, dat, &idx)
+        StepStreamReader::from_member_as(&meta, dat, &idx, ChunkForm::of(reader))
     }
 
     /// Total number of execution-stream records in the stream.

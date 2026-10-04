@@ -159,6 +159,24 @@ pub fn compress_image(image: &[u8], level: i32) -> Result<Vec<u8>, CtfsError> {
     Ok(stored)
 }
 
+/// Append the content of the one zstd frame `frame` to `out`: how a framed
+/// member's chunk is stored in a compact container (`ctfs-container.md` §1f).
+/// The frame must declare its content size, as every frame this format writes
+/// does, and decode to exactly that many bytes; `what` names the chunk in the
+/// refusal.
+pub fn append_frame_content(frame: &[u8], what: &str, out: &mut Vec<u8>) -> Result<(), String> {
+    if frame.is_empty() {
+        return Err(format!("{what}: an empty frame"));
+    }
+    let declared = crate::zstd_frame::declared_content_size(frame).ok_or_else(|| format!("{what}: the frame does not declare its content size"))?;
+    let content = crate::zstd_compat::decode_all(frame).map_err(|e| format!("{what}: the frame does not decode: {e}"))?;
+    if content.len() as u64 != declared {
+        return Err(format!("{what}: the frame does not decode to its declared {declared} bytes"));
+    }
+    out.extend_from_slice(&content);
+    Ok(())
+}
+
 /// Whether a directory name word is a name §3's packing can produce: non-zero,
 /// below `40^12`, and with no padding digit before a character (§1d check 5).
 pub fn name_is_well_formed(encoded: u64) -> bool {

@@ -22,6 +22,7 @@
 
 use std::collections::BTreeMap;
 
+use crate::ChunkForm;
 use codetracer_ctfs::{CtfsReader, MemberBytes};
 use codetracer_trace_writer::step_map::{STEP_MAP_CHUNK_ENTRY_SIZE, STEP_MAP_FILE_NAME, STEP_MAP_HEADER_SIZE, STEP_MAP_MAGIC, STEP_MAP_VERSION};
 
@@ -50,6 +51,8 @@ pub struct StepMapReader {
     /// Each line of the cached chunk, in key order, with the offset in `raw`
     /// of its `count` field.
     lines: Vec<((u64, u32), usize)>,
+    /// Whether a chunk is a frame to inflate or its content.
+    form: ChunkForm,
 }
 
 fn u32_at(b: &[u8], o: usize) -> u32 {
@@ -92,40 +95,22 @@ fn varint_long(b: &[u8], pos: &mut usize, chunk: usize) -> Result<u64, String> {
     }
 }
 
-/// The content size a zstd frame declares in its header, if it declares one
-/// (RFC 8878 §3.1.1.1).
-fn declared_content_size(frame: &[u8]) -> Option<u64> {
-    if frame.len() < 5 || frame[0..4] != [0x28, 0xb5, 0x2f, 0xfd] {
-        return None;
-    }
-    let fhd = frame[4];
-    let single_segment = fhd & 0x20 != 0;
-    let fcs_size = match fhd >> 6 {
-        0 if single_segment => 1,
-        0 => return None,
-        1 => 2,
-        2 => 4,
-        _ => 8,
-    };
-    let dict_size = [0usize, 1, 2, 4][(fhd & 3) as usize];
-    let at = 5 + usize::from(!single_segment) + dict_size;
-    let field = frame.get(at..at + fcs_size)?;
-    let mut buf = [0u8; 8];
-    buf[..fcs_size].copy_from_slice(field);
-    let v = u64::from_le_bytes(buf);
-    Some(if fcs_size == 2 { v + 256 } else { v })
-}
-
-/// Inflate chunk `c` of a member into `raw`, checking it decodes to the size
-/// its frame declares.
-fn inflate(bytes: &MemberBytes, chunks: &[Chunk], c: usize, raw: &mut Vec<u8>) -> Result<(), String> {
+/// Put chunk `c` of a member in `raw`: its frame inflated, checking it decodes
+/// to the size the frame declares, or its content as it is stored.
+fn inflate(bytes: &MemberBytes, chunks: &[Chunk], c: usize, form: ChunkForm, raw: &mut Vec<u8>) -> Result<(), String> {
     let name = STEP_MAP_FILE_NAME;
     let chunk = chunks[c];
     let frame = bytes
         .get(chunk.start, chunk.end)
         .ok_or_else(|| format!("{name}: chunk {c}'s frame lies past the end of the member"))?;
     let frame = frame.as_ref();
-    let declared = declared_content_size(frame).ok_or_else(|| format!("{name}: chunk {c}'s frame does not declare its content size"))?;
+    if form == ChunkForm::Stored {
+        raw.clear();
+        raw.extend_from_slice(frame);
+        return Ok(());
+    }
+    let declared = codetracer_ctfs::zstd_frame::declared_content_size(frame)
+        .ok_or_else(|| format!("{name}: chunk {c}'s frame does not declare its content size"))?;
     codetracer_ctfs::zstd_compat::decode_into(frame, raw).map_err(|e| format!("{name}: chunk {c}'s frame does not decode: {e}"))?;
     if raw.len() as u64 != declared {
         return Err(format!(
@@ -147,7 +132,7 @@ impl StepMapReader {
         let bytes = reader
             .read_member(STEP_MAP_FILE_NAME)
             .map_err(|e| format!("{STEP_MAP_FILE_NAME} is present but unreadable: {e}"))?;
-        StepMapReader::from_member(bytes).map(Some)
+        StepMapReader::from_member_as(bytes, ChunkForm::of(reader)).map(Some)
     }
 
     /// Parse a member's header and chunk table. Frames are not inflated here.
@@ -158,6 +143,12 @@ impl StepMapReader {
     /// [`Self::from_bytes`] over a member the reader shares with its
     /// container rather than owns.
     pub fn from_member(member: MemberBytes) -> Result<StepMapReader, String> {
+        StepMapReader::from_member_as(member, ChunkForm::Framed)
+    }
+
+    /// [`Self::from_member`] over chunks stored in `form`: the form of the
+    /// container the member came from ([`ChunkForm::of`]).
+    pub fn from_member_as(member: MemberBytes, form: ChunkForm) -> Result<StepMapReader, String> {
         let name = STEP_MAP_FILE_NAME;
         let len = member.len();
         if len < STEP_MAP_HEADER_SIZE {
@@ -224,6 +215,7 @@ impl StepMapReader {
             cached_chunk: None,
             raw: Vec::new(),
             lines: Vec::new(),
+            form,
         })
     }
 
@@ -256,7 +248,7 @@ impl StepMapReader {
         let mut paths = 0u32;
         let mut raw = Vec::new();
         for c in 0..self.chunks.len() {
-            inflate(&self.bytes, &self.chunks, c, &mut raw)?;
+            inflate(&self.bytes, &self.chunks, c, self.form, &mut raw)?;
             self.each_record(
                 c,
                 &raw,
@@ -313,7 +305,7 @@ impl StepMapReader {
         let c = c - 1;
         if self.cached_chunk != Some(c) {
             self.cached_chunk = None;
-            inflate(&self.bytes, &self.chunks, c, &mut self.raw)?;
+            inflate(&self.bytes, &self.chunks, c, self.form, &mut self.raw)?;
             let mut lines = std::mem::take(&mut self.lines);
             lines.clear();
             let scanned = self.each_record(

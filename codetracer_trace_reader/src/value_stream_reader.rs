@@ -31,6 +31,7 @@
 //! single seekable byte range with one companion index, so they cannot share
 //! one file).
 
+use crate::ChunkForm;
 use codetracer_ctfs::{CtfsReader, MemberBytes};
 use codetracer_trace_writer::value_stream::ValueRecordEntry;
 
@@ -216,6 +217,8 @@ pub struct ValueStreamReader {
     chunk: InflatedChunk,
     /// The chunk `chunk` holds, `None` until the first read.
     cached_chunk: Option<usize>,
+    /// Whether a chunk is a frame to inflate or its content.
+    form: ChunkForm,
 }
 
 impl ValueStreamReader {
@@ -230,7 +233,13 @@ impl ValueStreamReader {
 
     /// [`Self::from_files`] over a `values.dat` the reader shares with its
     /// container rather than owns.
-    pub fn from_member(_meta: &[u8], dat: MemberBytes, idx: &[u8]) -> Result<Option<ValueStreamReader>, String> {
+    pub fn from_member(meta: &[u8], dat: MemberBytes, idx: &[u8]) -> Result<Option<ValueStreamReader>, String> {
+        Self::from_member_as(meta, dat, idx, ChunkForm::Framed)
+    }
+
+    /// [`Self::from_member`] over chunks stored in `form`: the form of the
+    /// container the members came from ([`ChunkForm::of`]).
+    pub fn from_member_as(_meta: &[u8], dat: MemberBytes, idx: &[u8], form: ChunkForm) -> Result<Option<ValueStreamReader>, String> {
         // Existence is STRUCTURAL — the caller resolved `values.dat` / `values.idx`
         // by `findFile` + `FileEntry.Size`. The `has_value_stream` hint bit (bit
         // 10) is NOT consulted (trace-format spec: "Stream-presence flags are a
@@ -248,6 +257,7 @@ impl ValueStreamReader {
                 pos: 0,
             },
             cached_chunk: None,
+            form,
         };
 
         // Compute the total record count: all chunks but the last hold
@@ -282,7 +292,9 @@ impl ValueStreamReader {
                 .get(start, end)
                 .ok_or_else(|| "values.dat: chunk offsets out of range".to_string())?;
             self.cached_chunk = None;
-            codetracer_ctfs::zstd_compat::decode_into(&frame, &mut self.chunk.raw).map_err(|e| format!("values.dat: zstd decode failed: {e}"))?;
+            self.form
+                .content_into(&frame, &mut self.chunk.raw)
+                .map_err(|e| format!("values.dat: zstd decode failed: {e}"))?;
             self.chunk.reset(chunk_number);
             self.cached_chunk = Some(chunk_number);
         }
@@ -302,7 +314,7 @@ impl ValueStreamReader {
             .read_file("values.idx")
             .map_err(|e| format!("values.idx missing despite values.dat presence: {e}"))?;
         let meta = reader.read_file("meta.dat").unwrap_or_default();
-        ValueStreamReader::from_member(&meta, dat, &idx)
+        ValueStreamReader::from_member_as(&meta, dat, &idx, ChunkForm::of(reader))
     }
 
     /// Total number of value records in the stream (equals the step count, by

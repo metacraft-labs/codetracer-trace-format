@@ -13,6 +13,7 @@
 //! `calls.dat`, simply has no call stream — the unified `events.log` call tree
 //! remains the source of truth.
 
+use crate::ChunkForm;
 use codetracer_ctfs::{CtfsReader, MemberBytes};
 use codetracer_trace_writer::call_stream::CallStreamRecord;
 
@@ -124,6 +125,8 @@ pub struct CallStreamReader {
     /// A record is decoded when it is read.
     raw: Vec<u8>,
     frames: Vec<(usize, usize)>,
+    /// Whether a chunk is a frame to inflate or its content.
+    form: ChunkForm,
 }
 
 impl CallStreamReader {
@@ -138,7 +141,13 @@ impl CallStreamReader {
 
     /// [`Self::from_files`] over a `calls.dat` the reader shares with its
     /// container rather than owns.
-    pub fn from_member(_meta: &[u8], dat: MemberBytes, idx: &[u8]) -> Result<Option<CallStreamReader>, String> {
+    pub fn from_member(meta: &[u8], dat: MemberBytes, idx: &[u8]) -> Result<Option<CallStreamReader>, String> {
+        Self::from_member_as(meta, dat, idx, ChunkForm::Framed)
+    }
+
+    /// [`Self::from_member`] over chunks stored in `form`: the form of the
+    /// container the members came from ([`ChunkForm::of`]).
+    pub fn from_member_as(_meta: &[u8], dat: MemberBytes, idx: &[u8], form: ChunkForm) -> Result<Option<CallStreamReader>, String> {
         // Existence is STRUCTURAL — the caller resolved `calls.dat` / `calls.idx`
         // by `findFile` + `FileEntry.Size`. The `has_call_stream` hint bit (bit 8)
         // is NOT consulted (trace-format spec: "Stream-presence flags are a hint,
@@ -152,6 +161,7 @@ impl CallStreamReader {
             cached_chunk: None,
             raw: Vec::new(),
             frames: Vec::new(),
+            form,
         };
 
         // Compute the total record count: all chunks but the last hold
@@ -186,7 +196,9 @@ impl CallStreamReader {
             .get(start, end)
             .ok_or_else(|| "calls.dat: chunk offsets out of range".to_string())?;
         self.cached_chunk = None;
-        codetracer_ctfs::zstd_compat::decode_into(&frame, &mut self.raw).map_err(|e| format!("calls.dat: zstd decode failed: {e}"))?;
+        self.form
+            .content_into(&frame, &mut self.raw)
+            .map_err(|e| format!("calls.dat: zstd decode failed: {e}"))?;
         frame_records(&self.raw, &mut self.frames)?;
         self.cached_chunk = Some(chunk_number);
         Ok(())
@@ -205,7 +217,7 @@ impl CallStreamReader {
             .read_file("calls.idx")
             .map_err(|e| format!("calls.idx missing despite calls.dat presence: {e}"))?;
         let meta = reader.read_file("meta.dat").unwrap_or_default();
-        CallStreamReader::from_member(&meta, dat, &idx)
+        CallStreamReader::from_member_as(&meta, dat, &idx, ChunkForm::of(reader))
     }
 
     /// Total number of call records in the stream.

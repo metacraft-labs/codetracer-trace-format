@@ -21,6 +21,7 @@
 //! `events.idx`, DISTINCT from the legacy combined `events.log`. See the module
 //! docs of `codetracer_trace_writer::event_stream` for the full rationale.
 
+use crate::ChunkForm;
 use codetracer_ctfs::CtfsReader;
 use codetracer_trace_writer::event_stream::IoEventRecord;
 
@@ -83,13 +84,10 @@ fn decode_varint(data: &[u8], pos: &mut usize) -> Result<u64, String> {
     Ok(result)
 }
 
-fn decode_zstd_chunk(compressed: &[u8]) -> Result<Vec<u8>, String> {
-    crate::chunk_codec::inflate("events.dat", compressed)
-}
-
-/// Decompress one chunk and decode all of its length-prefixed I/O event records.
-fn decode_chunk_records(compressed: &[u8], chunk: usize, chunk_size: usize) -> Result<Vec<IoEventRecord>, String> {
-    let raw = decode_zstd_chunk(compressed)?;
+/// Decode all of one chunk's length-prefixed I/O event records, inflating the
+/// chunk first when it is a frame.
+fn decode_chunk_records(stored: &[u8], form: ChunkForm, chunk: usize, chunk_size: usize) -> Result<Vec<IoEventRecord>, String> {
+    let raw = form.content("events.dat", stored)?;
     let mut records = Vec::new();
     let mut pos = 0usize;
     while pos < raw.len() {
@@ -115,6 +113,8 @@ pub struct IoEventStreamReader {
     record_count: u64,
     /// Cache of the most-recently-decompressed chunk: (chunk_number, records).
     cached_chunk: Option<(usize, Vec<IoEventRecord>)>,
+    /// Whether a chunk is a frame to inflate or its content.
+    form: ChunkForm,
 }
 
 impl IoEventStreamReader {
@@ -132,6 +132,7 @@ impl IoEventStreamReader {
             .read_file("events.idx")
             .map_err(|e| format!("events.idx missing despite events.dat presence: {e}"))?;
         let index = EventsIndex::parse(&idx)?;
+        let form = ChunkForm::of(reader);
 
         // Compute the total record count: all chunks but the last hold
         // chunk_size records; the last holds however many records decode out of
@@ -145,7 +146,7 @@ impl IoEventStreamReader {
             if start > end {
                 return Err("events.idx: last chunk offset past end of events.dat".to_string());
             }
-            let last_records = decode_chunk_records(&dat[start..end], last_chunk, index.chunk_size)?.len();
+            let last_records = decode_chunk_records(&dat[start..end], form, last_chunk, index.chunk_size)?.len();
             (last_chunk * index.chunk_size + last_records) as u64
         };
 
@@ -154,6 +155,7 @@ impl IoEventStreamReader {
             dat,
             record_count,
             cached_chunk: None,
+            form,
         }))
     }
 
@@ -191,7 +193,7 @@ impl IoEventStreamReader {
             if start > end || end > self.dat.len() {
                 return Err("events.dat: chunk offsets out of range".to_string());
             }
-            let records = decode_chunk_records(&self.dat[start..end], chunk_number, self.index.chunk_size)?;
+            let records = decode_chunk_records(&self.dat[start..end], self.form, chunk_number, self.index.chunk_size)?;
             self.cached_chunk = Some((chunk_number, records));
         }
         Ok(())

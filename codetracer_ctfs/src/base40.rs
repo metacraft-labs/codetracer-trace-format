@@ -35,6 +35,35 @@ pub fn base40_encode(name: &str) -> Result<u64, CtfsError> {
     Ok(result)
 }
 
+/// Why `name` cannot be a member name, or `None` when it can: the refusal a
+/// writer and a reader give, naming the name and the rule it breaks
+/// (`ctfs-container.md` §3). A name is 1 to 12 characters from
+/// `0-9 a-z . / -`; [`base40_encode`] would pack any other name as a different
+/// one, or as none.
+pub fn member_name_refusal(name: &str) -> Option<String> {
+    let why = if name.is_empty() {
+        "it is empty".to_string()
+    } else if name.len() > MAX_NAME_LEN {
+        format!("it is {} characters long", name.len())
+    } else {
+        format!("it contains {:?}", name.chars().find(|c| char_to_index(*c).is_err())?)
+    };
+    Some(format!(
+        "CTFS member name {name:?} cannot be stored: {why}, and a name is 1 to 12 characters from 0-9 a-z . / - \
+         (ctfs-container.md §3); base40 would pack it as a different name"
+    ))
+}
+
+/// The base40 packing of the member name `name`, or
+/// [`CtfsError::InvalidMemberName`] naming it when it is not one
+/// ([`member_name_refusal`]).
+pub fn encode_member_name(name: &str) -> Result<u64, CtfsError> {
+    match member_name_refusal(name) {
+        Some(refusal) => Err(CtfsError::InvalidMemberName(refusal)),
+        None => base40_encode(name),
+    }
+}
+
 /// Decode a base40-encoded u64 back to a filename string.
 pub fn base40_decode(mut encoded: u64) -> String {
     if encoded == 0 {

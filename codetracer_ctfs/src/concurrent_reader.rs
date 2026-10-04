@@ -114,6 +114,7 @@ impl ConcurrentCtfsReader {
     /// `CTFS-Binary-Format.md` §5d. The bound is re-derived from the file on
     /// every call, so it grows with a live producer.
     pub fn read_file(&self, name: &str) -> Result<Vec<u8>, CtfsError> {
+        crate::base40::encode_member_name(name)?;
         let entry = *self.find_entry(name).ok_or_else(|| CtfsError::FileNotFound(name.to_string()))?;
 
         if entry.size == 0 {
@@ -141,6 +142,7 @@ impl ConcurrentCtfsReader {
 
     /// Read from an arbitrary position within a file using positional read.
     pub fn read_at(&self, name: &str, offset: u64, buf: &mut [u8]) -> Result<usize, CtfsError> {
+        crate::base40::encode_member_name(name)?;
         let entry = *self.find_entry(name).ok_or_else(|| CtfsError::FileNotFound(name.to_string()))?;
 
         if offset >= entry.size {
@@ -274,7 +276,7 @@ impl ConcurrentCtfsReader {
     }
 
     fn find_entry(&self, name: &str) -> Option<&FileEntry> {
-        let encoded = crate::base40::base40_encode(name).ok()?;
+        let encoded = crate::base40::encode_member_name(name).ok()?;
         self.entries.iter().find(|e| e.name == encoded && !e.is_empty())
     }
 }

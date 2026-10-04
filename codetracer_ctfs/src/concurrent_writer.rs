@@ -2,7 +2,7 @@ use std::fs::{File, OpenOptions};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use crate::base40::base40_encode;
+use crate::base40::encode_member_name;
 use crate::block_alloc::AtomicBlockAllocator;
 use crate::file_entry::{MemberLayout, FILE_ENTRY_SIZE};
 use crate::header::{ExtendedHeader, Header, EXTENDED_HEADER_SIZE, HEADER_SIZE};
@@ -157,9 +157,10 @@ impl ConcurrentCtfsWriter {
 
     /// Add a new named file to the container. Returns a `FileWriter` handle.
     ///
-    /// This briefly locks the file entries mutex.
+    /// This briefly locks the file entries mutex. A name outside
+    /// `ctfs-container.md` §3 is refused, naming it.
     pub fn add_file(&self, name: &str) -> Result<FileWriter, CtfsError> {
-        let name_encoded = base40_encode(name)?;
+        let name_encoded = encode_member_name(name)?;
 
         let mut entries = self.file_entries.lock().unwrap();
         if entries.len() >= self.max_root_entries as usize {

@@ -258,9 +258,9 @@ fn no_single_perturbed_offset_or_length_is_accepted() {
 #[test]
 fn the_encoder_refuses_names_the_directory_could_not_carry() {
     for (members, needle) in [
-        (vec![("Meta.dat", &b""[..])], "base40"),
-        (vec![("a-name-too-long", &b""[..])], "too long"),
-        (vec![("", &b""[..])], "representable"),
+        (vec![("Meta.dat", &b""[..])], "it contains 'M'"),
+        (vec![("a-name-too-long", &b""[..])], "it is 15 characters long"),
+        (vec![("", &b""[..])], "it is empty"),
         (vec![("a.dat", &b"1"[..]), ("a.dat", &b"2"[..])], "duplicate"),
     ] {
         let err = encode_compact_container(&members, WholeFileCompression::None).unwrap_err().to_string();

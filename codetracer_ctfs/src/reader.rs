@@ -303,6 +303,7 @@ impl CtfsReader {
     /// A member's size and its bytes as `(container offset, length)` runs of
     /// physically consecutive blocks, in member order.
     fn member_runs(&mut self, name: &str) -> Result<(usize, Vec<(u64, usize)>), CtfsError> {
+        crate::base40::encode_member_name(name)?;
         let index = self.find_index(name).ok_or_else(|| CtfsError::FileNotFound(name.to_string()))?;
         let entry = self.entries[index];
 
@@ -351,6 +352,7 @@ impl CtfsReader {
     /// Returns the number of bytes actually read (may be less than buf.len()
     /// if the read extends past the end of the file).
     pub fn read_at(&mut self, name: &str, offset: u64, buf: &mut [u8]) -> Result<usize, CtfsError> {
+        crate::base40::encode_member_name(name)?;
         let index = self.find_index(name).ok_or_else(|| CtfsError::FileNotFound(name.to_string()))?;
         let entry = self.entries[index];
 
@@ -556,7 +558,7 @@ impl CtfsReader {
     }
 
     fn find_index(&self, name: &str) -> Option<usize> {
-        let encoded = crate::base40::base40_encode(name).ok()?;
+        let encoded = crate::base40::encode_member_name(name).ok()?;
         self.entries.iter().position(|e| e.name == encoded && !e.is_empty())
     }
 

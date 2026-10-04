@@ -41,6 +41,15 @@ extern "C" {
     fn trace_writer_set_workdir(handle: *mut std::ffi::c_void, workdir: *const std::os::raw::c_char);
     fn trace_writer_set_recording_id(handle: *mut std::ffi::c_void, recording_id: *const std::os::raw::c_char) -> i32;
     fn trace_writer_set_compact_threshold(handle: *mut std::ffi::c_void, raw_bytes: u64) -> i32;
+
+    fn ct_container_create(path: *const std::os::raw::c_char, block_size: u32) -> i32;
+    fn ct_container_append_files(
+        path: *const std::os::raw::c_char,
+        names: *const *const std::os::raw::c_char,
+        contents: *const *const u8,
+        lengths: *const usize,
+        count: usize,
+    ) -> i32;
     fn trace_writer_set_args(handle: *mut std::ffi::c_void, args: *const *const u8, arg_lens: *const usize, args_count: usize);
     fn trace_writer_register_step(handle: *mut std::ffi::c_void, path: *const std::os::raw::c_char, line: i64);
 
@@ -983,6 +992,28 @@ mod tests {
         let reader = NimTraceReaderHandle::open(trace_path.to_str().unwrap()).unwrap();
         assert!(reader.path_count() >= 1, "trace must register at least one path");
     }
+}
+
+/// Write a new, empty CTFS container at `path` through the Nim library's
+/// `ct_container_create`; `block_size` 0 selects the default.
+pub fn container_create(path: &Path, block_size: u32) -> Result<(), Box<dyn Error>> {
+    let c_path = path_to_cstring(path);
+    check_result(unsafe { ct_container_create(c_path.as_ptr(), block_size) })
+}
+
+/// Append `files` to the closed container at `path` through the Nim
+/// library's `ct_container_append_files`, which publishes them together or
+/// not at all. A name holding a NUL cannot cross the C ABI and is refused here.
+pub fn container_append_files(path: &Path, files: &[(&str, &[u8])]) -> Result<(), Box<dyn Error>> {
+    let c_path = path_to_cstring(path);
+    let names = files
+        .iter()
+        .map(|(name, _)| CString::new(*name).map_err(|_| format!("member name {name:?} holds a NUL and cannot cross the C ABI")))
+        .collect::<Result<Vec<CString>, String>>()?;
+    let name_ptrs: Vec<*const std::os::raw::c_char> = names.iter().map(|n| n.as_ptr()).collect();
+    let content_ptrs: Vec<*const u8> = files.iter().map(|(_, c)| c.as_ptr()).collect();
+    let lengths: Vec<usize> = files.iter().map(|(_, c)| c.len()).collect();
+    check_result(unsafe { ct_container_append_files(c_path.as_ptr(), name_ptrs.as_ptr(), content_ptrs.as_ptr(), lengths.as_ptr(), files.len()) })
 }
 
 fn check_result(code: i32) -> Result<(), Box<dyn Error>> {

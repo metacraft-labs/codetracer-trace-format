@@ -1262,17 +1262,21 @@ impl CtfsTraceWriter {
         let result = (|| -> Result<Members, codetracer_ctfs::CtfsError> {
             let w = self.ctfs_writer.as_mut().expect("checked above");
             let mut pair = |dat: &str, idx: &str| -> Result<_, codetracer_ctfs::CtfsError> { Ok((w.add_file(dat)?, w.add_file(idx)?)) };
+            // Created in the Nim writer's order: the container's member order
+            // is the compact container's (`ctfs-container.md` §1d, §1f), so
+            // the two writers' compact containers agree only if it agrees.
+            // Fields are evaluated in the order written.
             let members = Members {
-                calls: pair("calls.dat", "calls.idx")?,
-                steps: pair("steps.dat", "steps.idx")?,
-                values: pair("values.dat", "values.idx")?,
-                events: pair("events.dat", "events.idx")?,
                 interning: [
                     pair("paths.dat", "paths.off")?,
                     pair("funcs.dat", "funcs.off")?,
                     pair("types.dat", "types.off")?,
                     pair("varnames.dat", "varnames.off")?,
                 ],
+                steps: pair("steps.dat", "steps.idx")?,
+                values: pair("values.dat", "values.idx")?,
+                calls: pair("calls.dat", "calls.idx")?,
+                events: pair("events.dat", "events.idx")?,
             };
             let meta_handle = w.add_file("meta.dat")?;
             w.write(meta_handle, &meta)?;

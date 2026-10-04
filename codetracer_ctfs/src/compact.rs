@@ -81,9 +81,7 @@ pub fn parse_profile(value: u8) -> Result<Profile, CtfsError> {
     match value {
         0 => Ok(Profile::Full),
         1 => Ok(Profile::Compact),
-        _ => Err(refused(format!(
-            "unknown CTFS container profile {value}: the set is closed at 0 (full) and 1 (compact) — ctfs-container.md §1a"
-        ))),
+        _ => Err(refused(format!("unknown CTFS container profile {value} (§1a: 0 full, 1 compact)"))),
     }
 }
 
@@ -93,7 +91,7 @@ pub fn parse_whole_file_compression(value: u8) -> Result<WholeFileCompression, C
         0 => Ok(WholeFileCompression::None),
         1 => Ok(WholeFileCompression::Zstd),
         _ => Err(refused(format!(
-            "unknown CTFS whole-file compression scheme {value}: the set is closed at 0 (none) and 1 (zstd) — ctfs-container.md §1b"
+            "unknown CTFS whole-file compression scheme {value} (§1b: 0 none, 1 zstd)"
         ))),
     }
 }
@@ -116,20 +114,14 @@ pub fn read_v6_header(data: &[u8]) -> Result<Option<(Profile, WholeFileCompressi
         v => return Err(CtfsError::InvalidVersion(v)),
     }
     if data.len() < V6_HEADER_SIZE {
-        return Err(refused(format!(
-            "CTFS header declares version {VERSION_6} but is only {} bytes, short of the {V6_HEADER_SIZE}-byte \
-             version-{VERSION_6} header: a missing profile is not profile 0 (full) and a missing scheme is not \
-             scheme 0 (none)",
-            data.len()
-        )));
+        return Err(refused(format!("CTFS version-6 header is only {} bytes, not 24 (§1c)", data.len())));
     }
     let profile = parse_profile(data[PROFILE_OFFSET])?;
     let compression = parse_whole_file_compression(data[COMPRESSION_OFFSET])?;
     let reserved = &data[RESERVED_OFFSET..RESERVED_OFFSET + RESERVED_LEN];
     if let Some((k, value)) = reserved.iter().enumerate().find(|(_, b)| **b != 0) {
         return Err(refused(format!(
-            "CTFS version-{VERSION_6} reserved byte at offset {} is {value}, not 0: the reserved area is not a growth \
-             area and a non-zero value there is a container this reader cannot account for — ctfs-container.md §1",
+            "CTFS reserved byte at offset {} is {value}, not 0 (§1)",
             RESERVED_OFFSET + k
         )));
     }
@@ -144,7 +136,7 @@ pub fn reconstruct_image(stored: Vec<u8>) -> Result<Vec<u8>, CtfsError> {
     match read_v6_header(&stored)? {
         Some((_, WholeFileCompression::Zstd)) => {
             let body = crate::zstd_compat::decode_all(&stored[V6_HEADER_SIZE..])
-                .map_err(|e| refused(format!("the container body declared as zstd does not decode: {e}")))?;
+                .map_err(|e| refused(format!("the zstd container body does not decode: {e}")))?;
             let mut image = Vec::with_capacity(V6_HEADER_SIZE + body.len());
             image.extend_from_slice(&stored[..V6_HEADER_SIZE]);
             image.extend_from_slice(&body);
@@ -160,9 +152,7 @@ pub fn reconstruct_image(stored: Vec<u8>) -> Result<Vec<u8>, CtfsError> {
 /// writes does. The inverse of [`reconstruct_image`].
 pub fn compress_image(image: &[u8], level: i32) -> Result<Vec<u8>, CtfsError> {
     if read_v6_header(image)?.map(|(_, c)| c) != Some(WholeFileCompression::Zstd) {
-        return Err(refused(
-            "only a version-6 image that declares the zstd scheme is stored compressed: the header is what says so".to_string(),
-        ));
+        return Err(refused("the image does not declare the zstd scheme".to_string()));
     }
     let mut stored = image[..V6_HEADER_SIZE].to_vec();
     stored.extend_from_slice(&crate::zstd_frame::compress_pledged(&image[V6_HEADER_SIZE..], level, "the container body").map_err(refused)?);
@@ -205,45 +195,28 @@ pub struct CompactEntry {
 /// `body_reconstructed`; a scheme the caller has not undone is refused rather
 /// than read as a directory.
 pub fn read_compact_directory(image: &[u8], body_reconstructed: bool) -> Result<Vec<CompactEntry>, CtfsError> {
-    let (profile, compression) = read_v6_header(image)?.ok_or_else(|| {
-        refused("container is version 5, whose body is the full profile: ctfs-container.md §1d describes the compact body only".to_string())
-    })?;
-    if profile != Profile::Compact {
-        return Err(refused(format!(
-            "container declares profile {profile:?}, not compact: ctfs-container.md §1d describes the compact body only"
-        )));
+    if !matches!(read_v6_header(image)?, Some((Profile::Compact, _))) {
+        return Err(refused("not a compact-profile container (§1d)".to_string()));
     }
-    if compression != WholeFileCompression::None && !body_reconstructed {
-        return Err(refused(format!(
-            "compact container declares whole-file compression scheme {compression:?}: its body must be reconstructed \
-             as header || decompress(rest) before the directory is read (ctfs-container.md §1a), and the caller says it \
-             has not been"
-        )));
+    if image[COMPRESSION_OFFSET] != WholeFileCompression::None as u8 && !body_reconstructed {
+        return Err(refused(
+            "compact container declares the zstd scheme: reconstruct header || decompress(rest) first (§1a)".to_string(),
+        ));
     }
-    let block_size = u32_at(image, 8);
-    if block_size != 0 {
-        return Err(refused(format!(
-            "compact container declares BlockSize {block_size}, not 0: §1d requires 0 because the profile has no blocks"
-        )));
-    }
-    let max_root_entries = u32_at(image, 12);
-    if max_root_entries != 0 {
-        return Err(refused(format!(
-            "compact container declares MaxRootEntries {max_root_entries}, not 0: §1d requires 0 because there is no \
-             FileEntry array for a maximum to bound"
-        )));
-    }
-    if image[7] != 0 {
-        return Err(refused(format!(
-            "compact container declares MaxShards {}, not 0: §1a requires 0 because the profile has no block-number \
-             space to partition",
-            image[7]
-        )));
+    // §1d and §1a: there are no blocks, no FileEntry array and no shards.
+    for (field, value) in [
+        ("BlockSize", u32_at(image, 8)),
+        ("MaxRootEntries", u32_at(image, 12)),
+        ("MaxShards", image[7] as u32),
+    ] {
+        if value != 0 {
+            return Err(refused(format!("compact container declares {field} {value}, not 0 (§1d)")));
+        }
     }
     let size = image.len() as u64;
     if image.len() < COMPACT_DIRECTORY_OFFSET {
         return Err(refused(format!(
-            "compact container is {size} bytes, short of the {COMPACT_DIRECTORY_OFFSET} a header and member count occupy"
+            "compact container is {size} bytes, short of {COMPACT_DIRECTORY_OFFSET} (§1d)"
         )));
     }
     let count = u32_at(image, COMPACT_MEMBER_COUNT_OFFSET);
@@ -251,8 +224,7 @@ pub fn read_compact_directory(image: &[u8], body_reconstructed: bool) -> Result<
     let directory_end = COMPACT_DIRECTORY_OFFSET as u64 + count as u64 * COMPACT_ENTRY_SIZE as u64;
     if directory_end > size {
         return Err(refused(format!(
-            "compact container declares {count} members, whose directory would end at byte {directory_end} of a \
-             {size}-byte container (§1d check 1)"
+            "compact directory of {count} members ends at {directory_end}, past {size} (§1d check 1)"
         )));
     }
     let mut entries: Vec<CompactEntry> = Vec::with_capacity(count as usize);
@@ -264,31 +236,25 @@ pub fn read_compact_directory(image: &[u8], body_reconstructed: bool) -> Result<
         // Check 5.
         if !name_is_well_formed(encoded) {
             return Err(refused(format!(
-                "compact directory entry {i} carries name word {encoded}, which does not round-trip through the base40 \
-                 packing of ctfs-container.md §3 (§1d check 5)"
+                "compact directory entry {i}: name word {encoded} is not base40 (§1d check 5)"
             )));
         }
         let name = crate::base40::base40_decode(encoded);
         // Checks 2 and 3, as one.
         if offset != expected {
             return Err(refused(format!(
-                "compact directory entry {i} ('{name}') declares offset {offset} but the members are contiguous and the \
-                 previous one ended at {expected} (§1d check {}): a gap would be padding and an overlap or a jump would \
-                 serve a shifted member",
+                "compact directory entry {i} ('{name}'): offset {offset}, not {expected} (§1d check {})",
                 if i == 0 { 2 } else { 3 }
             )));
         }
         if length > size - offset {
             return Err(refused(format!(
-                "compact directory entry {i} ('{name}') declares {length} bytes at offset {offset}, past the end of a \
-                 {size}-byte container"
+                "compact directory entry {i} ('{name}'): {length} bytes at {offset}, past {size} (§1d check 4)"
             )));
         }
         // Check 6.
         if entries.iter().any(|e| e.encoded_name == encoded) {
-            return Err(refused(format!(
-                "compact directory names '{name}' twice, at entries {i} and earlier (§1d check 6)"
-            )));
+            return Err(refused(format!("compact directory entry {i} repeats the name '{name}' (§1d check 6)")));
         }
         entries.push(CompactEntry {
             name,
@@ -301,8 +267,7 @@ pub fn read_compact_directory(image: &[u8], body_reconstructed: bool) -> Result<
     // Check 4: nothing follows the last member.
     if expected != size {
         return Err(refused(format!(
-            "compact container is {size} bytes but its {count} members end at {expected}: §1d requires \
-             Size = 28 + 24*N + sum(length), so the difference is padding or truncation (§1d check 4)"
+            "compact container is {size} bytes but its members end at {expected} (§1d check 4)"
         )));
     }
     Ok(entries)

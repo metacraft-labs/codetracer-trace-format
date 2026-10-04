@@ -135,7 +135,7 @@ fn decode_records(compressed: &[u8], at: Option<(usize, usize)>) -> Result<Vec<V
             format!(
                 "{}: {} — its events do not fill its {rec_len}-byte frame exactly",
                 name(),
-                e.trim_start_matches("values.dat: ")
+                e.strip_prefix("values.dat: ").unwrap_or(&e)
             )
         })?;
         pos += rec_len;
@@ -194,7 +194,7 @@ impl InflatedChunk {
                 "values.dat record {} (record {k} of chunk {}): {} — its events do not fill its {len}-byte frame exactly",
                 self.number * chunk_size + k,
                 self.number,
-                e.trim_start_matches("values.dat: ")
+                e.strip_prefix("values.dat: ").unwrap_or(&e)
             )
         })
     }

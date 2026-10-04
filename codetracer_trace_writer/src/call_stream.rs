@@ -194,7 +194,7 @@ impl CallStreamRecord {
     /// (`trace-events.md` §"Call Stream", "Each record is framed by its
     /// length"); a refusal names the record.
     pub fn decode(call_key: u64, data: &[u8]) -> Result<CallStreamRecord, String> {
-        Self::decode_fields(call_key, data).map_err(|e| format!("calls.dat record {call_key}: {}", e.trim_start_matches("calls.dat: ")))
+        Self::decode_fields(call_key, data).map_err(|e| format!("calls.dat record {call_key}: {}", e.strip_prefix("calls.dat: ").unwrap_or(&e)))
     }
 
     fn decode_fields(call_key: u64, data: &[u8]) -> Result<CallStreamRecord, String> {

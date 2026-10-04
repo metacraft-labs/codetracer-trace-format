@@ -128,7 +128,7 @@ fn a_whole_file_zstd_container_is_reconstructed_before_it_is_read() {
     // decoder told it has been reconstructed reads it, one not told refuses.
     assert!(read_compact_directory(&image, true).is_ok());
     let err = read_compact_directory(&image, false).unwrap_err().to_string();
-    assert!(err.contains("Zstd") && err.contains("reconstructed"), "{err}");
+    assert!(err.contains("zstd") && err.contains("reconstruct"), "{err}");
     // A body that is not the zstd it is declared to be is refused.
     let mut broken = stored.clone();
     broken[V6_HEADER_SIZE + 1] ^= 0xff;

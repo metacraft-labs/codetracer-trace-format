@@ -208,7 +208,9 @@ impl CtfsReader {
     fn read_root(r: &mut impl Read, header_size: usize) -> Result<(Header, ExtendedHeader, Vec<FileEntry>), CtfsError> {
         let header = Header::read_from_any_version(r)?;
         let ext_header = ExtendedHeader::read_from(r)?;
-        std::io::copy(&mut r.take((header_size - HEADER_SIZE_V5) as u64), &mut std::io::sink())?;
+        // The version-6 fields, which the caller has checked.
+        let mut v6_fields = [0u8; compact::V6_HEADER_SIZE - HEADER_SIZE_V5];
+        r.read_exact(&mut v6_fields[..header_size - HEADER_SIZE_V5])?;
         let mut entries = Vec::new();
         for _ in 0..ext_header.max_root_entries {
             entries.push(FileEntry::read_from(r)?);

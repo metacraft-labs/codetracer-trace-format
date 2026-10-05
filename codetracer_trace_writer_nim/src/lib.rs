@@ -410,6 +410,28 @@ extern "C" {
     ) -> i32;
     fn trace_writer_record_empty_filter_provenance(handle: *mut std::ffi::c_void) -> i32;
 
+    // ----- the other flag-gated meta.dat blocks (internal-files.md
+    // "Extended Fields"): MCR fields, replay-launch fields, layout snapshot -----
+    fn trace_writer_set_mcr_fields(
+        handle: *mut std::ffi::c_void,
+        tick_source: i32,
+        total_threads: u32,
+        atomic_mode: i32,
+        total_events: u64,
+        total_checkpoints: u32,
+        start_time_unix_us: u64,
+        platform: *const std::os::raw::c_char,
+        tick_granularity: *const std::os::raw::c_char,
+        tick_source_str: *const std::os::raw::c_char,
+        atomic_mode_str: *const std::os::raw::c_char,
+        start_time_str: *const std::os::raw::c_char,
+        hook_profile: *const std::os::raw::c_char,
+        hook_strategies: *const *const std::os::raw::c_char,
+        hook_strategies_count: usize,
+    ) -> i32;
+    fn trace_writer_set_replay_launch_fields(handle: *mut std::ffi::c_void, aslr_disabled: i32) -> i32;
+    fn trace_writer_set_layout_snapshot(handle: *mut std::ffi::c_void, layout_hash: u64, fingerprint: *const u8, fingerprint_len: usize) -> i32;
+
     // ----- meta.dat -----
 
     fn ct_write_meta_dat(handle: *mut std::ffi::c_void, recorder_id: *const u8, recorder_id_len: usize) -> i32;
@@ -1713,6 +1735,76 @@ impl NimTraceWriter {
     pub fn record_empty_filter_provenance(&mut self) -> Result<(), Box<dyn Error>> {
         check_result(unsafe { trace_writer_record_empty_filter_provenance(self.handle) })
     }
+
+    /// Write the MCR fields block (`meta.dat` flag bit 0) with these values.
+    /// Like every flag-gated block, it is set after `begin_writing_trace_events`
+    /// and before the first record, which writes `meta.dat`; later it is refused.
+    pub fn set_mcr_fields(&mut self, f: &NimMcrFields) -> Result<(), Box<dyn Error>> {
+        let text = |s: &str| CString::new(s).map_err(|e| -> Box<dyn Error> { format!("MCR field {s:?}: {e}").into() });
+        let strings = [
+            f.platform,
+            f.tick_granularity,
+            f.tick_source_str,
+            f.atomic_mode_str,
+            f.start_time_str,
+            f.hook_profile,
+        ]
+        .into_iter()
+        .map(text)
+        .collect::<Result<Vec<_>, _>>()?;
+        let strategies = f.hook_strategies.iter().map(|s| text(s)).collect::<Result<Vec<_>, _>>()?;
+        let strategy_ptrs: Vec<_> = strategies.iter().map(|s| s.as_ptr()).collect();
+        check_result(unsafe {
+            trace_writer_set_mcr_fields(
+                self.handle,
+                i32::from(f.tick_source),
+                f.total_threads,
+                i32::from(f.atomic_mode),
+                f.total_events,
+                f.total_checkpoints,
+                f.start_time_unix_us,
+                strings[0].as_ptr(),
+                strings[1].as_ptr(),
+                strings[2].as_ptr(),
+                strings[3].as_ptr(),
+                strings[4].as_ptr(),
+                strings[5].as_ptr(),
+                strategy_ptrs.as_ptr(),
+                strategy_ptrs.len(),
+            )
+        })
+    }
+
+    /// Write the replay-launch fields block (`meta.dat` flag bit 1); set as
+    /// [`set_mcr_fields`](Self::set_mcr_fields) is.
+    pub fn set_replay_launch_fields(&mut self, aslr_disabled: bool) -> Result<(), Box<dyn Error>> {
+        check_result(unsafe { trace_writer_set_replay_launch_fields(self.handle, i32::from(aslr_disabled)) })
+    }
+
+    /// Write the layout snapshot block (`meta.dat` flag bit 2); set as
+    /// [`set_mcr_fields`](Self::set_mcr_fields) is.
+    pub fn set_layout_snapshot(&mut self, layout_hash: u64, fingerprint: &[u8]) -> Result<(), Box<dyn Error>> {
+        check_result(unsafe { trace_writer_set_layout_snapshot(self.handle, layout_hash, fingerprint.as_ptr(), fingerprint.len()) })
+    }
+}
+
+/// The MCR fields block of `meta.dat` (`internal-files.md` §"Extended
+/// Fields", flag bit 0), as [`NimTraceWriter::set_mcr_fields`] takes it.
+/// `tick_source` and `atomic_mode` are the enumerations' ordinals.
+pub struct NimMcrFields<'a> {
+    pub tick_source: u8,
+    pub total_threads: u32,
+    pub atomic_mode: u8,
+    pub total_events: u64,
+    pub total_checkpoints: u32,
+    pub start_time_unix_us: u64,
+    pub platform: &'a str,
+    pub tick_granularity: &'a str,
+    pub tick_source_str: &'a str,
+    pub atomic_mode_str: &'a str,
+    pub start_time_str: &'a str,
+    pub hook_profile: &'a str,
+    pub hook_strategies: &'a [String],
 }
 
 impl Drop for NimTraceWriter {

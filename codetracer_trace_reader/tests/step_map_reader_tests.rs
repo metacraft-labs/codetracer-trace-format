@@ -248,3 +248,25 @@ fn a_lookup_checks_its_whole_chunk() {
     assert_eq!(r.lookup(0, 5).unwrap(), Some(vec![0]), "control");
     assert_eq!(r.lookup(0, 7).unwrap(), Some(vec![3]), "control");
 }
+
+/// Step ids past `u64::MAX` are refused by name, whether the list is decoded
+/// (a lookup of its line) or only checked (a lookup of another line in the
+/// chunk), and also when a run's `gap * repeat` alone exceeds 128 bits.
+#[test]
+fn step_ids_past_64_bits_are_refused() {
+    let first = rec(0, 5, 1, &[(1, 1)]);
+    let read = [first.clone(), rec(0, 2, 2, &[(u64::MAX, 2)])].concat();
+    let mut r = StepMapReader::from_bytes(member((1, 2, 3), &[((0, 5), read)])).unwrap();
+    let err = r.lookup(0, 7).expect_err("the second id is 2^64 - 2 + 2^64 - 1");
+    assert!(err.contains("overflow 64 bits"), "{err}");
+
+    let huge = (1u64 << 63) + 1;
+    let stepped_over = [first, rec(0, 2, huge, &[(u64::MAX, huge)])].concat();
+    let mut r = StepMapReader::from_bytes(member((1, 2, u64::MAX), &[((0, 5), stepped_over)])).unwrap();
+    let err = r.lookup(0, 5).expect_err("the chunk's second line runs past 2^64");
+    assert!(err.contains("overflow 64 bits"), "{err}");
+
+    let control = [rec(0, 5, 1, &[(1, 1)]), rec(0, 2, 2, &[(1u64 << 62, 2)])].concat();
+    let mut r = StepMapReader::from_bytes(member((1, 2, 3), &[((0, 5), control)])).unwrap();
+    assert_eq!(r.lookup(0, 7).unwrap(), Some(vec![(1 << 62) - 1, (1 << 63) - 1]), "control");
+}

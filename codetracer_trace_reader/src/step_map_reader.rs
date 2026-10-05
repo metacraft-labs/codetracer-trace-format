@@ -423,18 +423,20 @@ impl StepMapReader {
                     have.saturating_add(repeat)
                 ));
             }
+            // The run's ids are `prev + gap * k` for `k` in `1..=repeat`; its
+            // last one is checked once, so every id of the run fits.
+            let overflow = || format!("{name}: chunk {c}: line {key:?}'s step ids overflow 64 bits");
+            let first = prev + gap as i128;
+            let last = gap
+                .checked_mul(repeat - 1)
+                .map(|span| first + span as i128)
+                .filter(|last| *last <= u64::MAX as i128)
+                .ok_or_else(overflow)?;
             if wanted {
-                for _ in 0..repeat {
-                    prev += gap as i128;
-                    let id = u64::try_from(prev).map_err(|_| format!("{name}: chunk {c}: line {key:?}'s step ids overflow 64 bits"))?;
-                    ids.push(id);
-                }
-            } else {
-                prev += gap as i128 * repeat as i128;
-                if prev > u64::MAX as i128 {
-                    return Err(format!("{name}: chunk {c}: line {key:?}'s step ids overflow 64 bits"));
-                }
+                let first = first as u64;
+                ids.extend((0..repeat).map(|k| first + k * gap));
             }
+            prev = last;
             have += repeat;
         }
         Ok(ids)

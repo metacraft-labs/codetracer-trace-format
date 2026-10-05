@@ -2,7 +2,7 @@ use std::fs::{File, OpenOptions};
 use std::io::{BufWriter, Cursor, Read as IoRead, Seek, SeekFrom, Write};
 use std::path::Path;
 
-use crate::base40::base40_encode;
+use crate::base40::encode_member_name;
 use crate::block_alloc::BlockAllocator;
 use crate::file_entry::{FileEntry, MemberLayout, FILE_ENTRY_SIZE};
 use crate::header::{CompressionMethod, ExtendedHeader, Header, EXTENDED_HEADER_SIZE, HEADER_SIZE};
@@ -388,11 +388,12 @@ impl CtfsWriter {
     }
 
     /// Add a new named file to the container. Returns a handle for writing.
+    /// A name outside `ctfs-container.md` §3 is refused, naming it.
     pub fn add_file(&mut self, name: &str) -> Result<FileHandle, CtfsError> {
+        let name_encoded = encode_member_name(name)?;
         if self.files.len() >= self.max_root_entries as usize {
             return Err(CtfsError::TooManyFiles);
         }
-        let name_encoded = base40_encode(name)?;
         let entry_index = self.files.len();
 
         // A member is created empty and claims no block until it is written
@@ -412,7 +413,7 @@ impl CtfsWriter {
 
     /// Find a file handle by name (for appending to existing files).
     pub fn find_file(&self, name: &str) -> Option<FileHandle> {
-        let encoded = base40_encode(name).ok()?;
+        let encoded = encode_member_name(name).ok()?;
         self.files.iter().position(|f| f.name_encoded == encoded).map(FileHandle)
     }
 

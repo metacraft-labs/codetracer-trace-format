@@ -300,12 +300,7 @@ pub fn read_compact_directory(image: &[u8], body_reconstructed: bool) -> Result<
 pub fn encode_compact_container(members: &[(&str, &[u8])], compression: WholeFileCompression) -> Result<Vec<u8>, CtfsError> {
     let mut names: Vec<u64> = Vec::with_capacity(members.len());
     for (name, _) in members {
-        let encoded = crate::base40::base40_encode(name)?;
-        if encoded == 0 || !name_is_well_formed(encoded) {
-            return Err(refused(format!(
-                "member name '{name}' is not representable in the base40 alphabet of ctfs-container.md §3"
-            )));
-        }
+        let encoded = crate::base40::encode_member_name(name)?;
         if names.contains(&encoded) {
             return Err(refused(format!(
                 "duplicate member name '{name}' in a compact container: §1d check 6 requires the names to be distinct"

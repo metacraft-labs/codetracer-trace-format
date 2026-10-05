@@ -41,7 +41,7 @@ pub mod writer;
 pub mod zstd_compat;
 pub mod zstd_frame;
 
-pub use base40::{base40_decode, base40_encode};
+pub use base40::{base40_decode, base40_encode, encode_member_name, member_name_refusal};
 pub use block_alloc::AtomicBlockAllocator;
 pub use chunked::{ChunkedReader, ChunkedWriter};
 pub use concurrent_reader::ConcurrentCtfsReader;
@@ -65,6 +65,9 @@ pub enum CtfsError {
     TooManyFiles,
     NameTooLong(String),
     InvalidBase40Char(char),
+    /// A member name outside `ctfs-container.md` §3, with the refusal that
+    /// names it ([`base40::member_name_refusal`]).
+    InvalidMemberName(String),
 }
 
 impl fmt::Display for CtfsError {
@@ -84,6 +87,7 @@ impl fmt::Display for CtfsError {
             CtfsError::TooManyFiles => write!(f, "too many files in container"),
             CtfsError::NameTooLong(n) => write!(f, "filename too long: {}", n),
             CtfsError::InvalidBase40Char(c) => write!(f, "invalid base40 character: {}", c),
+            CtfsError::InvalidMemberName(refusal) => f.write_str(refusal),
         }
     }
 }

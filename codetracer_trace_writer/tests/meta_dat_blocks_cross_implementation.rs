@@ -248,7 +248,8 @@ fn the_two_encoders_agree_byte_for_byte_and_the_decoders_read_each_other() {
 }
 
 /// Every prefix that ends inside the blocks is refused by both decoders, and
-/// so is a tick source or atomic mode outside its enumeration.
+/// so is a tick source or atomic mode outside its enumeration, and a thread
+/// or checkpoint count past 32 bits.
 #[test]
 fn the_two_decoders_refuse_the_same_damaged_headers() {
     let work = tempfile::tempdir().unwrap();
@@ -281,6 +282,32 @@ fn the_two_decoders_refuse_the_same_damaged_headers() {
             rust.contains(field) && said.starts_with("refused") && said.contains(field),
             "{field}: {rust} / {said}"
         );
+    }
+
+    // `total_threads` (7, one varint byte after `tick_source`) and
+    // `total_checkpoints` (300, two bytes after `total_events`' six) rewritten
+    // as 2^32: refused by both, with one message. 2^32 - 1 reads in both.
+    let varint = |mut v: u64| {
+        let mut out = Vec::new();
+        while v >= 0x80 {
+            out.push((v as u8) | 0x80);
+            v >>= 7;
+        }
+        out.push(v as u8);
+        out
+    };
+    let threads = (core + 1, varint(7).len());
+    let checkpoints = (core + 3 + varint(1 << 40).len(), varint(300).len());
+    for (field, (at, len)) in [("total_threads", threads), ("total_checkpoints", checkpoints)] {
+        let splice = |v: u64| [&full[..at], &varint(v)[..], &full[at + len..]].concat();
+        let top = splice(u64::from(u32::MAX));
+        assert!(decode_meta_dat(&top).is_ok(), "{field}: 2^32 - 1 reads");
+        assert!(!nim.decode(work.path(), &top).starts_with("refused"), "{field}: 2^32 - 1 reads in Nim");
+        let bad = splice(1 << 32);
+        let rust = decode_meta_dat(&bad).unwrap_err();
+        let said = nim.decode(work.path(), &bad);
+        assert_eq!(rust, format!("meta.dat: {field} value {} does not fit 32 bits", 1u64 << 32));
+        assert_eq!(said.trim_end(), format!("refused: {rust}"), "{field}");
     }
 }
 

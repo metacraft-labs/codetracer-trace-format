@@ -88,8 +88,8 @@ fn a_shared_member_reads_back_every_range_from_bytes_as_from_a_file() {
         let shared = from_bytes.read_member(name).unwrap();
         let owned = from_file.read_member(name).unwrap();
         assert_eq!(shared.len(), content.len(), "{name}");
-        assert_eq!(shared.to_vec(), *content, "{name} from bytes");
-        assert_eq!(owned.to_vec(), *content, "{name} from a file");
+        assert_eq!(shared.to_vec().unwrap(), *content, "{name} from bytes");
+        assert_eq!(owned.to_vec().unwrap(), *content, "{name} from a file");
         let len = content.len();
         let mut ranges = vec![(0, len), (len / 3, len / 2)];
         for boundary in (bs..len).step_by(bs).take(50) {
@@ -103,10 +103,13 @@ fn a_shared_member_reads_back_every_range_from_bytes_as_from_a_file() {
             assert_eq!(shared.get(start, end).unwrap().as_ref(), &content[start..end], "{name} {start}..{end}");
             assert_eq!(owned.get(start, end).unwrap().as_ref(), &content[start..end], "{name} {start}..{end}");
         }
-        assert!(shared.get(0, len + 1).is_none(), "{name}: past the end");
+        assert!(shared.get(0, len + 1).is_err(), "{name}: past the end");
+        assert!(owned.get(0, len + 1).is_err(), "{name}: past the end, from a file");
         if len >= 8 {
             let at = len - 8;
-            assert_eq!(shared.u64_at(at), Some(u64::from_le_bytes(content[at..].try_into().unwrap())));
+            let word = u64::from_le_bytes(content[at..].try_into().unwrap());
+            assert_eq!(shared.u64_at(at).unwrap(), word);
+            assert_eq!(owned.u64_at(at).unwrap(), word);
         }
     }
 }
@@ -143,8 +146,10 @@ fn a_truncated_container_is_refused_from_bytes_as_from_a_file() {
         let a = from_file.read_file(name).map_err(|e| e.to_string());
         let b = from_bytes.read_file(name).map_err(|e| e.to_string());
         assert_eq!(a, b, "{name}");
-        let shared = from_bytes.read_member(name).map(|m| m.to_vec()).map_err(|e| e.to_string());
+        let shared = from_bytes.read_member(name).map(|m| m.to_vec().unwrap()).map_err(|e| e.to_string());
         assert_eq!(shared, b, "{name}: read_member refuses what read_file refuses");
+        let in_file = from_file.read_member(name).map(|m| m.to_vec().unwrap()).map_err(|e| e.to_string());
+        assert_eq!(in_file, b, "{name}: read_member refuses from a file what read_file refuses");
         if let Err(e) = b {
             assert!(e.contains("out of bounds"), "{name}: {e}");
             refused += 1;

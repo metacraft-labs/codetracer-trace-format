@@ -292,13 +292,20 @@ impl VarSizeTable {
         if id >= self.count() {
             return Err(format!("interning table: id {id} out of range (count {})", self.count()));
         }
-        // `id < count`, so both offsets lie inside `.off`. An offset this
-        // target cannot address is out of range, not truncated.
-        let offset = |at: usize| self.off.u64_at(at).and_then(|o| usize::try_from(o).ok()).unwrap_or(usize::MAX);
-        let (start, end) = (offset(id * 8), offset(id * 8 + 8));
-        self.dat.get(start, end).ok_or_else(|| {
+        // `id < count`, so both offsets lie inside `.off`, read as one range.
+        // An offset this target cannot address is out of range, not truncated.
+        let pair = self
+            .off
+            .get(id * 8, id * 8 + 16)
+            .map_err(|e| format!("interning table: record {id}'s offsets: {e}"))?;
+        let offset = |at: usize| {
+            let word: [u8; 8] = pair[at..at + 8].try_into().expect("an eight-byte slice");
+            usize::try_from(u64::from_le_bytes(word)).unwrap_or(usize::MAX)
+        };
+        let (start, end) = (offset(0), offset(8));
+        self.dat.get(start, end).map_err(|e| {
             format!(
-                "interning table: record {id} offsets [{start}, {end}) out of range (dat len {})",
+                "interning table: record {id} offsets [{start}, {end}) out of range (dat len {}): {e}",
                 self.dat.len()
             )
         })

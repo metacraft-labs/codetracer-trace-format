@@ -284,10 +284,7 @@ impl StepStreamReader {
         } else {
             self.dat.len()
         };
-        let frame = self
-            .dat
-            .get(start, end)
-            .ok_or_else(|| "steps.dat: chunk offsets out of range".to_string())?;
+        let frame = self.dat.get(start, end).map_err(|e| format!("steps.dat: chunk {chunk_number}: {e}"))?;
         self.cached_chunk = None;
         self.form
             .content_into(&frame, &mut self.chunk.raw)

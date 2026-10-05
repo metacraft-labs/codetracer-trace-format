@@ -287,10 +287,7 @@ impl ValueStreamReader {
             } else {
                 self.dat.len()
             };
-            let frame = self
-                .dat
-                .get(start, end)
-                .ok_or_else(|| "values.dat: chunk offsets out of range".to_string())?;
+            let frame = self.dat.get(start, end).map_err(|e| format!("values.dat: chunk {chunk_number}: {e}"))?;
             self.cached_chunk = None;
             self.form
                 .content_into(&frame, &mut self.chunk.raw)

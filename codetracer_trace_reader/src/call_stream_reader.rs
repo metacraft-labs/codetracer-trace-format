@@ -191,10 +191,7 @@ impl CallStreamReader {
         } else {
             self.dat.len()
         };
-        let frame = self
-            .dat
-            .get(start, end)
-            .ok_or_else(|| "calls.dat: chunk offsets out of range".to_string())?;
+        let frame = self.dat.get(start, end).map_err(|e| format!("calls.dat: chunk {chunk_number}: {e}"))?;
         self.cached_chunk = None;
         self.form
             .content_into(&frame, &mut self.raw)

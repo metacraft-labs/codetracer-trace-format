@@ -100,9 +100,7 @@ fn varint_long(b: &[u8], pos: &mut usize, chunk: usize) -> Result<u64, String> {
 fn inflate(bytes: &MemberBytes, chunks: &[Chunk], c: usize, form: ChunkForm, raw: &mut Vec<u8>) -> Result<(), String> {
     let name = STEP_MAP_FILE_NAME;
     let chunk = chunks[c];
-    let frame = bytes
-        .get(chunk.start, chunk.end)
-        .ok_or_else(|| format!("{name}: chunk {c}'s frame lies past the end of the member"))?;
+    let frame = bytes.get(chunk.start, chunk.end).map_err(|e| format!("{name}: chunk {c}'s frame: {e}"))?;
     let frame = frame.as_ref();
     if form == ChunkForm::Stored {
         raw.clear();
@@ -154,7 +152,7 @@ impl StepMapReader {
         if len < STEP_MAP_HEADER_SIZE {
             return Err(format!("{name}: {len} bytes is shorter than the {STEP_MAP_HEADER_SIZE}-byte header"));
         }
-        let header = member.get(0, STEP_MAP_HEADER_SIZE).unwrap_or_default();
+        let header = member.get(0, STEP_MAP_HEADER_SIZE).map_err(|e| format!("{name}: header: {e}"))?;
         let bytes: &[u8] = &header;
         if u32_at(bytes, 0) != STEP_MAP_MAGIC {
             return Err(format!("{name}: bad magic 0x{:08x}", u32_at(bytes, 0)));
@@ -178,7 +176,9 @@ impl StepMapReader {
                 "{name}: the header counts {path_count} paths, {line_count} lines and {step_count} steps but the map has no chunk"
             ));
         }
-        let table = member.get(STEP_MAP_HEADER_SIZE, table_end).unwrap_or_default();
+        let table = member
+            .get(STEP_MAP_HEADER_SIZE, table_end)
+            .map_err(|e| format!("{name}: chunk table: {e}"))?;
         let mut chunks = Vec::with_capacity(chunk_count);
         for i in 0..chunk_count {
             let e = i * STEP_MAP_CHUNK_ENTRY_SIZE;

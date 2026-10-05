@@ -17,10 +17,10 @@ use crate::CtfsError;
 
 /// Where a [`CtfsReader`]'s container bytes are: a file it reads from as it
 /// is asked, or the whole container already in memory (a browser, which is
-/// handed bytes; a container fetched over the network). In-memory bytes are
-/// shared with the members read out of them ([`CtfsReader::read_member`]).
+/// handed bytes; a container fetched over the network). Either is shared with
+/// the members read out of it ([`CtfsReader::read_member`]).
 enum Source {
-    File(File),
+    File(Arc<File>),
     Bytes(Arc<Vec<u8>>),
 }
 
@@ -134,7 +134,7 @@ impl CtfsReader {
         std::io::Seek::seek(&mut r, std::io::SeekFrom::Start(0))?;
         let (header, ext_header, entries) = Self::read_root(&mut r, header_size)?;
         Ok(CtfsReader {
-            source: Source::File(file),
+            source: Source::File(Arc::new(file)),
             block_size: ext_header.block_size,
             entries,
             compact_offsets: None,
@@ -278,14 +278,19 @@ impl CtfsReader {
         Ok(data)
     }
 
-    /// A member's bytes, without copying them out of a container that is in
-    /// memory: the [`MemberBytes`] shares the container's buffer and reads
-    /// across the member's blocks wherever they lie. From a file, the member
-    /// is read whole, as [`read_file`](Self::read_file) reads it. Every check
-    /// `read_file` makes is made here, before the member is returned.
+    /// A member's bytes, without copying them out of the container: the
+    /// [`MemberBytes`] shares the container's buffer or file and reads across
+    /// the member's blocks wherever they lie. From a file, only the ranges
+    /// asked of it are read, when they are asked for. Every check
+    /// [`read_file`](Self::read_file) makes on the member's blocks is made
+    /// here, before the member is returned.
     pub fn read_member(&mut self, name: &str) -> Result<MemberBytes, CtfsError> {
         match &self.source {
-            Source::File(_) => Ok(MemberBytes::from(self.read_file(name)?)),
+            Source::File(file) => {
+                let file = Arc::clone(file);
+                let (_, runs) = self.member_runs(name)?;
+                Ok(MemberBytes::in_file(file, runs))
+            }
             Source::Bytes(bytes) => {
                 let image = Arc::clone(bytes);
                 let (_, runs) = self.member_runs(name)?;

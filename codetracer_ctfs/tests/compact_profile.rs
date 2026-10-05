@@ -86,7 +86,7 @@ fn assert_reads_back(reader: &mut CtfsReader, members: &[(&str, Vec<u8>)]) {
     for (name, content) in members {
         assert_eq!(reader.file_size(name), Some(content.len() as u64), "{name}");
         assert_eq!(reader.read_file(name).unwrap(), *content, "{name}");
-        assert_eq!(reader.read_member(name).unwrap().to_vec(), *content, "{name}");
+        assert_eq!(reader.read_member(name).unwrap().to_vec().unwrap(), *content, "{name}");
         let mut buf = vec![0u8; 100];
         let off = content.len() / 2;
         let n = reader.read_at(name, off as u64, &mut buf).unwrap();

@@ -89,37 +89,7 @@ struct Nim {
 
 impl Nim {
     fn build(work: &Path) -> Option<Nim> {
-        let (repo, direnv, home) = nim_adjudicator::nim_checker()?;
-        let src = work.join("compact_driver.nim");
-        fs::write(&src, NIM_DRIVER).unwrap();
-        let exe = work.join("compact_driver");
-        let out = Command::new("env")
-            .args([
-                "-i".into(),
-                format!("HOME={}", home.display()),
-                "PATH=/run/current-system/sw/bin:/usr/bin:/bin".into(),
-                direnv.display().to_string(),
-                "exec".into(),
-                repo.display().to_string(),
-                "nim".into(),
-                "c".into(),
-                "-d:release".into(),
-                format!("-p:{}", repo.join("src").display()),
-                "--hints:off".into(),
-                format!("--nimcache:{}", work.join("nimcache").display()),
-                format!("-o:{}", exe.display()),
-                src.display().to_string(),
-            ])
-            .current_dir(&repo)
-            .output()
-            .expect("failed to spawn env/direnv");
-        assert!(
-            exe.exists(),
-            "the sibling repo's Nim toolchain could not build the compact driver, so the cross-implementation half \
-             did not run:\n{}{}",
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr)
-        );
+        let exe = nim_adjudicator::build_driver(work, "compact_driver", NIM_DRIVER)?;
         Some(Nim { exe })
     }
 

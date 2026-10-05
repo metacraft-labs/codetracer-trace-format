@@ -75,17 +75,51 @@ pub fn nim_checker() -> Option<(PathBuf, PathBuf, PathBuf)> {
     Some((fs::canonicalize(&repo).ok()?, direnv, home))
 }
 
+/// Compile `source`, a Nim program over the sibling checkout's sources, into
+/// `work/<name>` through that checkout's own dev shell. `None` when the
+/// cross-implementation half cannot run here; a checkout that is present but
+/// cannot build the program fails the test.
+pub fn build_driver(work: &Path, name: &str, source: &str) -> Option<PathBuf> {
+    let (repo, direnv, home) = nim_checker()?;
+    let src = work.join(format!("{name}.nim"));
+    fs::write(&src, source).unwrap();
+    let exe = work.join(name);
+    let out = Command::new("env")
+        .args([
+            "-i".into(),
+            format!("HOME={}", home.display()),
+            "PATH=/run/current-system/sw/bin:/usr/bin:/bin".into(),
+            direnv.display().to_string(),
+            "exec".into(),
+            repo.display().to_string(),
+            "nim".into(),
+            "c".into(),
+            "-d:release".into(),
+            format!("-p:{}", repo.join("src").display()),
+            "--hints:off".into(),
+            format!("--nimcache:{}", work.join(format!("nimcache-{name}")).display()),
+            format!("-o:{}", exe.display()),
+            src.display().to_string(),
+        ])
+        .current_dir(&repo)
+        .output()
+        .expect("failed to spawn env/direnv");
+    assert!(
+        exe.exists(),
+        "the sibling repo's Nim toolchain could not build {name}, so the cross-implementation half did not run:\n{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    Some(exe)
+}
+
 fn which_direnv() -> Option<PathBuf> {
     let out = Command::new("sh").arg("-c").arg("command -v direnv").output().ok()?;
     if !out.status.success() {
         return None;
     }
     let p = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
-    if p.exists() {
-        Some(p)
-    } else {
-        None
-    }
+    if p.exists() { Some(p) } else { None }
 }
 
 /// Drive the production Nim reader over `container` with a manifest of

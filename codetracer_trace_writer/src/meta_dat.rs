@@ -25,8 +25,11 @@
 //! There is no path list: a trace's source paths are the records of
 //! `paths.dat`, and nothing else.
 //!
-//! The optional extended blocks (MCR / replay-launch / layout / filter
-//! provenance) are not emitted by the Rust writer — their flag bits stay clear.
+//! The four flag-gated blocks that may follow `recorder_id` — MCR fields
+//! (bit 0), replay-launch fields (bit 1), a layout snapshot (bit 2) and the
+//! trace-filter provenance chain (bit 3), in that order — are written and read
+//! as [`MetaDatBlocks`]: each block's flag bit is set exactly when the block is
+//! present.
 //!
 //! # Version history
 //!
@@ -308,6 +311,23 @@ pub const FLAG_HAS_LINE_COUNT_TABLE: u16 = 0x4000;
 /// `ctfs_trace_reader::meta_dat::FLAG_HAS_CORRELATION_INDEX`.
 pub const FLAG_HAS_CORRELATION_INDEX: u16 = 0x8000;
 
+/// Flag bit 0 — the MCR fields block follows `recorder_id`
+/// (`internal-files.md` §"Metadata (meta.dat)"). Must match the Nim writer's
+/// `FlagHasMcrFields`.
+pub const FLAG_HAS_MCR_FIELDS: u16 = 0x1;
+/// Flag bit 1 — the replay-launch fields block follows (spec §6A.5). Must
+/// match the Nim writer's `FlagHasReplayLaunchFields`.
+pub const FLAG_HAS_REPLAY_LAUNCH_FIELDS: u16 = 0x2;
+/// Flag bit 2 — the layout snapshot block follows (spec §6B.7). Must match the
+/// Nim writer's `FlagHasLayoutSnapshot`.
+pub const FLAG_HAS_LAYOUT_SNAPSHOT: u16 = 0x4;
+/// Flag bit 3 — the trace-filter provenance chain follows (spec §7), possibly
+/// empty. Must match the Nim writer's `FlagHasTraceFilterProvenance`.
+pub const FLAG_HAS_TRACE_FILTER_PROVENANCE: u16 = 0x8;
+
+/// Every flag bit that announces a block after `recorder_id`.
+pub const BLOCK_FLAGS: u16 = FLAG_HAS_MCR_FIELDS | FLAG_HAS_REPLAY_LAUNCH_FIELDS | FLAG_HAS_LAYOUT_SNAPSHOT | FLAG_HAS_TRACE_FILTER_PROVENANCE;
+
 fn encode_varint(mut value: u64, out: &mut Vec<u8>) {
     loop {
         let mut byte = (value & 0x7f) as u8;
@@ -351,7 +371,8 @@ pub fn encode_meta_dat(recording_id: &str, program: &str, args: &[String], workd
     encode_meta_dat_ext(recording_id, program, args, workdir, recorder_id, flags, 0)
 }
 
-/// Serialize a version 6 `meta.dat` byte buffer, `flags_ext` included.
+/// Serialize a version 6 `meta.dat` byte buffer, `flags_ext` included, with
+/// no block after `recorder_id`.
 pub fn encode_meta_dat_ext(
     recording_id: &str,
     program: &str,
@@ -361,6 +382,34 @@ pub fn encode_meta_dat_ext(
     flags: u16,
     ext_flags: u32,
 ) -> Vec<u8> {
+    encode_meta_dat_with_blocks(
+        recording_id,
+        program,
+        args,
+        workdir,
+        recorder_id,
+        flags,
+        ext_flags,
+        &MetaDatBlocks::default(),
+    )
+}
+
+/// Serialize a version 6 `meta.dat` byte buffer with the given blocks after
+/// `recorder_id`. Each block's flag bit is taken from `blocks`, whatever
+/// `flags` says of it: a bit without its block, or a block without its bit,
+/// is a header no reader can parse.
+#[allow(clippy::too_many_arguments)]
+pub fn encode_meta_dat_with_blocks(
+    recording_id: &str,
+    program: &str,
+    args: &[String],
+    workdir: &str,
+    recorder_id: &str,
+    flags: u16,
+    ext_flags: u32,
+    blocks: &MetaDatBlocks,
+) -> Vec<u8> {
+    let flags = (flags & !BLOCK_FLAGS) | blocks.flags();
     let mut out = Vec::new();
     out.extend_from_slice(&META_DAT_MAGIC);
     out.extend_from_slice(&META_DAT_VERSION.to_le_bytes());
@@ -374,6 +423,7 @@ pub fn encode_meta_dat_ext(
     }
     encode_varint_str(workdir, &mut out);
     encode_varint_str(recorder_id, &mut out);
+    blocks.encode(&mut out);
     out
 }
 
@@ -540,11 +590,9 @@ pub fn read_meta_dat_program(data: &[u8]) -> Result<String, String> {
 /// The decoded core field block of a [`META_DAT_VERSION`] header.
 ///
 /// Covers the fields every container carries, in the order
-/// `internal-files.md` §"Metadata (meta.dat)" lays them out. The
-/// flag-gated extension blocks (MCR, replay-launch, layout snapshot, filter
-/// provenance) are not decoded into fields; `trailing` holds whatever bytes
-/// follow `recorder_id` so a caller can still tell "same core, different
-/// extensions" from "identical".
+/// `internal-files.md` §"Metadata (meta.dat)" lays them out, and the
+/// flag-gated blocks that follow them. `trailing` holds whatever bytes follow
+/// the last block, which a well-formed header has none of.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MetaDat {
     pub version: u16,
@@ -556,17 +604,25 @@ pub struct MetaDat {
     pub args: Vec<String>,
     pub workdir: String,
     pub recorder_id: String,
+    /// The blocks the flags announce.
+    pub blocks: MetaDatBlocks,
     pub trailing: Vec<u8>,
 }
 
+/// `len` bytes at `pos`, advancing past them, or `what` extends past the end.
+fn take<'a>(data: &'a [u8], pos: &mut usize, len: u64, what: &str) -> Result<&'a [u8], String> {
+    let bytes = usize::try_from(len)
+        .ok()
+        .and_then(|len| data.get(*pos..pos.checked_add(len)?))
+        .ok_or_else(|| format!("meta.dat: {what} extends past end"))?;
+    *pos += bytes.len();
+    Ok(bytes)
+}
+
 fn decode_varint_str(data: &[u8], pos: &mut usize) -> Result<String, String> {
-    let len = decode_varint(data, pos)? as usize;
-    if *pos + len > data.len() {
-        return Err("meta.dat: string extends past end".to_string());
-    }
-    let s = String::from_utf8(data[*pos..*pos + len].to_vec()).map_err(|e| format!("meta.dat: string not UTF-8: {e}"))?;
-    *pos += len;
-    Ok(s)
+    let len = decode_varint(data, pos)?;
+    let bytes = take(data, pos, len, "string")?;
+    String::from_utf8(bytes.to_vec()).map_err(|e| format!("meta.dat: string not UTF-8: {e}"))
 }
 
 /// Decode a `meta.dat` buffer into its core fields.
@@ -590,6 +646,7 @@ pub fn decode_meta_dat(data: &[u8]) -> Result<MetaDat, String> {
     }
     let workdir = decode_varint_str(data, &mut pos)?;
     let recorder_id = decode_varint_str(data, &mut pos)?;
+    let blocks = MetaDatBlocks::decode(flags, data, &mut pos)?;
     Ok(MetaDat {
         version,
         flags,
@@ -599,8 +656,220 @@ pub fn decode_meta_dat(data: &[u8]) -> Result<MetaDat, String> {
         args,
         workdir,
         recorder_id,
+        blocks,
         trailing: data[pos..].to_vec(),
     })
+}
+
+/// The clock an MCR recording ticks by (`tick_source`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TickSource {
+    Rdtsc = 0,
+    Monotonic = 1,
+    PerfCounter = 2,
+}
+
+/// The memory ordering an MCR recording's atomics were recorded under.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AtomicMode {
+    Relaxed = 0,
+    SeqCst = 1,
+}
+
+/// The MCR fields block (flag bit 0), field for field as the Nim writer's
+/// `McrMetaFields`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct McrFields {
+    pub tick_source: TickSource,
+    pub total_threads: u32,
+    pub atomic_mode: AtomicMode,
+    pub total_events: u64,
+    pub total_checkpoints: u32,
+    pub start_time_unix_us: u64,
+    pub platform: String,
+    pub tick_granularity: String,
+    /// The tick source as the recorder spelled it.
+    pub tick_source_str: String,
+    /// The atomic mode as the recorder spelled it.
+    pub atomic_mode_str: String,
+    /// The start time, ISO 8601.
+    pub start_time_str: String,
+    /// The hook profile, e.g. `default` or `dotnet`.
+    pub hook_profile: String,
+    /// The active hook strategies, e.g. `ldpreload`, `seccomp_unotify`.
+    pub hook_strategies: Vec<String>,
+}
+
+/// The replay-launch fields block (flag bit 1, spec §6A.5): whether the
+/// recording ran with address-space randomisation disabled.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReplayLaunchFields {
+    pub aslr_disabled: bool,
+}
+
+/// The layout snapshot block (flag bit 2, spec §6B.7): the address-space
+/// layout hash and the fingerprint it was computed from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LayoutSnapshot {
+    pub layout_hash: u64,
+    pub layout_fingerprint: Vec<u8>,
+}
+
+/// One entry of the trace-filter chain (flag bit 3, spec §7): the filter's
+/// path, or an `<inline:...>` sentinel, and the SHA-256 of its source bytes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FilterProvenance {
+    pub path: String,
+    pub sha256: [u8; 32],
+}
+
+/// The flag-gated blocks after `recorder_id`, in the order they are laid out.
+/// `None` is a block that is absent and its flag bit clear;
+/// `filter_provenance: Some(vec![])` is a chain recorded as empty, flag set.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct MetaDatBlocks {
+    pub mcr: Option<McrFields>,
+    pub replay_launch: Option<ReplayLaunchFields>,
+    pub layout_snapshot: Option<LayoutSnapshot>,
+    pub filter_provenance: Option<Vec<FilterProvenance>>,
+}
+
+impl MetaDatBlocks {
+    /// The flag bits announcing the blocks present.
+    pub fn flags(&self) -> u16 {
+        let bit = |present: bool, flag: u16| if present { flag } else { 0 };
+        bit(self.mcr.is_some(), FLAG_HAS_MCR_FIELDS)
+            | bit(self.replay_launch.is_some(), FLAG_HAS_REPLAY_LAUNCH_FIELDS)
+            | bit(self.layout_snapshot.is_some(), FLAG_HAS_LAYOUT_SNAPSHOT)
+            | bit(self.filter_provenance.is_some(), FLAG_HAS_TRACE_FILTER_PROVENANCE)
+    }
+
+    fn encode(&self, out: &mut Vec<u8>) {
+        if let Some(m) = &self.mcr {
+            for v in [
+                m.tick_source as u64,
+                m.total_threads as u64,
+                m.atomic_mode as u64,
+                m.total_events,
+                m.total_checkpoints as u64,
+                m.start_time_unix_us,
+            ] {
+                encode_varint(v, out);
+            }
+            for s in [
+                &m.platform,
+                &m.tick_granularity,
+                &m.tick_source_str,
+                &m.atomic_mode_str,
+                &m.start_time_str,
+                &m.hook_profile,
+            ] {
+                encode_varint_str(s, out);
+            }
+            encode_varint(m.hook_strategies.len() as u64, out);
+            for s in &m.hook_strategies {
+                encode_varint_str(s, out);
+            }
+        }
+        if let Some(r) = &self.replay_launch {
+            out.push(r.aslr_disabled as u8);
+        }
+        if let Some(l) = &self.layout_snapshot {
+            out.extend_from_slice(&l.layout_hash.to_le_bytes());
+            encode_varint(l.layout_fingerprint.len() as u64, out);
+            out.extend_from_slice(&l.layout_fingerprint);
+        }
+        if let Some(chain) = &self.filter_provenance {
+            encode_varint(chain.len() as u64, out);
+            for entry in chain {
+                encode_varint_str(&entry.path, out);
+                out.extend_from_slice(&entry.sha256);
+            }
+        }
+    }
+
+    /// The blocks `flags` announces, read from `data` at `pos`. A value out of
+    /// its field's range is refused, naming the field.
+    fn decode(flags: u16, data: &[u8], pos: &mut usize) -> Result<MetaDatBlocks, String> {
+        let mut blocks = MetaDatBlocks::default();
+        if flags & FLAG_HAS_MCR_FIELDS != 0 {
+            let tick_source = match decode_varint(data, pos)? {
+                0 => TickSource::Rdtsc,
+                1 => TickSource::Monotonic,
+                2 => TickSource::PerfCounter,
+                v => return Err(format!("meta.dat: invalid tick_source value {v}")),
+            };
+            let total_threads = decode_u32(data, pos, "total_threads")?;
+            let atomic_mode = match decode_varint(data, pos)? {
+                0 => AtomicMode::Relaxed,
+                1 => AtomicMode::SeqCst,
+                v => return Err(format!("meta.dat: invalid atomic_mode value {v}")),
+            };
+            let total_events = decode_varint(data, pos)?;
+            let total_checkpoints = decode_u32(data, pos, "total_checkpoints")?;
+            let start_time_unix_us = decode_varint(data, pos)?;
+            let mut strings = Vec::with_capacity(6);
+            for _ in 0..6 {
+                strings.push(decode_varint_str(data, pos)?);
+            }
+            let count = decode_varint(data, pos)?;
+            let mut hook_strategies = Vec::new();
+            for _ in 0..count {
+                hook_strategies.push(decode_varint_str(data, pos)?);
+            }
+            let [platform, tick_granularity, tick_source_str, atomic_mode_str, start_time_str, hook_profile]: [String; 6] =
+                strings.try_into().expect("six strings were read");
+            blocks.mcr = Some(McrFields {
+                tick_source,
+                total_threads,
+                atomic_mode,
+                total_events,
+                total_checkpoints,
+                start_time_unix_us,
+                platform,
+                tick_granularity,
+                tick_source_str,
+                atomic_mode_str,
+                start_time_str,
+                hook_profile,
+                hook_strategies,
+            });
+        }
+        if flags & FLAG_HAS_REPLAY_LAUNCH_FIELDS != 0 {
+            let byte = take(data, pos, 1, "replay_launch_fields aslr_disabled byte")?;
+            blocks.replay_launch = Some(ReplayLaunchFields { aslr_disabled: byte[0] != 0 });
+        }
+        if flags & FLAG_HAS_LAYOUT_SNAPSHOT != 0 {
+            let hash = take(data, pos, 8, "layout_snapshot hash")?;
+            let layout_hash = u64::from_le_bytes(hash.try_into().expect("eight bytes"));
+            let len = decode_varint(data, pos)?;
+            let layout_fingerprint = take(data, pos, len, "layout_snapshot fingerprint")?.to_vec();
+            blocks.layout_snapshot = Some(LayoutSnapshot {
+                layout_hash,
+                layout_fingerprint,
+            });
+        }
+        if flags & FLAG_HAS_TRACE_FILTER_PROVENANCE != 0 {
+            let count = decode_varint(data, pos)?;
+            let mut chain = Vec::new();
+            for _ in 0..count {
+                let path = decode_varint_str(data, pos)?;
+                let sha = take(data, pos, 32, "trace_filter sha256")?;
+                chain.push(FilterProvenance {
+                    path,
+                    sha256: sha.try_into().expect("32 bytes"),
+                });
+            }
+            blocks.filter_provenance = Some(chain);
+        }
+        Ok(blocks)
+    }
+}
+
+/// A varint field that holds a `u32`; a larger value is refused by name.
+fn decode_u32(data: &[u8], pos: &mut usize, field: &str) -> Result<u32, String> {
+    let v = decode_varint(data, pos)?;
+    u32::try_from(v).map_err(|_| format!("meta.dat: {field} value {v} does not fit 32 bits"))
 }
 
 #[cfg(test)]
@@ -916,5 +1185,82 @@ mod tests {
         // A container without spans must leave the bit clear.
         let buf_none = encode_meta_dat(RID, "prog", &[], "", "", 0);
         assert!(!meta_dat_has_span_stream(&buf_none));
+    }
+
+    fn every_block() -> MetaDatBlocks {
+        MetaDatBlocks {
+            mcr: Some(McrFields {
+                tick_source: TickSource::PerfCounter,
+                total_threads: 7,
+                atomic_mode: AtomicMode::SeqCst,
+                total_events: 1 << 40,
+                total_checkpoints: 300,
+                start_time_unix_us: 1_760_000_000_000_000,
+                platform: "linux-x86_64".into(),
+                tick_granularity: "ns".into(),
+                tick_source_str: "perf_counter".into(),
+                atomic_mode_str: "seq_cst".into(),
+                start_time_str: "2026-10-05T22:00:00Z".into(),
+                hook_profile: "default".into(),
+                hook_strategies: vec!["ldpreload".into(), "seccomp_unotify".into()],
+            }),
+            replay_launch: Some(ReplayLaunchFields { aslr_disabled: true }),
+            layout_snapshot: Some(LayoutSnapshot {
+                layout_hash: 0x0123_4567_89ab_cdef,
+                layout_fingerprint: (0..200u8).collect(),
+            }),
+            filter_provenance: Some(vec![
+                FilterProvenance {
+                    path: "<inline:builtin-default>".into(),
+                    sha256: [0xab; 32],
+                },
+                FilterProvenance {
+                    path: "/p/.trace-filter.toml".into(),
+                    sha256: core::array::from_fn(|i| i as u8),
+                },
+            ]),
+        }
+    }
+
+    /// Every block reads back as written, each announced by its own flag bit
+    /// and nothing after the last; a flag bit passed without its block is
+    /// cleared, and a provenance chain recorded empty keeps its bit.
+    #[test]
+    fn every_block_round_trips_under_its_own_flag_bit() {
+        let blocks = every_block();
+        let buf = encode_meta_dat_with_blocks(RID, "prog", &[], "/wd", "rec", FLAG_HAS_STEP_STREAM, 0, &blocks);
+        let m = decode_meta_dat(&buf).unwrap();
+        assert_eq!(m.flags, FLAG_HAS_STEP_STREAM | BLOCK_FLAGS);
+        assert_eq!(m.blocks, blocks);
+        assert!(m.trailing.is_empty());
+
+        let none = encode_meta_dat_ext(RID, "prog", &[], "/wd", "rec", BLOCK_FLAGS, 0);
+        assert_eq!(read_meta_dat_flags(&none), Ok(0), "no block, no bit");
+
+        let empty_chain = MetaDatBlocks {
+            filter_provenance: Some(Vec::new()),
+            ..MetaDatBlocks::default()
+        };
+        let buf = encode_meta_dat_with_blocks(RID, "prog", &[], "/wd", "rec", 0, 0, &empty_chain);
+        let m = decode_meta_dat(&buf).unwrap();
+        assert_eq!(m.flags, FLAG_HAS_TRACE_FILTER_PROVENANCE);
+        assert_eq!(m.blocks, empty_chain);
+    }
+
+    /// Cut anywhere inside the blocks, or carrying a value outside its field,
+    /// the header is refused rather than read short.
+    #[test]
+    fn a_cut_or_out_of_range_block_is_refused() {
+        let buf = encode_meta_dat_with_blocks(RID, "prog", &[], "/wd", "rec", 0, 0, &every_block());
+        let core_end = encode_meta_dat(RID, "prog", &[], "/wd", "rec", 0).len();
+        for cut in core_end..buf.len() {
+            assert!(decode_meta_dat(&buf[..cut]).is_err(), "cut at {cut} of {}", buf.len());
+        }
+        let mut bad = buf.clone();
+        bad[core_end] = 3;
+        assert_eq!(decode_meta_dat(&bad).unwrap_err(), "meta.dat: invalid tick_source value 3");
+        let mut bad = buf;
+        bad[core_end + 2] = 2;
+        assert_eq!(decode_meta_dat(&bad).unwrap_err(), "meta.dat: invalid atomic_mode value 2");
     }
 }

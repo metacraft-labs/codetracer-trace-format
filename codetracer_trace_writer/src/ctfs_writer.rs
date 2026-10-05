@@ -95,7 +95,7 @@ use crate::{
     meta_dat::{
         FLAG_EXT_HAS_SOURCE_RELOAD, FLAG_HAS_CALL_STREAM, FLAG_HAS_COLUMN_AWARE_STEPS, FLAG_HAS_INTERNING_TABLES, FLAG_HAS_IO_EVENT_STREAM,
         FLAG_HAS_LINE_COUNT_TABLE, FLAG_HAS_STEP_STREAM, FLAG_HAS_VALUE_STREAM, FLAG_SUPPORTS_COLUMN_BREAKPOINTS, FLAG_SUPPORTS_COLUMN_MOTIONS,
-        encode_meta_dat_ext,
+        MetaDatBlocks, encode_meta_dat_with_blocks,
     },
     step_stream::{DEFAULT_STEPS_CHUNK_SIZE, SourceReloadChange, StepStreamBuilder},
     trace_writer::TraceWriter,
@@ -302,6 +302,9 @@ pub struct CtfsTraceWriter {
     column_awareness_dropped: bool,
     /// Capability bit 6 — the recorder's columns are breakpoint-sharp.
     column_breakpoints_requested: bool,
+    /// The flag-gated `meta.dat` blocks: MCR, replay-launch, layout snapshot,
+    /// trace-filter provenance.
+    meta_blocks: MetaDatBlocks,
     /// Capability bit 7 — the recorder supports per-column motions.
     column_motions_requested: bool,
     /// The `(line, column)` address space, built from the per-path
@@ -511,6 +514,7 @@ impl CtfsTraceWriter {
             column_awareness_dropped: false,
             column_breakpoints_requested: false,
             column_motions_requested: false,
+            meta_blocks: MetaDatBlocks::default(),
             position_space: PositionSpace::new(false),
             columns_dropped_for_paths: std::collections::BTreeSet::new(),
             step_encoder: StepEncoder::new(),
@@ -738,6 +742,23 @@ impl CtfsTraceWriter {
                 .to_string());
         }
         self.source_reloads_declared = true;
+        Ok(())
+    }
+
+    /// Set the flag-gated blocks `meta.dat` carries after `recorder_id`: MCR
+    /// fields, replay-launch fields, a layout snapshot and the trace-filter
+    /// provenance chain (`internal-files.md` §"Metadata (meta.dat)"). Each
+    /// present block sets its flag bit. Refused once the trace has recorded:
+    /// `meta.dat` is written by the first record and never rewritten.
+    pub fn set_meta_blocks(&mut self, blocks: MetaDatBlocks) -> Result<(), String> {
+        if self.meta_committed {
+            return Err(
+                "set_meta_blocks: the trace has recorded already, and meta.dat, which carries the blocks, \
+                        was written by its first record"
+                    .to_string(),
+            );
+        }
+        self.meta_blocks = blocks;
         Ok(())
     }
 
@@ -1238,7 +1259,7 @@ impl CtfsTraceWriter {
             flags |= FLAG_HAS_LINE_COUNT_TABLE;
         }
         let ext_flags = if self.source_reloads_declared { FLAG_EXT_HAS_SOURCE_RELOAD } else { 0 };
-        encode_meta_dat_ext(
+        encode_meta_dat_with_blocks(
             &recording_id,
             &self.base.program,
             &self.base.args,
@@ -1246,6 +1267,7 @@ impl CtfsTraceWriter {
             "",
             flags,
             ext_flags,
+            &self.meta_blocks,
         )
     }
 

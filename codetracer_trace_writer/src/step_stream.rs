@@ -233,7 +233,20 @@ fn encode_signed_varint(value: i64, out: &mut Vec<u8>) {
     encode_varint(zz, out);
 }
 
+/// A varint. One byte, most fields of a record, is read inline; longer
+/// ones, and every refusal, by [`decode_varint_long`].
+#[inline]
 fn decode_varint(data: &[u8], pos: &mut usize) -> Result<u64, String> {
+    if let Some(&byte) = data.get(*pos)
+        && byte < 0x80
+    {
+        *pos += 1;
+        return Ok(byte as u64);
+    }
+    decode_varint_long(data, pos)
+}
+
+fn decode_varint_long(data: &[u8], pos: &mut usize) -> Result<u64, String> {
     let mut result: u64 = 0;
     let mut shift: u32 = 0;
     loop {

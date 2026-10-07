@@ -10,6 +10,12 @@
 //! human-readable error string in a thread-local buffer. The caller retrieves
 //! it via `trace_writer_last_error()`.
 //!
+//! A panic inside any entry point is caught at the boundary and reported the
+//! same way. A call that returns nothing cannot report its own failure: it is
+//! held on the handle, and the finishing calls (`trace_writer_finish_events`,
+//! `trace_writer_finish_metadata`, `trace_writer_finish_paths`) return `false`
+//! naming it.
+//!
 //! # Safety
 //!
 //! Every entry point here is `unsafe` because it dereferences pointers the
@@ -64,7 +70,9 @@ fn set_error(msg: &str) {
 /// when no error has occurred.
 #[unsafe(no_mangle)]
 pub extern "C" fn trace_writer_last_error() -> *const c_char {
-    LAST_ERROR.with(|e| e.borrow().as_ptr())
+    guarded("trace_writer_last_error", std::ptr::null_mut(), c"".as_ptr(), || {
+        LAST_ERROR.with(|e| e.borrow().as_ptr())
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -74,6 +82,77 @@ pub extern "C" fn trace_writer_last_error() -> *const c_char {
 /// Opaque handle passed across the FFI boundary.
 pub struct TraceWriterHandle {
     inner: Box<dyn TraceWriter + Send>,
+    /// The first failure of a call that could not report it — an entry point
+    /// returning nothing, or an id whose sentinel callers do not check. The
+    /// finishing calls report it, so a recording that lost an event does not
+    /// finish as a success. `None` while every call has succeeded.
+    failure: Option<String>,
+}
+
+// ---------------------------------------------------------------------------
+// The entry-point guard
+//
+// Every `extern "C"` body runs inside `guarded`, which does two things:
+//
+// 1. **No panic crosses the C boundary.** The body runs under
+//    `catch_unwind`. A panic is caught, `trace_writer_last_error` names the
+//    entry point and the panic message, and the entry point returns its
+//    ordinary failure value (`false`, NULL, `usize::MAX`). Uncaught, a panic
+//    unwinding out of an `extern "C"` function aborts the host process.
+// 2. **A failure the caller cannot see is remembered.** A caught panic in a
+//    call on a handle is latched on that handle, and the finishing calls
+//    (`trace_writer_finish_events`, `_metadata`, `_paths`) then fail with it.
+//
+// This relies on the default `panic = "unwind"` strategy; a host that links
+// this library into a `panic = "abort"` build gets an abort instead of an
+// error, never undefined behaviour.
+// ---------------------------------------------------------------------------
+
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> &str {
+    if let Some(s) = payload.downcast_ref::<&str>() {
+        s
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s
+    } else {
+        "a panic with a non-string payload"
+    }
+}
+
+/// Run the body of the entry point `name`, turning a panic into `fail` and
+/// an error message, and latching it on `handle` when that is not NULL.
+/// Entry points that free the handle pass NULL.
+fn guarded<R>(name: &str, handle: *mut TraceWriterHandle, fail: R, body: impl FnOnce() -> R) -> R {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(body)) {
+        Ok(r) => r,
+        Err(payload) => {
+            let msg = format!("{name}: internal error: {}", panic_message(&*payload));
+            set_error(&msg);
+            if !handle.is_null() {
+                // SAFETY: a non-NULL handle is live for the whole call (the
+                // handle invariant), and the body's borrow of it ended when
+                // the panic unwound out of it.
+                let failure = &mut unsafe { &mut *handle }.failure;
+                failure.get_or_insert(msg);
+            }
+            fail
+        }
+    }
+}
+
+/// The result of a finishing call: its own error if it failed, otherwise the
+/// failure an earlier call latched on the handle, if any.
+fn finish_result(h: &TraceWriterHandle, result: Result<(), Box<dyn std::error::Error>>) -> bool {
+    match (result, &h.failure) {
+        (Err(e), _) => {
+            set_error(&e.to_string());
+            false
+        }
+        (Ok(()), Some(failure)) => {
+            set_error(&format!("the trace is incomplete because an earlier call failed: {failure}"));
+            false
+        }
+        (Ok(()), None) => true,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -229,9 +308,14 @@ fn w(handle: &mut TraceWriterHandle) -> &mut dyn TraceWriter {
 /// released with [`trace_writer_free`] exactly once.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_new(program: *const c_char, format: FfiTraceFormat) -> *mut TraceWriterHandle {
-    let prog = unsafe { cstr_to_str(program) };
-    let writer = create_trace_writer(prog, &[], to_format(format));
-    Box::into_raw(Box::new(TraceWriterHandle { inner: writer }))
+    guarded("trace_writer_new", std::ptr::null_mut(), std::ptr::null_mut(), || {
+        let prog = unsafe { cstr_to_str(program) };
+        let writer = create_trace_writer(prog, &[], to_format(format));
+        Box::into_raw(Box::new(TraceWriterHandle {
+            inner: writer,
+            failure: None,
+        }))
+    })
 }
 
 /// Free a trace writer handle.  Passing `NULL` is a no-op.
@@ -243,9 +327,11 @@ pub unsafe extern "C" fn trace_writer_new(program: *const c_char, format: FfiTra
 /// not, and does nothing.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_free(handle: *mut TraceWriterHandle) {
-    if !handle.is_null() {
-        drop(unsafe { Box::from_raw(handle) });
-    }
+    guarded("trace_writer_free", std::ptr::null_mut(), (), || {
+        if !handle.is_null() {
+            drop(unsafe { Box::from_raw(handle) });
+        }
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -258,18 +344,20 @@ pub unsafe extern "C" fn trace_writer_free(handle: *mut TraceWriterHandle) {
 /// invariant, both in the module-level "Safety" section.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_begin_metadata(handle: *mut TraceWriterHandle, path: *const c_char) -> bool {
-    if handle.is_null() {
-        set_error("NULL handle");
-        return false;
-    }
-    let h = unsafe { &mut *handle };
-    match TraceWriter::begin_writing_trace_metadata(w(h), Path::new(unsafe { cstr_to_str(path) })) {
-        Ok(()) => true,
-        Err(e) => {
-            set_error(&e.to_string());
-            false
+    guarded("trace_writer_begin_metadata", handle, false, || {
+        if handle.is_null() {
+            set_error("NULL handle");
+            return false;
         }
-    }
+        let h = unsafe { &mut *handle };
+        match TraceWriter::begin_writing_trace_metadata(w(h), Path::new(unsafe { cstr_to_str(path) })) {
+            Ok(()) => true,
+            Err(e) => {
+                set_error(&e.to_string());
+                false
+            }
+        }
+    })
 }
 
 /// # Safety
@@ -278,18 +366,15 @@ pub unsafe extern "C" fn trace_writer_begin_metadata(handle: *mut TraceWriterHan
 /// section.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_finish_metadata(handle: *mut TraceWriterHandle) -> bool {
-    if handle.is_null() {
-        set_error("NULL handle");
-        return false;
-    }
-    let h = unsafe { &mut *handle };
-    match TraceWriter::finish_writing_trace_metadata(w(h)) {
-        Ok(()) => true,
-        Err(e) => {
-            set_error(&e.to_string());
-            false
+    guarded("trace_writer_finish_metadata", handle, false, || {
+        if handle.is_null() {
+            set_error("NULL handle");
+            return false;
         }
-    }
+        let h = unsafe { &mut *handle };
+        let result = TraceWriter::finish_writing_trace_metadata(w(h));
+        finish_result(h, result)
+    })
 }
 
 /// # Safety
@@ -298,18 +383,20 @@ pub unsafe extern "C" fn trace_writer_finish_metadata(handle: *mut TraceWriterHa
 /// invariant, both in the module-level "Safety" section.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_begin_events(handle: *mut TraceWriterHandle, path: *const c_char) -> bool {
-    if handle.is_null() {
-        set_error("NULL handle");
-        return false;
-    }
-    let h = unsafe { &mut *handle };
-    match TraceWriter::begin_writing_trace_events(w(h), Path::new(unsafe { cstr_to_str(path) })) {
-        Ok(()) => true,
-        Err(e) => {
-            set_error(&e.to_string());
-            false
+    guarded("trace_writer_begin_events", handle, false, || {
+        if handle.is_null() {
+            set_error("NULL handle");
+            return false;
         }
-    }
+        let h = unsafe { &mut *handle };
+        match TraceWriter::begin_writing_trace_events(w(h), Path::new(unsafe { cstr_to_str(path) })) {
+            Ok(()) => true,
+            Err(e) => {
+                set_error(&e.to_string());
+                false
+            }
+        }
+    })
 }
 
 /// # Safety
@@ -318,18 +405,15 @@ pub unsafe extern "C" fn trace_writer_begin_events(handle: *mut TraceWriterHandl
 /// section.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_finish_events(handle: *mut TraceWriterHandle) -> bool {
-    if handle.is_null() {
-        set_error("NULL handle");
-        return false;
-    }
-    let h = unsafe { &mut *handle };
-    match TraceWriter::finish_writing_trace_events(w(h)) {
-        Ok(()) => true,
-        Err(e) => {
-            set_error(&e.to_string());
-            false
+    guarded("trace_writer_finish_events", handle, false, || {
+        if handle.is_null() {
+            set_error("NULL handle");
+            return false;
         }
-    }
+        let h = unsafe { &mut *handle };
+        let result = TraceWriter::finish_writing_trace_events(w(h));
+        finish_result(h, result)
+    })
 }
 
 /// # Safety
@@ -338,18 +422,20 @@ pub unsafe extern "C" fn trace_writer_finish_events(handle: *mut TraceWriterHand
 /// invariant, both in the module-level "Safety" section.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_begin_paths(handle: *mut TraceWriterHandle, path: *const c_char) -> bool {
-    if handle.is_null() {
-        set_error("NULL handle");
-        return false;
-    }
-    let h = unsafe { &mut *handle };
-    match TraceWriter::begin_writing_trace_paths(w(h), Path::new(unsafe { cstr_to_str(path) })) {
-        Ok(()) => true,
-        Err(e) => {
-            set_error(&e.to_string());
-            false
+    guarded("trace_writer_begin_paths", handle, false, || {
+        if handle.is_null() {
+            set_error("NULL handle");
+            return false;
         }
-    }
+        let h = unsafe { &mut *handle };
+        match TraceWriter::begin_writing_trace_paths(w(h), Path::new(unsafe { cstr_to_str(path) })) {
+            Ok(()) => true,
+            Err(e) => {
+                set_error(&e.to_string());
+                false
+            }
+        }
+    })
 }
 
 /// # Safety
@@ -358,18 +444,15 @@ pub unsafe extern "C" fn trace_writer_begin_paths(handle: *mut TraceWriterHandle
 /// section.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_finish_paths(handle: *mut TraceWriterHandle) -> bool {
-    if handle.is_null() {
-        set_error("NULL handle");
-        return false;
-    }
-    let h = unsafe { &mut *handle };
-    match TraceWriter::finish_writing_trace_paths(w(h)) {
-        Ok(()) => true,
-        Err(e) => {
-            set_error(&e.to_string());
-            false
+    guarded("trace_writer_finish_paths", handle, false, || {
+        if handle.is_null() {
+            set_error("NULL handle");
+            return false;
         }
-    }
+        let h = unsafe { &mut *handle };
+        let result = TraceWriter::finish_writing_trace_paths(w(h));
+        finish_result(h, result)
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -382,11 +465,13 @@ pub unsafe extern "C" fn trace_writer_finish_paths(handle: *mut TraceWriterHandl
 /// invariant, both in the module-level "Safety" section.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_start(handle: *mut TraceWriterHandle, path: *const c_char, line: i64) {
-    if handle.is_null() {
-        return;
-    }
-    let h = unsafe { &mut *handle };
-    TraceWriter::start(w(h), Path::new(unsafe { cstr_to_str(path) }), Line(line));
+    guarded("trace_writer_start", handle, (), || {
+        if handle.is_null() {
+            return;
+        }
+        let h = unsafe { &mut *handle };
+        TraceWriter::start(w(h), Path::new(unsafe { cstr_to_str(path) }), Line(line));
+    })
 }
 
 /// Override the working directory recorded in the trace metadata.
@@ -401,11 +486,13 @@ pub unsafe extern "C" fn trace_writer_start(handle: *mut TraceWriterHandle, path
 /// invariant, both in the module-level "Safety" section.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_set_workdir(handle: *mut TraceWriterHandle, workdir: *const c_char) {
-    if handle.is_null() {
-        return;
-    }
-    let h = unsafe { &mut *handle };
-    TraceWriter::set_workdir(w(h), Path::new(unsafe { cstr_to_str(workdir) }));
+    guarded("trace_writer_set_workdir", handle, (), || {
+        if handle.is_null() {
+            return;
+        }
+        let h = unsafe { &mut *handle };
+        TraceWriter::set_workdir(w(h), Path::new(unsafe { cstr_to_str(workdir) }));
+    })
 }
 
 /// # Safety
@@ -414,11 +501,13 @@ pub unsafe extern "C" fn trace_writer_set_workdir(handle: *mut TraceWriterHandle
 /// invariant, both in the module-level "Safety" section.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_register_step(handle: *mut TraceWriterHandle, path: *const c_char, line: i64) {
-    if handle.is_null() {
-        return;
-    }
-    let h = unsafe { &mut *handle };
-    TraceWriter::register_step(w(h), Path::new(unsafe { cstr_to_str(path) }), Line(line));
+    guarded("trace_writer_register_step", handle, (), || {
+        if handle.is_null() {
+            return;
+        }
+        let h = unsafe { &mut *handle };
+        TraceWriter::register_step(w(h), Path::new(unsafe { cstr_to_str(path) }), Line(line));
+    })
 }
 
 /// Register a function and return its ID.  Returns `usize::MAX` on error.
@@ -435,12 +524,14 @@ pub unsafe extern "C" fn trace_writer_ensure_function_id(
     path: *const c_char,
     line: i64,
 ) -> usize {
-    if handle.is_null() {
-        return usize::MAX;
-    }
-    let h = unsafe { &mut *handle };
-    let fid = TraceWriter::ensure_function_id(w(h), unsafe { cstr_to_str(name) }, Path::new(unsafe { cstr_to_str(path) }), Line(line));
-    fid.0
+    guarded("trace_writer_ensure_function_id", handle, usize::MAX, || {
+        if handle.is_null() {
+            return usize::MAX;
+        }
+        let h = unsafe { &mut *handle };
+        let fid = TraceWriter::ensure_function_id(w(h), unsafe { cstr_to_str(name) }, Path::new(unsafe { cstr_to_str(path) }), Line(line));
+        fid.0
+    })
 }
 
 /// Register a type and return its ID.  Returns `usize::MAX` on error.
@@ -451,11 +542,13 @@ pub unsafe extern "C" fn trace_writer_ensure_function_id(
 /// invariant, both in the module-level "Safety" section.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_ensure_type_id(handle: *mut TraceWriterHandle, kind: FfiTypeKind, lang_type: *const c_char) -> usize {
-    if handle.is_null() {
-        return usize::MAX;
-    }
-    let h = unsafe { &mut *handle };
-    TraceWriter::ensure_type_id(w(h), to_type_kind(kind), unsafe { cstr_to_str(lang_type) }).0
+    guarded("trace_writer_ensure_type_id", handle, usize::MAX, || {
+        if handle.is_null() {
+            return usize::MAX;
+        }
+        let h = unsafe { &mut *handle };
+        TraceWriter::ensure_type_id(w(h), to_type_kind(kind), unsafe { cstr_to_str(lang_type) }).0
+    })
 }
 
 /// Register a call to the function identified by `function_id`.
@@ -470,11 +563,13 @@ pub unsafe extern "C" fn trace_writer_ensure_type_id(handle: *mut TraceWriterHan
 /// section.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_register_call(handle: *mut TraceWriterHandle, function_id: usize) {
-    if handle.is_null() {
-        return;
-    }
-    let h = unsafe { &mut *handle };
-    TraceWriter::register_call(w(h), codetracer_trace_types::FunctionId(function_id), vec![]);
+    guarded("trace_writer_register_call", handle, (), || {
+        if handle.is_null() {
+            return;
+        }
+        let h = unsafe { &mut *handle };
+        TraceWriter::register_call(w(h), codetracer_trace_types::FunctionId(function_id), vec![]);
+    })
 }
 
 /// Register a function return with no explicit return value.
@@ -485,11 +580,13 @@ pub unsafe extern "C" fn trace_writer_register_call(handle: *mut TraceWriterHand
 /// section.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_register_return(handle: *mut TraceWriterHandle) {
-    if handle.is_null() {
-        return;
-    }
-    let h = unsafe { &mut *handle };
-    TraceWriter::register_return(w(h), codetracer_trace_types::NONE_VALUE);
+    guarded("trace_writer_register_return", handle, (), || {
+        if handle.is_null() {
+            return;
+        }
+        let h = unsafe { &mut *handle };
+        TraceWriter::register_return(w(h), codetracer_trace_types::NONE_VALUE);
+    })
 }
 
 /// Register a function return with an integer return value.
@@ -505,12 +602,14 @@ pub unsafe extern "C" fn trace_writer_register_return_int(
     type_kind: FfiTypeKind,
     type_name: *const c_char,
 ) {
-    if handle.is_null() {
-        return;
-    }
-    let h = unsafe { &mut *handle };
-    let type_id = TraceWriter::ensure_type_id(w(h), to_type_kind(type_kind), unsafe { cstr_to_str(type_name) });
-    TraceWriter::register_return(w(h), ValueRecord::Int { i: value, type_id });
+    guarded("trace_writer_register_return_int", handle, (), || {
+        if handle.is_null() {
+            return;
+        }
+        let h = unsafe { &mut *handle };
+        let type_id = TraceWriter::ensure_type_id(w(h), to_type_kind(type_kind), unsafe { cstr_to_str(type_name) });
+        TraceWriter::register_return(w(h), ValueRecord::Int { i: value, type_id });
+    })
 }
 
 /// Register a function return with a string (raw) return value.
@@ -527,18 +626,20 @@ pub unsafe extern "C" fn trace_writer_register_return_raw(
     type_kind: FfiTypeKind,
     type_name: *const c_char,
 ) {
-    if handle.is_null() {
-        return;
-    }
-    let h = unsafe { &mut *handle };
-    let type_id = TraceWriter::ensure_type_id(w(h), to_type_kind(type_kind), unsafe { cstr_to_str(type_name) });
-    TraceWriter::register_return(
-        w(h),
-        ValueRecord::Raw {
-            r: unsafe { cstr_to_str(value_repr) }.to_string(),
-            type_id,
-        },
-    );
+    guarded("trace_writer_register_return_raw", handle, (), || {
+        if handle.is_null() {
+            return;
+        }
+        let h = unsafe { &mut *handle };
+        let type_id = TraceWriter::ensure_type_id(w(h), to_type_kind(type_kind), unsafe { cstr_to_str(type_name) });
+        TraceWriter::register_return(
+            w(h),
+            ValueRecord::Raw {
+                r: unsafe { cstr_to_str(value_repr) }.to_string(),
+                type_id,
+            },
+        );
+    })
 }
 
 /// Register a variable with an integer value.
@@ -556,12 +657,14 @@ pub unsafe extern "C" fn trace_writer_register_variable_int(
     type_kind: FfiTypeKind,
     type_name: *const c_char,
 ) {
-    if handle.is_null() {
-        return;
-    }
-    let h = unsafe { &mut *handle };
-    let type_id = TraceWriter::ensure_type_id(w(h), to_type_kind(type_kind), unsafe { cstr_to_str(type_name) });
-    TraceWriter::register_variable_with_full_value(w(h), unsafe { cstr_to_str(name) }, ValueRecord::Int { i: value, type_id });
+    guarded("trace_writer_register_variable_int", handle, (), || {
+        if handle.is_null() {
+            return;
+        }
+        let h = unsafe { &mut *handle };
+        let type_id = TraceWriter::ensure_type_id(w(h), to_type_kind(type_kind), unsafe { cstr_to_str(type_name) });
+        TraceWriter::register_variable_with_full_value(w(h), unsafe { cstr_to_str(name) }, ValueRecord::Int { i: value, type_id });
+    })
 }
 
 /// Register a variable with a string (raw) value representation.
@@ -579,19 +682,21 @@ pub unsafe extern "C" fn trace_writer_register_variable_raw(
     type_kind: FfiTypeKind,
     type_name: *const c_char,
 ) {
-    if handle.is_null() {
-        return;
-    }
-    let h = unsafe { &mut *handle };
-    let type_id = TraceWriter::ensure_type_id(w(h), to_type_kind(type_kind), unsafe { cstr_to_str(type_name) });
-    TraceWriter::register_variable_with_full_value(
-        w(h),
-        unsafe { cstr_to_str(name) },
-        ValueRecord::Raw {
-            r: unsafe { cstr_to_str(value_repr) }.to_string(),
-            type_id,
-        },
-    );
+    guarded("trace_writer_register_variable_raw", handle, (), || {
+        if handle.is_null() {
+            return;
+        }
+        let h = unsafe { &mut *handle };
+        let type_id = TraceWriter::ensure_type_id(w(h), to_type_kind(type_kind), unsafe { cstr_to_str(type_name) });
+        TraceWriter::register_variable_with_full_value(
+            w(h),
+            unsafe { cstr_to_str(name) },
+            ValueRecord::Raw {
+                r: unsafe { cstr_to_str(value_repr) }.to_string(),
+                type_id,
+            },
+        );
+    })
 }
 
 /// Register an I/O or special event with optional metadata.
@@ -612,13 +717,15 @@ pub unsafe extern "C" fn trace_writer_register_special_event(
     metadata: *const c_char,
     content: *const c_char,
 ) {
-    if handle.is_null() {
-        return;
-    }
-    let h = unsafe { &mut *handle };
-    TraceWriter::register_special_event(w(h), to_event_log_kind(kind), unsafe { cstr_to_str(metadata) }, unsafe {
-        cstr_to_str(content)
-    });
+    guarded("trace_writer_register_special_event", handle, (), || {
+        if handle.is_null() {
+            return;
+        }
+        let h = unsafe { &mut *handle };
+        TraceWriter::register_special_event(w(h), to_event_log_kind(kind), unsafe { cstr_to_str(metadata) }, unsafe {
+            cstr_to_str(content)
+        });
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -702,13 +809,15 @@ pub unsafe extern "C" fn ct_assignment(
     index: i64,
     call_key: i64,
 ) {
-    if handle.is_null() {
-        return;
-    }
-    let h = unsafe { &mut *handle };
-    let rvalue = build_rvalue(rvalue_kind, simple_variable_id, compound_ids, compound_len, field_name, index, call_key);
-    let name = unsafe { cstr_to_str(target_name) };
-    TraceWriter::assign(w(h), name, rvalue, to_pass_by(pass_by));
+    guarded("ct_assignment", handle, (), || {
+        if handle.is_null() {
+            return;
+        }
+        let h = unsafe { &mut *handle };
+        let rvalue = build_rvalue(rvalue_kind, simple_variable_id, compound_ids, compound_len, field_name, index, call_key);
+        let name = unsafe { cstr_to_str(target_name) };
+        TraceWriter::assign(w(h), name, rvalue, to_pass_by(pass_by));
+    })
 }
 
 /// Emit a `BindVariable` event associating `variable_name` with `place`.
@@ -719,11 +828,13 @@ pub unsafe extern "C" fn ct_assignment(
 /// `variable_name` must be a valid NUL-terminated UTF-8 C string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ct_bind_variable(handle: *mut TraceWriterHandle, variable_name: *const c_char, place: i64) {
-    if handle.is_null() {
-        return;
-    }
-    let h = unsafe { &mut *handle };
-    TraceWriter::bind_variable(w(h), unsafe { cstr_to_str(variable_name) }, Place(place));
+    guarded("ct_bind_variable", handle, (), || {
+        if handle.is_null() {
+            return;
+        }
+        let h = unsafe { &mut *handle };
+        TraceWriter::bind_variable(w(h), unsafe { cstr_to_str(variable_name) }, Place(place));
+    })
 }
 
 /// Emit a `Step` event at (path, line, column).
@@ -739,17 +850,22 @@ pub unsafe extern "C" fn ct_bind_variable(handle: *mut TraceWriterHandle, variab
 /// `path` must be a valid NUL-terminated UTF-8 C string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ct_assignment_with_column(handle: *mut TraceWriterHandle, path: *const c_char, line: i64, column: i64, has_column: bool) {
-    if handle.is_null() {
-        return;
-    }
-    let h = unsafe { &mut *handle };
-    let column_opt = if has_column { Some(Line(column)) } else { None };
-    TraceWriter::register_step_with_column(w(h), Path::new(unsafe { cstr_to_str(path) }), Line(line), column_opt);
+    guarded("ct_assignment_with_column", handle, (), || {
+        if handle.is_null() {
+            return;
+        }
+        let h = unsafe { &mut *handle };
+        let column_opt = if has_column { Some(Line(column)) } else { None };
+        TraceWriter::register_step_with_column(w(h), Path::new(unsafe { cstr_to_str(path) }), Line(line), column_opt);
+    })
 }
 
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod failures_reach_the_caller;
 
 #[cfg(test)]
 mod tests {

@@ -449,6 +449,7 @@ dependencies = [
  "codetracer_trace_writer",
  "num-traits",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

@@ -1760,8 +1760,13 @@ impl AbstractTraceWriter for CtfsTraceWriter {
         }
         match self.serialization_format {
             EventSerializationFormat::Cbor => {
-                let buf: Vec<u8> = Vec::new();
-                let cbor_bytes = cbor4ii::serde::to_vec(buf, &event).expect("CBOR encoding into a Vec cannot fail");
+                let cbor_bytes = match cbor4ii::serde::to_vec(Vec::new(), &event) {
+                    Ok(bytes) => bytes,
+                    Err(e) => {
+                        self.latch(Err::<(), _>(format!("encoding an event: {e}")));
+                        return;
+                    }
+                };
 
                 if let Some(ref mut encoder) = self.encoder {
                     let r = encoder.write_all(&cbor_bytes);
@@ -1777,7 +1782,11 @@ impl AbstractTraceWriter for CtfsTraceWriter {
             }
             EventSerializationFormat::SplitBinary => {
                 let start = self.event_buffer.len();
-                crate::split_binary::encode_event(&event, &mut self.event_buffer).expect("encoding into a Vec cannot fail");
+                if let Err(e) = crate::split_binary::encode_event(&event, &mut self.event_buffer) {
+                    self.event_buffer.truncate(start);
+                    self.latch(Err::<(), _>(format!("encoding an event: {e}")));
+                    return;
+                }
                 let size = self.event_buffer.len() - start;
                 self.event_sizes.push(size);
                 self.event_geids.push(self.total_events);

@@ -14,6 +14,11 @@ pub struct CborZstdTraceWriter<'a> {
 
     trace_events_path: Option<PathBuf>,
     trace_events_file_zstd_encoder: Option<Encoder<'a, File>>,
+    /// The first event that could not be encoded or written. Record calls
+    /// return nothing, so it is held here and
+    /// [`finish_writing_trace_events`](TraceWriter::finish_writing_trace_events)
+    /// fails with it; once set, later events are not written.
+    write_error: Option<String>,
 }
 
 impl CborZstdTraceWriter<'_> {
@@ -24,6 +29,7 @@ impl CborZstdTraceWriter<'_> {
 
             trace_events_path: None,
             trace_events_file_zstd_encoder: None,
+            write_error: None,
         }
     }
 }
@@ -38,10 +44,17 @@ impl AbstractTraceWriter for CborZstdTraceWriter<'_> {
     }
 
     fn add_event(&mut self, event: TraceLowLevelEvent) {
-        let buf: Vec<u8> = Vec::new();
-        let q = cbor4ii::serde::to_vec(buf, &event).unwrap();
-        if let Some(enc) = &mut self.trace_events_file_zstd_encoder {
-            enc.write_all(&q).unwrap();
+        if self.write_error.is_some() {
+            return;
+        }
+        let Some(enc) = &mut self.trace_events_file_zstd_encoder else {
+            return;
+        };
+        let result = cbor4ii::serde::to_vec(Vec::new(), &event)
+            .map_err(|e| format!("encoding an event: {e}"))
+            .and_then(|q| enc.write_all(&q).map_err(|e| format!("writing an event: {e}")));
+        if let Err(e) = result {
+            self.write_error = Some(e);
         }
     }
 
@@ -59,14 +72,20 @@ impl TraceWriter for CborZstdTraceWriter<'_> {
         let mut file_output = std::fs::File::create(pb)?;
         file_output.write_all(HEADERV1)?;
         self.trace_events_file_zstd_encoder = Some(Encoder::new(file_output)?);
+        self.write_error = None;
 
         Ok(())
     }
 
     fn finish_writing_trace_events(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         if let Some(enc) = self.trace_events_file_zstd_encoder.take() {
-            enc.finish()?;
-
+            // The first failure while recording is the one reported: a later
+            // failure to finish the stream is its consequence.
+            let finished = enc.finish();
+            if let Some(err) = self.write_error.take() {
+                return Err(format!("the trace could not be written: {err}").into());
+            }
+            finished?;
             Ok(())
         } else {
             panic!("finish_writing_trace_events() called without previous call to begin_writing_trace_events()");

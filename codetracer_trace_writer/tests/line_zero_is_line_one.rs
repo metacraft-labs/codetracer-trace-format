@@ -57,7 +57,7 @@ fn a_step_and_a_function_at_line_0_are_recorded_at_line_1() {
         .expect("a line-only trace carries step-map.ns")
         .load_all()
         .unwrap();
-    assert_eq!(map.get(&(1, 1)), Some(&vec![0, 1, 3]), "step-map.ns keys line 0 under line 1");
+    assert_eq!(map.get(&(1, 1)), Some(&[0, 1, 3][..]), "step-map.ns keys line 0 under line 1");
     assert_eq!(map.get(&(1, 0)), None, "no key for line 0");
-    assert_eq!(map.get(&(0, 3)), Some(&vec![2]));
+    assert_eq!(map.get(&(0, 3)), Some(&[2][..]));
 }

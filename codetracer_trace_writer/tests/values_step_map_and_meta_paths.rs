@@ -110,8 +110,8 @@ fn decode_step_map(b: &[u8]) -> Vec<(u64, u32, Vec<u64>)> {
         .expect("step-map.ns parses")
         .load_all()
         .expect("step-map.ns decodes")
-        .into_iter()
-        .map(|((p, l), ids)| (p, l, ids))
+        .iter()
+        .map(|((p, l), ids)| (p, l, ids.to_vec()))
         .collect()
 }
 

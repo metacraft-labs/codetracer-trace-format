@@ -31,7 +31,6 @@
 
 mod mixed_workload;
 
-use std::collections::BTreeMap;
 use std::path::Path;
 
 use codetracer_ctfs::compact::Profile;
@@ -39,7 +38,7 @@ use codetracer_ctfs::CtfsReader;
 use codetracer_trace_reader::call_stream_reader::CallStreamReader;
 use codetracer_trace_reader::io_event_stream_reader::IoEventStreamReader;
 use codetracer_trace_reader::split_stream_reader::read_trace_from_split_streams;
-use codetracer_trace_reader::step_map_reader::StepMapReader;
+use codetracer_trace_reader::step_map_reader::{StepMapIndex, StepMapReader};
 use codetracer_trace_reader::step_stream_reader::StepStreamReader;
 use codetracer_trace_reader::value_stream_reader::ValueStreamReader;
 use codetracer_trace_writer::call_stream::CallStreamRecord;
@@ -57,7 +56,7 @@ struct Answers {
     calls: Vec<CallStreamRecord>,
     io_events: Vec<IoEventRecord>,
     /// `load_all`, and every key looked up one at a time.
-    step_map: BTreeMap<(u64, u32), Vec<u64>>,
+    step_map: StepMapIndex,
     step_map_lookups: Vec<Option<Vec<u64>>>,
     /// The reassembled event sequence, `Debug`-printed: the events are not
     /// `PartialEq`.

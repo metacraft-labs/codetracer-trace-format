@@ -5,7 +5,9 @@
 //! Two ways in, as the specification describes them:
 //!
 //! * [`StepMapReader::load_all`] inflates every chunk in order and returns
-//!   every list — what a reader that builds `(path, line) -> ids` at open does.
+//!   every list — what a reader that builds `(path, line) -> ids` at open does
+//!   — as one [`StepMapIndex`]: the keys in order, and every list's ids in one
+//!   buffer, sized once from the header.
 //! * [`StepMapReader::lookup`] binary-searches the chunk table for the last
 //!   chunk whose first key is not above the target, inflates that chunk alone
 //!   and scans it. The scan checks every record of the chunk and notes where
@@ -19,8 +21,6 @@
 //! runs whose repeats overshoot `count`, and a frame that does not decode to
 //! its declared size. Each is a map that would answer some breakpoint with the
 //! wrong steps. Version 1 and every other version are refused.
-
-use std::collections::BTreeMap;
 
 use crate::ChunkForm;
 use codetracer_ctfs::{CtfsReader, MemberBytes};
@@ -53,6 +53,61 @@ pub struct StepMapReader {
     lines: Vec<((u64, u32), usize)>,
     /// Whether a chunk is a frame to inflate or its content.
     form: ChunkForm,
+}
+
+/// Every line of a `step-map.ns` with its step ids, as
+/// [`StepMapReader::load_all`] returns them: the keys in ascending order, and
+/// the lists one after the other in a single buffer.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StepMapIndex {
+    keys: Vec<(u64, u32)>,
+    /// Line `i`'s ids are `ids[ends[i - 1]..ends[i]]` (from 0 for the first).
+    ends: Vec<usize>,
+    ids: Vec<u64>,
+}
+
+impl StepMapIndex {
+    /// Number of `(path_id, line)` keys.
+    pub fn len(&self) -> usize {
+        self.keys.len()
+    }
+
+    /// Whether the map has no line.
+    pub fn is_empty(&self) -> bool {
+        self.keys.is_empty()
+    }
+
+    /// Step ids in all lists together.
+    pub fn step_count(&self) -> usize {
+        self.ids.len()
+    }
+
+    /// The step ids of `key`, `None` when no step ran there. The key is
+    /// matched as it is stored: a step registered at line 0 is under line 1
+    /// (what [`StepMapReader::lookup`] looks line 0 up as).
+    pub fn get(&self, key: &(u64, u32)) -> Option<&[u64]> {
+        self.keys.binary_search(key).ok().map(|i| self.list(i))
+    }
+
+    /// The keys, ascending.
+    pub fn keys(&self) -> impl ExactSizeIterator<Item = &(u64, u32)> {
+        self.keys.iter()
+    }
+
+    /// Every list, in key order.
+    pub fn values(&self) -> impl ExactSizeIterator<Item = &[u64]> {
+        (0..self.keys.len()).map(|i| self.list(i))
+    }
+
+    /// Every key with its list, ascending.
+    pub fn iter(&self) -> impl ExactSizeIterator<Item = ((u64, u32), &[u64])> {
+        (0..self.keys.len()).map(|i| (self.keys[i], self.list(i)))
+    }
+
+    fn list(&self, i: usize) -> &[u64] {
+        let start = if i == 0 { 0 } else { self.ends[i - 1] };
+        &self.ids[start..self.ends[i]]
+    }
 }
 
 fn u32_at(b: &[u8], o: usize) -> u32 {
@@ -240,41 +295,39 @@ impl StepMapReader {
     }
 
     /// Every line's step ids, after checking the decoded counts against the
-    /// header.
-    pub fn load_all(&self) -> Result<BTreeMap<(u64, u32), Vec<u64>>, String> {
-        let mut map = BTreeMap::new();
+    /// header. The ids are written into one buffer of the header's step
+    /// count, the bound a line's own count is held to before its ids are
+    /// read.
+    pub fn load_all(&self) -> Result<StepMapIndex, String> {
+        let mut index = StepMapIndex {
+            keys: Vec::with_capacity(self.line_count as usize),
+            ends: Vec::with_capacity(self.line_count as usize),
+            ids: Vec::with_capacity(self.step_count as usize),
+        };
         let mut last: Option<(u64, u32)> = None;
-        let mut steps = 0u64;
         let mut paths = 0u32;
         let mut raw = Vec::new();
         for c in 0..self.chunks.len() {
             inflate(&self.bytes, &self.chunks, c, self.form, &mut raw)?;
-            self.each_record(
-                c,
-                &raw,
-                |_, _| true,
-                |key, ids| {
-                    if let Some(prev) = last
-                        && key <= prev
-                    {
-                        return Err(format!(
-                            "{STEP_MAP_FILE_NAME}: keys do not ascend strictly: {key:?} follows {prev:?} at chunk {c}"
-                        ));
-                    }
-                    if last.is_none_or(|p| p.0 != key.0) {
-                        paths += 1;
-                    }
-                    last = Some(key);
-                    steps += ids.len() as u64;
-                    map.insert(key, ids);
-                    Ok(())
-                },
-            )?;
+            self.each_record(c, &raw, Some(&mut index), |key, _| {
+                if let Some(prev) = last
+                    && key <= prev
+                {
+                    return Err(format!(
+                        "{STEP_MAP_FILE_NAME}: keys do not ascend strictly: {key:?} follows {prev:?} at chunk {c}"
+                    ));
+                }
+                if last.is_none_or(|p| p.0 != key.0) {
+                    paths += 1;
+                }
+                last = Some(key);
+                Ok(())
+            })?;
         }
         for (what, decoded, header) in [
             ("path", paths as u64, self.path_count as u64),
-            ("line", map.len() as u64, self.line_count as u64),
-            ("step", steps, self.step_count),
+            ("line", index.len() as u64, self.line_count as u64),
+            ("step", index.step_count() as u64, self.step_count),
         ] {
             if decoded != header {
                 return Err(format!(
@@ -282,7 +335,7 @@ impl StepMapReader {
                 ));
             }
         }
-        Ok(map)
+        Ok(index)
     }
 
     /// One line's step ids, inflating only the chunk that can hold it.
@@ -308,15 +361,10 @@ impl StepMapReader {
             inflate(&self.bytes, &self.chunks, c, self.form, &mut self.raw)?;
             let mut lines = std::mem::take(&mut self.lines);
             lines.clear();
-            let scanned = self.each_record(
-                c,
-                &self.raw,
-                |key, at| {
-                    lines.push((key, at));
-                    false
-                },
-                |_, _| Ok(()),
-            );
+            let scanned = self.each_record(c, &self.raw, None, |key, at| {
+                lines.push((key, at));
+                Ok(())
+            });
             self.lines = lines;
             scanned?;
             self.cached_chunk = Some(c);
@@ -325,20 +373,23 @@ impl StepMapReader {
             return Ok(None);
         };
         let (key, mut at) = self.lines[i];
-        self.runs(c, &self.raw, &mut at, key, true).map(Some)
+        let count = self.count(c, &self.raw, &mut at, key)?;
+        let mut ids = Vec::with_capacity(count as usize);
+        self.runs(c, &self.raw, &mut at, key, count, Some(&mut ids))?;
+        Ok(Some(ids))
     }
 
     /// Scan the line records of chunk `c`, inflated in `raw`, checking
-    /// everything that can be checked within a chunk. `take_ids` sees each
-    /// key, and the offset of the record's `count` field, first and says
-    /// whether to decode its ids and hand them to `take`; the runs of a record
-    /// it declines are checked without building its ids.
+    /// everything that can be checked within a chunk. `seen` sees each key,
+    /// and the offset of the record's `count` field, once its record has been
+    /// checked. With an `index`, each record's key and ids are added to it;
+    /// without one, the runs are checked without building any id.
     fn each_record(
         &self,
         c: usize,
         raw: &[u8],
-        mut take_ids: impl FnMut((u64, u32), usize) -> bool,
-        mut take: impl FnMut((u64, u32), Vec<u64>) -> Result<(), String>,
+        mut index: Option<&mut StepMapIndex>,
+        mut seen: impl FnMut((u64, u32), usize) -> Result<(), String>,
     ) -> Result<(), String> {
         let name = STEP_MAP_FILE_NAME;
         let chunk = self.chunks[c];
@@ -379,19 +430,25 @@ impl StepMapReader {
             };
             first = false;
             (path, line) = key;
-            if take_ids(key, pos) {
-                let ids = self.runs(c, raw, &mut pos, key, true)?;
-                take(key, ids)?;
-            } else {
-                self.runs(c, raw, &mut pos, key, false)?;
+            let at = pos;
+            let count = self.count(c, raw, &mut pos, key)?;
+            match index.as_deref_mut() {
+                Some(index) => {
+                    index.ids.reserve(count as usize);
+                    self.runs(c, raw, &mut pos, key, count, Some(&mut index.ids))?;
+                    index.keys.push(key);
+                    index.ends.push(index.ids.len());
+                }
+                None => self.runs(c, raw, &mut pos, key, count, None)?,
             }
+            seen(key, at)?;
         }
         Ok(())
     }
 
-    /// Read one line record's `count` and runs from `raw` at `pos`, checking
-    /// them, and return its step ids when `wanted` (an empty list otherwise).
-    fn runs(&self, c: usize, raw: &[u8], pos: &mut usize, key: (u64, u32), wanted: bool) -> Result<Vec<u64>, String> {
+    /// Read one line record's `count` from `raw` at `pos`, checking it.
+    #[inline(always)]
+    fn count(&self, c: usize, raw: &[u8], pos: &mut usize, key: (u64, u32)) -> Result<u64, String> {
         let name = STEP_MAP_FILE_NAME;
         let count = varint(raw, pos, c)?;
         if count == 0 {
@@ -405,7 +462,14 @@ impl StepMapReader {
                 self.step_count
             ));
         }
-        let mut ids = if wanted { Vec::with_capacity(count as usize) } else { Vec::new() };
+        Ok(count)
+    }
+
+    /// Read the runs of a line record whose `count` has been read, from `raw`
+    /// at `pos`, checking them, and append its step ids to `ids` when given,
+    /// which has room for `count` more.
+    fn runs(&self, c: usize, raw: &[u8], pos: &mut usize, key: (u64, u32), count: u64, mut ids: Option<&mut Vec<u64>>) -> Result<(), String> {
+        let name = STEP_MAP_FILE_NAME;
         let mut prev: i128 = -1;
         let mut have = 0u64;
         while have < count {
@@ -432,13 +496,13 @@ impl StepMapReader {
                 .map(|span| first + span as i128)
                 .filter(|last| *last <= u64::MAX as i128)
                 .ok_or_else(overflow)?;
-            if wanted {
+            if let Some(ids) = ids.as_deref_mut() {
                 let first = first as u64;
                 ids.extend((0..repeat).map(|k| first + k * gap));
             }
             prev = last;
             have += repeat;
         }
-        Ok(ids)
+        Ok(())
     }
 }

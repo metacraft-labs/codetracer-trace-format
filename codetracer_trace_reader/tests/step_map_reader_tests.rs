@@ -102,7 +102,18 @@ fn a_full_load_returns_every_list() {
     let hits = many_hits();
     let r = StepMapReader::from_bytes(writer_map(&hits)).unwrap();
     assert!(r.chunk_count() > 1, "the fixture must span several chunks, or the table is not exercised");
-    assert_eq!(r.load_all().unwrap(), expected(&hits));
+    let all = r.load_all().unwrap();
+    let loaded: BTreeMap<(u64, u32), Vec<u64>> = all.iter().map(|(key, ids)| (key, ids.to_vec())).collect();
+    assert_eq!(loaded, expected(&hits));
+    assert_eq!(
+        (all.len(), all.keys().len(), all.values().len()),
+        (loaded.len(), loaded.len(), loaded.len())
+    );
+    assert_eq!(all.step_count(), loaded.values().map(Vec::len).sum::<usize>());
+    for (key, ids) in &loaded {
+        assert_eq!(all.get(key), Some(&ids[..]), "{key:?}");
+        assert_eq!(all.get(&(key.0, 401)), None, "({}, 401) never ran", key.0);
+    }
 }
 
 #[test]
@@ -144,7 +155,7 @@ fn lookups_in_any_order_agree_with_the_full_load() {
     for _ in 0..3_000 {
         s = s.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
         let key = keys[(s >> 33) as usize % keys.len()];
-        assert_eq!(r.lookup(key.0, key.1).unwrap().as_ref(), all.get(&key), "{key:?}");
+        assert_eq!(r.lookup(key.0, key.1).unwrap().as_deref(), all.get(&key), "{key:?}");
         assert_eq!(r.lookup(key.0, 401).unwrap(), None, "({}, 401) never ran", key.0);
     }
 }
@@ -269,4 +280,5 @@ fn step_ids_past_64_bits_are_refused() {
     let control = [rec(0, 5, 1, &[(1, 1)]), rec(0, 2, 2, &[(1u64 << 62, 2)])].concat();
     let mut r = StepMapReader::from_bytes(member((1, 2, 3), &[((0, 5), control)])).unwrap();
     assert_eq!(r.lookup(0, 7).unwrap(), Some(vec![(1 << 62) - 1, (1 << 63) - 1]), "control");
+
 }

@@ -297,9 +297,8 @@ impl StepStream {
 /// (⇒ a file joins the position space), `Step` (⇒ a step record carrying that
 /// step's address) and the thread events (⇒ thread records).
 /// Raise/Catch have no representation in the legacy `TraceLowLevelEvent` enum,
-/// so the builder never emits them today — but the wire format and reader
-/// support their tags so the stream is forward-compatible when recorders begin
-/// emitting them (M23b+).
+/// so no observed event produces them; a recorder writes them through
+/// [`Self::push_raise`] / [`Self::push_catch`].
 #[derive(Default)]
 pub struct StepStreamBuilder {
     /// Records in stream order not yet handed out by [`Self::drain`].
@@ -340,6 +339,18 @@ impl StepStreamBuilder {
             changed,
             in_flight_frames,
         });
+    }
+
+    /// Append a `Raise` record (tag 2) at the current point of the stream. It
+    /// is not a position, so the running cursor is left where it was.
+    pub fn push_raise(&mut self, exception_type_id: u64, message: Vec<u8>) {
+        self.push(StepStreamRecord::Raise { exception_type_id, message });
+    }
+
+    /// Append a `Catch` record (tag 3) at the current point of the stream. It
+    /// is not a position, so the running cursor is left where it was.
+    pub fn push_catch(&mut self, exception_type_id: u64) {
+        self.push(StepStreamRecord::Catch { exception_type_id });
     }
 
     fn push(&mut self, record: StepStreamRecord) {

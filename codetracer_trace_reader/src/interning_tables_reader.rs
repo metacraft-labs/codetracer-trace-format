@@ -312,6 +312,16 @@ impl VarSizeTable {
     }
 }
 
+/// One `paths.dat` entry's place among the entries that share its string —
+/// see [`InterningTablesReader::path_versions`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PathVersion {
+    /// 0-based: how many lower path ids carry the same string.
+    pub ordinal: u64,
+    /// How many path ids, this one included, carry the same string.
+    pub count: u64,
+}
+
 /// A reader over a container's binary interning tables, resolving interned
 /// records by id with O(1) random access.
 pub struct InterningTablesReader {
@@ -480,6 +490,51 @@ impl InterningTablesReader {
     /// Resolve a path id to its file path as a `String` (lossy UTF-8).
     pub fn path_str(&self, path_id: u64) -> Result<String, String> {
         Ok(String::from_utf8_lossy(&self.path(path_id)?).into_owned())
+    }
+
+    /// Every `paths.dat` entry's version, in path-id order.
+    ///
+    /// A source reload appends a SECOND record for the same path string
+    /// (`internal-files.md` §"`paths.dat` path versions"), so a string can
+    /// name several path ids. Entry `id`'s
+    /// [`ordinal`](PathVersion::ordinal) is how many earlier ids carry its
+    /// string — 0 for the first, 1 for the second — and
+    /// [`count`](PathVersion::count) is how many ids carry it in all. Every
+    /// entry of a trace without reloads is `{ ordinal: 0, count: 1 }`.
+    ///
+    /// The ordinal is not a reload count: a reload of a file that never runs
+    /// again mints no entry, and a reload marker's `generation` starts at 2.
+    /// Same answers as the Nim reader's `pathVersionOrdinal` /
+    /// `pathVersionCount`. Linear in the number of paths; it reads every
+    /// path, so it is computed on request rather than at open.
+    pub fn path_versions(&self) -> Result<Vec<PathVersion>, String> {
+        let total = self.path_count();
+        let mut payloads: Vec<Vec<u8>> = Vec::with_capacity(total);
+        let mut seen: std::collections::HashMap<Vec<u8>, u64> = std::collections::HashMap::with_capacity(total);
+        let mut out = Vec::with_capacity(total);
+        for id in 0..total {
+            let p = self.path(id as u64).map_err(|e| format!("paths.dat[{id}]: {e}"))?;
+            let n = seen.entry(p.clone()).or_insert(0);
+            out.push(PathVersion { ordinal: *n, count: 0 });
+            *n += 1;
+            payloads.push(p);
+        }
+        for (v, p) in out.iter_mut().zip(&payloads) {
+            v.count = seen[p];
+        }
+        Ok(out)
+    }
+
+    /// Every path id whose `paths.dat` string is `path`, in path-id order —
+    /// index 0 is the earliest version. Empty when no entry carries it.
+    pub fn path_ids_for(&self, path: &[u8]) -> Result<Vec<u64>, String> {
+        let mut ids = Vec::new();
+        for id in 0..self.path_count() as u64 {
+            if self.path(id)? == path {
+                ids.push(id);
+            }
+        }
+        Ok(ids)
     }
 
     /// The line count this container RECORDS for `path_id`, or `None` when it

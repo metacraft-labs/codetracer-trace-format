@@ -38,7 +38,7 @@ use codetracer_ctfs::CtfsReader;
 use codetracer_trace_reader::call_stream_reader::CallStreamReader;
 use codetracer_trace_reader::io_event_stream_reader::IoEventStreamReader;
 use codetracer_trace_reader::step_stream_reader::StepStreamReader;
-use codetracer_trace_types::{EventLogKind, FunctionId, Line, TraceLowLevelEvent, TypeKind, ValueRecord};
+use codetracer_trace_types::{EventLogKind, FunctionId, Line, PathId, StepRecord, TraceLowLevelEvent, TypeKind, ValueRecord};
 use codetracer_trace_writer::abstract_trace_writer::AbstractTraceWriter;
 use codetracer_trace_writer::ctfs_writer::CtfsTraceWriter;
 use codetracer_trace_writer::meta_dat::{decode_meta_dat, FLAG_EXT_HAS_SOURCE_RELOAD, FLAG_HAS_LINE_COUNT_TABLE, META_DAT_VERSION};
@@ -329,6 +329,67 @@ fn the_rust_reader_reads_both_containers_alike() {
         steps,
         vec![(0, 1), (1, 4), (2, 14), (2, 2)],
         "steps resolve to the version they were written against"
+    );
+}
+
+/// The reload marker and the path versions it minted, which no event spells,
+/// are reported alike for both containers.
+#[test]
+fn the_rust_reader_reports_the_reload_of_both_containers_alike() {
+    use codetracer_trace_reader::interning_tables_reader::PathVersion;
+    let _g = nim_lock();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (nim, rust) = both(dir.path());
+    let read = |ct: &Path| {
+        let mut r = CtfsReader::open(ct).expect("open");
+        codetracer_trace_reader::split_stream_reader::read_trace_with_details(&mut r).expect("split-stream read")
+    };
+    let (a, b) = (read(&nim), read(&rust));
+    assert_eq!(a.details, b.details, "the two containers report different details");
+    let markers: Vec<_> = a
+        .details
+        .source_reloads
+        .iter()
+        .map(|m| (m.step_index, m.reload_ordinal, m.changed.clone(), m.in_flight_frames))
+        .collect();
+    assert_eq!(
+        markers,
+        vec![(
+            2,
+            1,
+            vec![SourceReloadChange {
+                old_path_id: 0,
+                new_path_id: 2,
+                generation: 2,
+            }],
+            1
+        )],
+        "the marker, at its exec index"
+    );
+    let m = &a.details.source_reloads[0];
+    assert!(
+        matches!(
+            a.events[m.event_index],
+            TraceLowLevelEvent::Step(StepRecord {
+                path_id: PathId(2),
+                line: Line(14)
+            })
+        ),
+        "the marker sits right before the first step of the new version"
+    );
+    assert_eq!(
+        a.details.path_versions,
+        vec![
+            PathVersion { ordinal: 0, count: 2 },
+            PathVersion { ordinal: 0, count: 1 },
+            PathVersion { ordinal: 1, count: 2 },
+        ],
+        "game.gd v1, util.gd, game.gd v2"
+    );
+    assert_eq!(
+        a.details.calls.iter().map(|c| (c.call_key, c.parent_key)).collect::<Vec<_>>(),
+        vec![(0, None)],
+        "the one call, a root"
     );
 }
 

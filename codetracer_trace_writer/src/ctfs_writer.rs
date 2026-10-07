@@ -728,6 +728,50 @@ impl CtfsTraceWriter {
         Ok(ordinal)
     }
 
+    /// Write a `Raise` record (tag 0x02) at the current point of the execution
+    /// stream: an exception of type `exception_type_id` was raised, before any
+    /// unwinding. Mirrors the Nim writer's `registerRaise`
+    /// (`trace-events.md` §"Execution Stream").
+    ///
+    /// The record is an exec record but not a step: it owns an empty value
+    /// record and advances the index `calls.dat` and `events.dat` are
+    /// expressed in, and it does not move the running position.
+    pub fn register_raise(&mut self, exception_type_id: u64, message: &[u8]) -> Result<(), String> {
+        self.write_exception_record(crate::column_aware::StepEvent::Raise {
+            exception_type_id,
+            message: message.to_vec(),
+        })
+    }
+
+    /// Write a `Catch` record (tag 0x03) at the current point of the execution
+    /// stream: an exception of type `exception_type_id` was caught. Mirrors the
+    /// Nim writer's `registerCatch`; accounted like [`Self::register_raise`].
+    pub fn register_catch(&mut self, exception_type_id: u64) -> Result<(), String> {
+        self.write_exception_record(crate::column_aware::StepEvent::Catch { exception_type_id })
+    }
+
+    fn write_exception_record(&mut self, event: crate::column_aware::StepEvent) -> Result<(), String> {
+        if self.ctfs_writer.is_none() {
+            return Err("register_raise/register_catch called before begin_writing_trace_events".to_string());
+        }
+        self.commit_meta();
+        // The line-only stream is built by `StepStreamBuilder`; the
+        // column-aware one is written straight into the encoder.
+        if let Some(builder) = self.step_stream_builder.as_mut() {
+            match event {
+                crate::column_aware::StepEvent::Raise { exception_type_id, message } => builder.push_raise(exception_type_id, message),
+                crate::column_aware::StepEvent::Catch { exception_type_id } => builder.push_catch(exception_type_id),
+                _ => unreachable!("only Raise and Catch are written here"),
+            }
+        } else if let Some(encoder) = self.exec_encoder.as_mut() {
+            encoder.write_event(event)?;
+            self.step_encoder.note_non_step_event();
+        }
+        self.note_non_step_exec_record();
+        self.after_record();
+        Ok(())
+    }
+
     /// Declare that this recording may contain source reload markers
     /// (`meta.dat` `flags_ext` bit 0, `internal-files.md` §"Extended flags").
     ///

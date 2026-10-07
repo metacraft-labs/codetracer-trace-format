@@ -42,6 +42,18 @@
 //!    e. `Return` for every call whose `last_step_id` is `i`, deepest first, so
 //!       a nested call closes before its parent.
 //!
+//! # What `TraceLowLevelEvent` cannot spell
+//!
+//! The streams carry four things the event enum has no variant or field for:
+//! a column-aware step's COLUMN, a call's raised EXCEPTION and CHILDREN, the
+//! `Raise`/`Catch` exec records, and SOURCE RELOAD markers (with the path
+//! versions they mint). Adding variants to that published enum would break
+//! every exhaustive match downstream, so [`read_trace_with_details`] /
+//! [`read_window_with_details`] return them beside the events in a
+//! [`SplitStreamDetails`], each item tied to the event sequence by
+//! `event_index` and to the execution stream by `step_index`. The plain
+//! [`read_trace_from_split_streams`] / [`read_window`] skip that work.
+//!
 //! # Refusal
 //!
 //! Every failure here names what was missing and why. This campaign's most
@@ -93,6 +105,109 @@ pub fn read_trace_from_split_streams(reader: &mut CtfsReader) -> Result<Vec<Trac
     read_window(reader, 0, u64::MAX)
 }
 
+/// The events of a split-stream container, together with what the streams
+/// carry that no `TraceLowLevelEvent` can.
+#[derive(Debug, Clone)]
+pub struct SplitStreamTrace {
+    pub events: Vec<TraceLowLevelEvent>,
+    pub details: SplitStreamDetails,
+}
+
+/// What the split streams carry beyond `TraceLowLevelEvent`, for the events
+/// read alongside it.
+///
+/// `event_index` is an index into those events. A record that has no event of
+/// its own (`Raise`, `Catch`, a reload marker) sits immediately BEFORE
+/// `events[event_index]` — it equals `events.len()` when nothing follows it.
+/// `step_index` is the record's index in the execution stream (`steps.dat`),
+/// the index `calls.dat` step ranges and `events.dat` are expressed in.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct SplitStreamDetails {
+    /// The column of every `Step` event of a column-aware trace, in event
+    /// order. Empty for a line-only trace, whose positions have no column.
+    pub step_columns: Vec<StepColumn>,
+    /// Every call entered in the read, in entry order.
+    pub calls: Vec<CallDetail>,
+    /// Every `Raise` and `Catch` exec record in the read, in stream order.
+    pub exception_events: Vec<ExceptionEvent>,
+    /// Every source reload marker in the read, in stream order.
+    pub source_reloads: Vec<SourceReloadMarker>,
+    /// Every path's version, indexed by path id — see
+    /// [`InterningTablesReader::path_versions`].
+    pub path_versions: Vec<crate::interning_tables_reader::PathVersion>,
+}
+
+/// The column a `Step` event was recorded at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StepColumn {
+    /// Index of the `Step` event.
+    pub event_index: usize,
+    pub step_index: u64,
+    /// 1-based, as the line is.
+    pub column: u64,
+}
+
+/// A call's `calls.dat` record, beyond what its `Call`/`Return` events carry.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CallDetail {
+    pub call_key: u64,
+    /// `None` for a root call.
+    pub parent_key: Option<u64>,
+    pub depth: u64,
+    /// The calls this one made, by `call_key`, in entry order.
+    pub children: Vec<u64>,
+    /// The exception the call ended by raising; `None` when it returned.
+    pub raised_exception: Option<ValueRecord>,
+    pub first_step_id: u64,
+    pub last_step_id: u64,
+    /// Index of this call's `Call` event.
+    pub call_event_index: usize,
+    /// Index of its `Return` event; `None` when the return falls after the
+    /// read (a window that ends inside the call).
+    pub return_event_index: Option<usize>,
+}
+
+/// A `Raise` or `Catch` exec record.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExceptionEvent {
+    pub event_index: usize,
+    pub step_index: u64,
+    pub kind: ExceptionEventKind,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExceptionEventKind {
+    /// An exception was raised, before unwinding.
+    Raise { exception_type_id: u64, message: Vec<u8> },
+    /// An exception was caught by a handler.
+    Catch { exception_type_id: u64 },
+}
+
+/// A source reload marker (`trace-events.md` §"Source Reload Marker (Tag
+/// 0x08)"). The `step_index` is what ties the reload to the steps on either
+/// side of it; Nim's `sourceReloads` reports the same records.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourceReloadMarker {
+    pub event_index: usize,
+    pub step_index: u64,
+    pub reload_ordinal: u64,
+    pub changed: Vec<codetracer_trace_writer::step_stream::SourceReloadChange>,
+    pub in_flight_frames: u64,
+}
+
+/// [`read_trace_from_split_streams`], with the [`SplitStreamDetails`].
+pub fn read_trace_with_details(reader: &mut CtfsReader) -> Result<SplitStreamTrace, String> {
+    read_window_with_details(reader, 0, u64::MAX)
+}
+
+/// [`read_window`], with the [`SplitStreamDetails`] of the window. Path
+/// versions are reported for every path, as the window's `Path` events are.
+pub fn read_window_with_details(reader: &mut CtfsReader, start_step: u64, max_steps: u64) -> Result<SplitStreamTrace, String> {
+    let mut details = SplitStreamDetails::default();
+    let events = assemble(reader, start_step, max_steps, Some(&mut details))?;
+    Ok(SplitStreamTrace { events, details })
+}
+
 /// Reconstruct the events for a WINDOW of steps, `[start_step, start_step + max_steps)`.
 ///
 /// **The unit is STEPS, and it has to be.** The combined `events.log` had a
@@ -106,6 +221,17 @@ pub fn read_trace_from_split_streams(reader: &mut CtfsReader) -> Result<Vec<Trac
 /// because a window is meant to be independently usable and the format's own
 /// rule is that a `Path`, `Type` or `Function` precedes anything referencing it.
 pub fn read_window(reader: &mut CtfsReader, start_step: u64, max_steps: u64) -> Result<Vec<TraceLowLevelEvent>, String> {
+    assemble(reader, start_step, max_steps, None)
+}
+
+/// The assembly behind every read. `details` is filled when given; when it is
+/// `None` nothing beyond the events is decoded or kept.
+fn assemble(
+    reader: &mut CtfsReader,
+    start_step: u64,
+    max_steps: u64,
+    mut details: Option<&mut SplitStreamDetails>,
+) -> Result<Vec<TraceLowLevelEvent>, String> {
     let mut out: Vec<TraceLowLevelEvent> = Vec::new();
 
     // ---- 1. the interning tables ------------------------------------------
@@ -127,6 +253,11 @@ pub fn read_window(reader: &mut CtfsReader, start_step: u64, max_steps: u64) -> 
             .path_str(path_id as u64)
             .map_err(|e| format!("split-stream reader: path {path_id} is unreadable: {e}"))?;
         out.push(TraceLowLevelEvent::Path(std::path::PathBuf::from(p)));
+    }
+    if let Some(d) = details.as_deref_mut() {
+        d.path_versions = tables
+            .path_versions()
+            .map_err(|e| format!("split-stream reader: path versions are unreadable: {e}"))?;
     }
     for name_id in 0..tables.varname_count() {
         let n = tables
@@ -258,6 +389,14 @@ pub fn read_window(reader: &mut CtfsReader, start_step: u64, max_steps: u64) -> 
         }
     }
 
+    // Which `details.calls` entry each call record became, so its `Return`
+    // can be tied back to it. Only kept when details are wanted.
+    let mut call_detail_of: Vec<usize> = if details.is_some() {
+        vec![usize::MAX; all_calls.len()]
+    } else {
+        Vec::new()
+    };
+
     // ---- 3. one pass over the steps ---------------------------------------
     let window_end = start_step.saturating_add(max_steps).min(step_count);
     for i in start_step.min(step_count)..window_end {
@@ -277,6 +416,20 @@ pub fn read_window(reader: &mut CtfsReader, start_step: u64, max_steps: u64) -> 
                     });
                 }
             }
+            if let Some(d) = details.as_deref_mut() {
+                call_detail_of[ci] = d.calls.len();
+                d.calls.push(CallDetail {
+                    call_key: c.call_key,
+                    parent_key: u64::try_from(c.parent_key).ok(),
+                    depth: c.depth,
+                    children: c.children.clone(),
+                    raised_exception: decode_cbor::<ValueRecord>(&c.raised_exception, "a call's raised exception")?,
+                    first_step_id: c.first_step_id,
+                    last_step_id: c.last_step_id,
+                    call_event_index: out.len(),
+                    return_event_index: None,
+                });
+            }
             out.push(TraceLowLevelEvent::Call(CallRecord {
                 function_id: FunctionId(c.function_id as usize),
                 args,
@@ -292,9 +445,16 @@ pub fn read_window(reader: &mut CtfsReader, start_step: u64, max_steps: u64) -> 
             } => {
                 let (path_id, line) = match step_space.as_mut() {
                     Some(ps) => {
-                        let (file, line, _column) = ps.resolve(global_line_index).ok_or_else(|| {
+                        let (file, line, column) = ps.resolve(global_line_index).ok_or_else(|| {
                             format!("split-stream reader: step {i} has position {global_line_index}, outside the column-aware space")
                         })?;
+                        if let (Some(d), Some(column)) = (details.as_deref_mut(), column) {
+                            d.step_columns.push(StepColumn {
+                                event_index: out.len(),
+                                step_index: i,
+                                column,
+                            });
+                        }
                         (file as usize, line as i64)
                     }
                     None => space
@@ -315,14 +475,44 @@ pub fn read_window(reader: &mut CtfsReader, start_step: u64, max_steps: u64) -> 
             StepStreamRecord::ThreadExit { thread_id } => {
                 out.push(TraceLowLevelEvent::ThreadExit(ThreadId(thread_id)));
             }
-            // `Raise` and `Catch` have no `TraceLowLevelEvent` spelling, so they
-            // are carried in the step stream and dropped here rather than
-            // mapped onto something they are not.
-            StepStreamRecord::Raise { .. } | StepStreamRecord::Catch { .. } => {}
-            // A reload marker is an exec record with no `TraceLowLevelEvent`
-            // spelling and no source location; its (empty) value record and
-            // anything attributed to its index are still emitted below.
-            StepStreamRecord::SourceReload { .. } => {}
+            // `Raise`, `Catch` and reload markers have no `TraceLowLevelEvent`
+            // spelling, so they are reported in the details rather than mapped
+            // onto something they are not. Each is still an exec record: its
+            // (empty) value record and anything attributed to its index are
+            // emitted below.
+            StepStreamRecord::Raise { exception_type_id, message } => {
+                if let Some(d) = details.as_deref_mut() {
+                    d.exception_events.push(ExceptionEvent {
+                        event_index: out.len(),
+                        step_index: i,
+                        kind: ExceptionEventKind::Raise { exception_type_id, message },
+                    });
+                }
+            }
+            StepStreamRecord::Catch { exception_type_id } => {
+                if let Some(d) = details.as_deref_mut() {
+                    d.exception_events.push(ExceptionEvent {
+                        event_index: out.len(),
+                        step_index: i,
+                        kind: ExceptionEventKind::Catch { exception_type_id },
+                    });
+                }
+            }
+            StepStreamRecord::SourceReload {
+                reload_ordinal,
+                changed,
+                in_flight_frames,
+            } => {
+                if let Some(d) = details.as_deref_mut() {
+                    d.source_reloads.push(SourceReloadMarker {
+                        event_index: out.len(),
+                        step_index: i,
+                        reload_ordinal,
+                        changed,
+                        in_flight_frames,
+                    });
+                }
+            }
         }
 
         if let Some(ref mut v) = values
@@ -349,6 +539,11 @@ pub fn read_window(reader: &mut CtfsReader, start_step: u64, max_steps: u64) -> 
         for &ci in &leaving[i as usize] {
             let c = &all_calls[ci];
             let return_value = decode_return_value(&c.return_value)?;
+            if let Some(d) = details.as_deref_mut()
+                && let Some(detail) = d.calls.get_mut(call_detail_of[ci])
+            {
+                detail.return_event_index = Some(out.len());
+            }
             out.push(TraceLowLevelEvent::Return(ReturnRecord { return_value }));
         }
     }

@@ -281,4 +281,16 @@ fn step_ids_past_64_bits_are_refused() {
     let mut r = StepMapReader::from_bytes(member((1, 2, 3), &[((0, 5), control)])).unwrap();
     assert_eq!(r.lookup(0, 7).unwrap(), Some(vec![(1 << 62) - 1, (1 << 63) - 1]), "control");
 
+    // Small factors whose product fits, from an id so high that the run
+    // passes 2^64 by its sum alone; and the run that ends on 2^64 - 1 exactly.
+    let ending = |gap: u64| [rec(0, 5, 1, &[(1, 1)]), rec(0, 2, 3, &[(u64::MAX - 5, 1), (gap, 2)])].concat();
+    let mut r = StepMapReader::from_bytes(member((1, 2, u64::MAX), &[((0, 5), ending(4))])).unwrap();
+    let err = r.lookup(0, 7).expect_err("2^64 - 7 + 2 * 4 is past 2^64 - 1");
+    assert!(err.contains("overflow 64 bits"), "{err}");
+    let mut r = StepMapReader::from_bytes(member((1, 2, u64::MAX), &[((0, 5), ending(3))])).unwrap();
+    assert_eq!(
+        r.lookup(0, 7).unwrap(),
+        Some(vec![u64::MAX - 6, u64::MAX - 3, u64::MAX]),
+        "the last id is 2^64 - 1"
+    );
 }

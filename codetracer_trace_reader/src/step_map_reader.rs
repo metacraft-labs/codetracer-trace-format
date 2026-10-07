@@ -131,7 +131,35 @@ fn varint(b: &[u8], pos: &mut usize, chunk: usize) -> Result<u64, String> {
     }
 }
 
+/// Append the `repeat` ids `first`, `first + gap`, … of a run whose last id
+/// has been checked to fit.
+#[inline]
+fn push_run(ids: &mut Vec<u64>, first: u64, gap: u64, repeat: u64) {
+    let mut next = first;
+    ids.extend((0..repeat).map(|_| {
+        let id = next;
+        // Past the run's last id after it, and unused then.
+        next = next.wrapping_add(gap);
+        id
+    }));
+}
+
+/// `a * b`, or `None` past 64 bits. Two factors below 2^32 cannot overflow
+/// and are multiplied as they are: a checked 64-bit product is a 128-bit
+/// multiply on wasm32, a library call.
+#[inline]
+fn checked_product(a: u64, b: u64) -> Option<u64> {
+    if (a | b) >> 32 == 0 { Some(a * b) } else { a.checked_mul(b) }
+}
+
 fn varint_long(b: &[u8], pos: &mut usize, chunk: usize) -> Result<u64, String> {
+    // Two bytes, a count or gap below 16,384: no loop.
+    if let Some(&[b0, b1, ..]) = b.get(*pos..)
+        && b1 < 0x80
+    {
+        *pos += 2;
+        return Ok((b0 & 0x7f) as u64 | (b1 as u64) << 7);
+    }
     let mut v: u64 = 0;
     let mut shift = 0u32;
     loop {
@@ -470,7 +498,8 @@ impl StepMapReader {
     /// which has room for `count` more.
     fn runs(&self, c: usize, raw: &[u8], pos: &mut usize, key: (u64, u32), count: u64, mut ids: Option<&mut Vec<u64>>) -> Result<(), String> {
         let name = STEP_MAP_FILE_NAME;
-        let mut prev: i128 = -1;
+        // The last id so far; the first run's gaps count from -1.
+        let mut prev: Option<u64> = None;
         let mut have = 0u64;
         while have < count {
             let gap = varint(raw, pos, c)?;
@@ -490,17 +519,17 @@ impl StepMapReader {
             // The run's ids are `prev + gap * k` for `k` in `1..=repeat`; its
             // last one is checked once, so every id of the run fits.
             let overflow = || format!("{name}: chunk {c}: line {key:?}'s step ids overflow 64 bits");
-            let first = prev + gap as i128;
-            let last = gap
-                .checked_mul(repeat - 1)
-                .map(|span| first + span as i128)
-                .filter(|last| *last <= u64::MAX as i128)
+            let first = match prev {
+                None => gap - 1,
+                Some(prev) => prev.checked_add(gap).ok_or_else(overflow)?,
+            };
+            let last = checked_product(gap, repeat - 1)
+                .and_then(|span| first.checked_add(span))
                 .ok_or_else(overflow)?;
             if let Some(ids) = ids.as_deref_mut() {
-                let first = first as u64;
-                ids.extend((0..repeat).map(|k| first + k * gap));
+                push_run(ids, first, gap, repeat);
             }
-            prev = last;
+            prev = Some(last);
             have += repeat;
         }
         Ok(())

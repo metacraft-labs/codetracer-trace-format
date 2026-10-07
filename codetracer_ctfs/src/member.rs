@@ -8,9 +8,12 @@
 //! [`MemberBytes`] records where each physically contiguous run of the member
 //! lies in the container. In memory it answers a byte range out of the
 //! container image itself, copying only a range that straddles two runs. From
-//! a file it reads the member's runs once, on the first range asked of it, and
-//! answers every range out of that copy. Opening a reader therefore copies
-//! none of its members, and a member nobody reads is never read.
+//! a file it reads the member a page at a time ([`PAGE_SIZE`] bytes of the
+//! member), each page once, on the first range that reaches into it, and
+//! answers every later range out of the pages already read. Opening a reader
+//! therefore copies none of its members, a member nobody reads is never read,
+//! and a reader that answers from a few chunks of a member reads those pages
+//! and not the member.
 
 use std::borrow::Cow;
 use std::fs::File;
@@ -35,10 +38,22 @@ enum Source {
     /// A buffer in memory: the container image, or the member alone.
     Image(Arc<Vec<u8>>),
     /// The container's file, which stays open while any member read from it
-    /// is alive, and the member read out of it whole once a range is asked
-    /// for.
-    File { file: Arc<File>, read: Arc<OnceLock<Vec<u8>>> },
+    /// is alive, and the member's pages read out of it so far: page `p` is
+    /// member bytes `p * page_size ..` up to the next page or the member's
+    /// end.
+    File {
+        file: Arc<File>,
+        pages: Arc<[OnceLock<Box<[u8]>>]>,
+        page_size: usize,
+    },
 }
+
+/// How much of a member read from a file one read fetches: a range asked for
+/// reads the pages it reaches into, whole. A container's default block, so a
+/// reader answering from one chunk of a member reads about that chunk and no
+/// more; larger pages measured slower to a first answer (16 KiB by 15%, 64 KiB
+/// by 70%, natively and on wasm32), the cost of the bytes read and not used.
+pub const PAGE_SIZE: usize = 4 * 1024;
 
 /// The bytes of one member. Cloning shares them.
 #[derive(Debug, Clone)]
@@ -121,11 +136,17 @@ impl MemberBytes {
     /// come from against the file's length; a file that has been cut short
     /// before the member is read is a read error then, not short content.
     pub(crate) fn in_file(file: Arc<File>, stretches: impl IntoIterator<Item = (u64, usize)>) -> MemberBytes {
+        Self::in_file_paged(file, stretches, PAGE_SIZE)
+    }
+
+    /// [`Self::in_file`], read `page_size` bytes of the member at a time.
+    fn in_file_paged(file: Arc<File>, stretches: impl IntoIterator<Item = (u64, usize)>, page_size: usize) -> MemberBytes {
         let (runs, len) = runs_of(stretches);
         MemberBytes {
             source: Source::File {
                 file,
-                read: Arc::new(OnceLock::new()),
+                pages: (0..len.div_ceil(page_size)).map(|_| OnceLock::new()).collect(),
+                page_size,
             },
             runs,
             len,
@@ -142,11 +163,12 @@ impl MemberBytes {
         self.len == 0
     }
 
-    /// The bytes `start..end` of the member. Borrowed from an in-memory
-    /// container when the range lies in one run, assembled from its runs
-    /// otherwise; borrowed from the member read out of its file, which the
-    /// first call reads. A range that does not lie inside the member is an
-    /// `UnexpectedEof`, as is a file that no longer holds the member's bytes.
+    /// The bytes `start..end` of the member. Borrowed when they lie in one
+    /// run of an in-memory container, or in one page of a member read from
+    /// its file, which reads the page if this is the first range to reach
+    /// it; assembled otherwise. A range that does not lie inside the member is
+    /// an `UnexpectedEof`, as is a file that no longer holds the bytes of a
+    /// page being read.
     pub fn get(&self, start: usize, end: usize) -> io::Result<Cow<'_, [u8]>> {
         if start > end || end > self.len {
             return Err(io::Error::new(
@@ -156,42 +178,78 @@ impl MemberBytes {
         }
         let image = match &self.source {
             Source::Image(image) => image,
-            Source::File { file, read } => return Ok(Cow::Borrowed(&self.read_from(file, read)?[start..end])),
+            Source::File { file, pages, page_size } => return self.get_paged(file, pages, *page_size, start, end),
         };
-        // The run holding `start`: the last one that begins at or before it.
-        let mut k = self.runs.partition_point(|r| r.member_offset <= start).saturating_sub(1);
-        let first = self.runs[k];
-        let within = start - first.member_offset;
-        if end - start <= first.len - within {
-            let at = first.source_offset as usize + within;
-            return Ok(Cow::Borrowed(&image[at..at + (end - start)]));
+        let mut pieces = self.pieces(start, end);
+        match pieces.next() {
+            Some((at, len)) if len == end - start => {
+                let at = at as usize;
+                Ok(Cow::Borrowed(&image[at..at + len]))
+            }
+            first => {
+                let mut out = Vec::with_capacity(end - start);
+                for (at, len) in first.into_iter().chain(pieces) {
+                    let at = at as usize;
+                    out.extend_from_slice(&image[at..at + len]);
+                }
+                Ok(Cow::Owned(out))
+            }
         }
-        let mut out = Vec::with_capacity(end - start);
+    }
+
+    /// Where member bytes `start..end`, which lie inside the member, are in
+    /// the container: one `(container offset, length)` per run they cross, in
+    /// member order.
+    fn pieces(&self, start: usize, end: usize) -> impl Iterator<Item = (u64, usize)> + '_ {
+        // The run holding `start`: the last one that begins at or before it.
+        let k = self.runs.partition_point(|r| r.member_offset <= start).saturating_sub(1);
         let mut at = start;
-        while at < end {
-            let run = self.runs[k];
+        self.runs[k..].iter().map_while(move |run| {
+            if at >= end {
+                return None;
+            }
             let from = at - run.member_offset;
             let take = (run.len - from).min(end - at);
-            let offset = run.source_offset as usize + from;
-            out.extend_from_slice(&image[offset..offset + take]);
             at += take;
-            k += 1;
+            Some((run.source_offset + from as u64, take))
+        })
+    }
+
+    /// [`Self::get`] for a member read from its file.
+    fn get_paged<'a>(&self, file: &File, pages: &'a [OnceLock<Box<[u8]>>], page_size: usize, start: usize, end: usize) -> io::Result<Cow<'a, [u8]>> {
+        if start == end {
+            return Ok(Cow::Borrowed(&[]));
+        }
+        let (first, last) = (start / page_size, (end - 1) / page_size);
+        if first == last {
+            let base = first * page_size;
+            return Ok(Cow::Borrowed(&self.page(file, pages, page_size, first)?[start - base..end - base]));
+        }
+        let mut out = Vec::with_capacity(end - start);
+        for p in first..=last {
+            let base = p * page_size;
+            let page = self.page(file, pages, page_size, p)?;
+            out.extend_from_slice(&page[start.max(base) - base..end.min(base + page.len()) - base]);
         }
         Ok(Cow::Owned(out))
     }
 
-    /// The member out of `file`, read run by run on the first call.
-    fn read_from<'a>(&self, file: &File, read: &'a OnceLock<Vec<u8>>) -> io::Result<&'a [u8]> {
-        if let Some(bytes) = read.get() {
+    /// Page `p` of a member read from its file, read on the first call.
+    fn page<'a>(&self, file: &File, pages: &'a [OnceLock<Box<[u8]>>], page_size: usize, p: usize) -> io::Result<&'a [u8]> {
+        if let Some(bytes) = pages[p].get() {
             return Ok(bytes);
         }
-        let mut bytes = vec![0u8; self.len];
-        for run in self.runs.iter() {
-            pread_exact(file, &mut bytes[run.member_offset..run.member_offset + run.len], run.source_offset)?;
+        let start = p * page_size;
+        let end = (start + page_size).min(self.len);
+        let mut bytes = vec![0u8; end - start].into_boxed_slice();
+        let mut filled = 0;
+        for (at, len) in self.pieces(start, end) {
+            pread_exact(file, &mut bytes[filled..filled + len], at)?;
+            filled += len;
         }
-        // Another clone may have read it meanwhile; either copy is the member.
-        let _ = read.set(bytes);
-        Ok(read.get().expect("set above"))
+        // Another clone may have read it meanwhile; either copy is the page.
+        let _ = pages[p].set(bytes);
+        Ok(pages[p].get().expect("set above"))
     }
 
     /// The little-endian `u64` at byte `at` of the member; an error when its
@@ -293,6 +351,59 @@ mod tests {
         assert_eq!(cut.kind(), io::ErrorKind::UnexpectedEof, "{cut}");
         assert_eq!(m.get(0, 30).unwrap().as_ref(), &expected[..], "a member already read is held");
         drop((m, unread));
+        drop(file);
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Which pages of a member read from its file have been read.
+    fn pages_read(m: &MemberBytes) -> Vec<bool> {
+        match &m.source {
+            Source::File { pages, .. } => pages.iter().map(|p| p.get().is_some()).collect(),
+            Source::Image(_) => panic!("not a member read from a file"),
+        }
+    }
+
+    /// Read a page at a time, with pages that cut across the member's runs: a
+    /// range reads only the pages it reaches into, every range reads the bytes
+    /// the runs spell whether it lies in one page or several, and a page past
+    /// the end of a file cut short after the first read is refused while the
+    /// page already read is still served.
+    #[test]
+    fn a_member_in_a_file_reads_the_pages_a_range_reaches() {
+        let (expected, _) = scattered();
+        let dir = std::env::temp_dir().join(format!("ctfs-member-pages-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("image");
+        std::fs::write(&path, (0..60u8).collect::<Vec<u8>>()).unwrap();
+        let file = Arc::new(File::open(&path).unwrap());
+        let stretches = [(40, 10), (10, 10), (20, 10)];
+
+        // Pages of 7: 0..7, 7..14 (crosses from the first run into the
+        // second), 14..21, 21..28, 28..30.
+        let m = MemberBytes::in_file_paged(Arc::clone(&file), stretches, 7);
+        assert_eq!(pages_read(&m), [false; 5], "nothing is read before a range is asked for");
+        assert_eq!(m.get(15, 18).unwrap().as_ref(), &expected[15..18]);
+        assert_eq!(pages_read(&m), [false, false, true, false, false], "one range, one page");
+        assert!(matches!(m.get(15, 18), Ok(Cow::Borrowed(_))), "inside one page, nothing is copied");
+        assert_eq!(m.get(5, 23).unwrap().as_ref(), &expected[5..23]);
+        assert_eq!(pages_read(&m), [true, true, true, true, false], "a range across pages reads each");
+        for start in 0..=30 {
+            for end in start..=30 {
+                let fresh = MemberBytes::in_file_paged(Arc::clone(&file), stretches, 7);
+                assert_eq!(fresh.get(start, end).unwrap().as_ref(), &expected[start..end], "{start}..{end}");
+                assert_eq!(m.get(start, end).unwrap().as_ref(), &expected[start..end], "{start}..{end}, read before");
+            }
+        }
+
+        // Page 0 is read; then the file is cut inside the first run, which
+        // page 1 needs (bytes 47..50).
+        let cut = MemberBytes::in_file_paged(Arc::clone(&file), stretches, 7);
+        assert_eq!(cut.get(0, 7).unwrap().as_ref(), &expected[0..7]);
+        std::fs::OpenOptions::new().write(true).open(&path).unwrap().set_len(45).unwrap();
+        let refused = cut.get(7, 8).unwrap_err();
+        assert_eq!(refused.kind(), io::ErrorKind::UnexpectedEof, "{refused}");
+        assert_eq!(cut.get(1, 6).unwrap().as_ref(), &expected[1..6], "a page already read is held");
+        drop((m, cut));
         drop(file);
         std::fs::remove_dir_all(&dir).unwrap();
     }

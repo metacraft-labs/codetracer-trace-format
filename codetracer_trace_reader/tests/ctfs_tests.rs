@@ -3,26 +3,13 @@
 use std::path::Path;
 
 use codetracer_trace_types::*;
-use codetracer_trace_writer::ctfs_writer::EventSerializationFormat;
 use codetracer_trace_writer::trace_writer::TraceWriter;
 
-/// Helper: create a CtfsTraceWriter with default (SplitBinary) format,
-/// write some events, and return the .ct path.
+/// Helper: create a CtfsTraceWriter, write some events, and return the .ct
+/// path.
 fn write_ctfs_trace(dir: &tempfile::TempDir, events_fn: impl FnOnce(&mut dyn TraceWriter)) -> std::path::PathBuf {
-    write_ctfs_trace_with_format(dir, EventSerializationFormat::SplitBinary, events_fn)
-}
-
-/// Helper: create a CtfsTraceWriter with a specific format.
-fn write_ctfs_trace_with_format(
-    dir: &tempfile::TempDir,
-    format: EventSerializationFormat,
-    events_fn: impl FnOnce(&mut dyn TraceWriter),
-) -> std::path::PathBuf {
     let path = dir.path().join("trace");
-    let mut writer: Box<dyn TraceWriter + Send> = match format {
-        EventSerializationFormat::Cbor => Box::new(codetracer_trace_writer::ctfs_writer::CtfsTraceWriter::new_cbor("test_program", &[])),
-        EventSerializationFormat::SplitBinary => Box::new(codetracer_trace_writer::ctfs_writer::CtfsTraceWriter::new("test_program", &[])),
-    };
+    let mut writer: Box<dyn TraceWriter + Send> = Box::new(codetracer_trace_writer::ctfs_writer::CtfsTraceWriter::new("test_program", &[]));
     TraceWriter::begin_writing_trace_events(writer.as_mut(), &path).unwrap();
     events_fn(writer.as_mut());
     TraceWriter::finish_writing_trace_events(writer.as_mut()).unwrap();
@@ -226,7 +213,7 @@ fn test_ctfs_container_has_expected_files() {
 #[test]
 fn test_ctfs_split_binary_roundtrip() {
     let dir = tempfile::tempdir().unwrap();
-    let ct_path = write_ctfs_trace_with_format(&dir, EventSerializationFormat::SplitBinary, |writer| {
+    let ct_path = write_ctfs_trace(&dir, |writer| {
         let path = Path::new("/test/split.rs");
         TraceWriter::start(writer, path, Line(1));
         for i in 2..=20 {
@@ -291,7 +278,7 @@ fn test_ctfs_split_binary_roundtrip() {
 fn test_ctfs_split_binary_seek() {
     let dir = tempfile::tempdir().unwrap();
     let n = 10000;
-    let ct_path = write_ctfs_trace_with_format(&dir, EventSerializationFormat::SplitBinary, |writer| {
+    let ct_path = write_ctfs_trace(&dir, |writer| {
         let path = Path::new("/test/seek.rs");
         TraceWriter::start(writer, path, Line(1));
         for i in 1..n {
@@ -319,50 +306,9 @@ fn test_ctfs_split_binary_seek() {
 }
 
 #[test]
-fn test_ctfs_backward_compat_cbor() {
-    // Write a trace using CBOR format and verify it can still be read.
-    let dir = tempfile::tempdir().unwrap();
-    let ct_path = write_ctfs_trace_with_format(&dir, EventSerializationFormat::Cbor, |writer| {
-        let path = Path::new("/test/cbor.rs");
-        TraceWriter::start(writer, path, Line(1));
-        for i in 2..=10 {
-            TraceWriter::register_step(writer, path, Line(i));
-        }
-    });
-
-    // There is no format marker to check any more, and no format to choose
-    // between: `EventSerializationFormat` only ever selected how the combined
-    // `events.log` was encoded. With that stream gone both settings produce the
-    // same split streams, so this test now asserts that a CBOR-configured
-    // writer still yields a readable recording rather than that it yields a
-    // different encoding.
-    // Read back via the standard reader.
-    let mut reader = codetracer_trace_reader::create_trace_reader(codetracer_trace_reader::TraceEventsFileFormat::Ctfs);
-    let events = reader.load_trace_events(&ct_path).unwrap();
-
-    let step_events: Vec<_> = events
-        .iter()
-        .filter_map(|e| match e {
-            TraceLowLevelEvent::Step(s) => Some(s),
-            _ => None,
-        })
-        .collect();
-    // CONFORMED TO THE SPEC, NOT LOOSENED. `codetracer-trace-format-spec`'s `trace-events.md`,
-    // "Recorder Integration — Starting a Recording": *a recording contains one more step than
-    // the recorder emitted — the entry step, which `start` emits.* The constant below counted
-    // only the steps this test registers, which silently encoded the old behaviour in which
-    // `start` emitted none.
-    assert_eq!(step_events.len(), 10, "Expected 10 step events from CBOR trace");
-    for (i, step) in step_events.iter().enumerate() {
-        // The entry step is at line 1, so the i-th step is at line i + 1.
-        assert_eq!(step.line, Line(i as i64 + 1));
-    }
-}
-
-#[test]
 fn test_ctfs_split_binary_variables_roundtrip() {
     let dir = tempfile::tempdir().unwrap();
-    let ct_path = write_ctfs_trace_with_format(&dir, EventSerializationFormat::SplitBinary, |writer| {
+    let ct_path = write_ctfs_trace(&dir, |writer| {
         let path = Path::new("/test/vars.rs");
         TraceWriter::start(writer, path, Line(1));
         TraceWriter::register_step(writer, path, Line(2));

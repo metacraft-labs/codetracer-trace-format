@@ -316,6 +316,7 @@ impl ValueStreamReader {
     /// by STRUCTURAL PRESENCE of the stream file, not by the `has_value_stream`
     /// hint bit (see [`Self::from_files`]).
     pub fn open(reader: &mut CtfsReader) -> Result<Option<ValueStreamReader>, String> {
+        crate::retired_streams::refuse_retired_members(reader)?;
         let dat = match reader.read_member("values.dat") {
             Ok(d) => d,
             Err(_) => return Ok(None),

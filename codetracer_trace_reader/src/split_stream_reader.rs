@@ -232,6 +232,7 @@ fn assemble(
     max_steps: u64,
     mut details: Option<&mut SplitStreamDetails>,
 ) -> Result<Vec<TraceLowLevelEvent>, String> {
+    crate::retired_streams::refuse_retired_members(reader)?;
     let mut out: Vec<TraceLowLevelEvent> = Vec::new();
 
     // ---- 1. the interning tables ------------------------------------------

@@ -124,6 +124,7 @@ impl IoEventStreamReader {
     /// hint bit (bit 11), which a writer may stamp only at close (trace-format
     /// spec: "Stream-presence flags are a hint, not a gate").
     pub fn open(reader: &mut CtfsReader) -> Result<Option<IoEventStreamReader>, String> {
+        crate::retired_streams::refuse_retired_members(reader)?;
         let dat = match reader.read_file("events.dat") {
             Ok(d) => d,
             Err(_) => return Ok(None),

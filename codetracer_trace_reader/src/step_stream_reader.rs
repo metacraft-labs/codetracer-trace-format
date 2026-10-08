@@ -299,6 +299,7 @@ impl StepStreamReader {
     /// by STRUCTURAL PRESENCE of the stream file, not by the `has_step_stream`
     /// hint bit (see [`Self::from_files`]).
     pub fn open(reader: &mut CtfsReader) -> Result<Option<StepStreamReader>, String> {
+        crate::retired_streams::refuse_retired_members(reader)?;
         let dat = match reader.read_member("steps.dat") {
             Ok(d) => d,
             Err(_) => return Ok(None),

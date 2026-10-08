@@ -355,6 +355,7 @@ impl InterningTablesReader {
     /// EXISTENCE is decided by STRUCTURAL PRESENCE of `paths.dat`, not by
     /// `meta.dat` bit 12, which is only a hint (see the module docs).
     pub fn open(reader: &mut CtfsReader) -> Result<Option<InterningTablesReader>, String> {
+        crate::retired_streams::refuse_retired_members(reader)?;
         // `meta.dat` is read best-effort: a still-recording trace has none yet,
         // and each flag below then reads as unset.
         let meta = reader.read_file("meta.dat").ok();

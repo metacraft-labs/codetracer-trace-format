@@ -207,6 +207,7 @@ impl StepMapReader {
     /// none — a column-aware trace, or one whose writer stopped before close;
     /// a reader then scans the execution stream.
     pub fn open(reader: &mut CtfsReader) -> Result<Option<StepMapReader>, String> {
+        crate::retired_streams::refuse_retired_members(reader)?;
         if reader.file_size(STEP_MAP_FILE_NAME).is_none() {
             return Ok(None);
         }

@@ -13,7 +13,7 @@ pub(crate) struct InspectCtfsCommand {
     #[arg(long, default_value_t = false)]
     blocks: bool,
 
-    /// Show event statistics
+    /// Show the I/O event stream's size
     #[arg(long, default_value_t = false)]
     events: bool,
 }
@@ -62,7 +62,7 @@ pub(crate) fn run(cmd: InspectCtfsCommand) {
         })
         .len();
 
-    let mut reader = CtfsReader::open(path).unwrap_or_else(|e| {
+    let reader = CtfsReader::open(path).unwrap_or_else(|e| {
         eprintln!("Error: cannot open CTFS container '{}': {}", cmd.input_file, e);
         std::process::exit(1);
     });
@@ -150,12 +150,12 @@ pub(crate) fn run(cmd: InspectCtfsCommand) {
     if cmd.events {
         println!();
         println!("  Events:");
-        match reader.read_file("events.log") {
-            Ok(data) => {
-                println!("    events.log size: {} bytes", data.len());
-            }
-            Err(e) => {
-                println!("    (no events.log found: {})", e);
+        if let Err(refusal) = codetracer_trace_reader::retired_streams::refuse_retired_members(&reader) {
+            println!("    {refusal}");
+        } else {
+            match reader.file_size("events.dat") {
+                Some(size) => println!("    events.dat size: {size} bytes"),
+                None => println!("    (no events.dat: this container records no I/O events)"),
             }
         }
     }

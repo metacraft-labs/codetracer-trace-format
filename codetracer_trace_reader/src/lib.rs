@@ -20,6 +20,9 @@ pub mod seekable_reader;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod ctfs_reader;
 
+/// The members a reader refuses: `events.log` and `events.fmt`.
+pub mod retired_streams;
+
 mod chunk_codec;
 pub use chunk_codec::ChunkForm;
 

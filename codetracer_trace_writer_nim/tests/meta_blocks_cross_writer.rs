@@ -168,3 +168,33 @@ fn both_writers_write_the_blocks_they_are_given_byte_for_byte() {
     assert_ne!(bare_nim, nim_meta);
     assert_eq!(decode_meta_dat(&bare_nim).unwrap().blocks, MetaDatBlocks::default());
 }
+
+/// Every text field of `meta.dat` is UTF-8, and both readers refuse one that
+/// is not (`internal-files.md` §"Metadata (meta.dat)"). The fields are found
+/// in a container the Rust writer wrote and one byte of each is replaced by
+/// `0xFF`, which never occurs in UTF-8; the lengths are unchanged, so nothing
+/// but the encoding is wrong.
+#[test]
+fn both_readers_refuse_meta_dat_text_that_is_not_utf8() {
+    let dir = tempfile::tempdir().unwrap();
+    let (ct, _late) = write_rust(dir.path(), &fixture());
+    let meta = meta_of(&ct);
+    codetracer_trace_writer::meta_dat::decode_meta_dat(&meta).expect("control: the Rust reader reads it");
+    codetracer_trace_writer_nim::MetaDatReader::parse(&meta).expect("control: the Nim reader reads it");
+
+    for field in [PROGRAM, WORKDIR] {
+        let at = meta
+            .windows(field.len())
+            .position(|w| w == field.as_bytes())
+            .unwrap_or_else(|| panic!("{field} is in meta.dat"));
+        let mut bad = meta.clone();
+        bad[at] = 0xFF;
+        let rust = codetracer_trace_writer::meta_dat::decode_meta_dat(&bad);
+        assert!(rust.is_err(), "{field}: the Rust reader accepted text that is not UTF-8");
+        let nim = codetracer_trace_writer_nim::MetaDatReader::parse(&bad);
+        let err = nim
+            .err()
+            .unwrap_or_else(|| panic!("{field}: the Nim reader accepted text that is not UTF-8"));
+        assert!(err.to_string().contains("UTF-8"), "{field}: the Nim refusal names the encoding: {err}");
+    }
+}

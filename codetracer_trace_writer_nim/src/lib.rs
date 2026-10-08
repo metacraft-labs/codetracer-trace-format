@@ -186,6 +186,13 @@ extern "C" {
     fn trace_writer_register_thread_exit(handle: *mut std::ffi::c_void, thread_id: u64);
     fn trace_writer_register_thread_switch(handle: *mut std::ffi::c_void, thread_id: u64);
 
+    // ----- Exceptions -----
+    //
+    // Raise and Catch exec records, and the exception a call exits by.
+    fn trace_writer_register_raise(handle: *mut std::ffi::c_void, exception_type_id: u64, message: *const u8, message_len: usize);
+    fn trace_writer_register_catch(handle: *mut std::ffi::c_void, exception_type_id: u64);
+    fn trace_writer_register_return_exception(handle: *mut std::ffi::c_void, exception_cbor: *const u8, exception_len: usize);
+
     // ----- Request / interval spans (RS-M1) -----
     //
     // A span is a bounded, labeled interval of execution — an HTTP request, a
@@ -2074,6 +2081,25 @@ impl NimTraceWriter {
     /// Register a `ThreadSwitch` event (the active thread changed).
     pub fn register_thread_switch(&mut self, thread_id: u64) {
         unsafe { trace_writer_register_thread_switch(self.handle, thread_id) }
+    }
+
+    /// Register a `Raise` exec record: an exception of the interned type
+    /// `exception_type_id` is raised, with `message`. As
+    /// `CtfsTraceWriter::register_raise`.
+    pub fn register_raise(&mut self, exception_type_id: u64, message: &[u8]) {
+        unsafe { trace_writer_register_raise(self.handle, exception_type_id, message.as_ptr(), message.len()) }
+    }
+
+    /// Register a `Catch` exec record. As `CtfsTraceWriter::register_catch`.
+    pub fn register_catch(&mut self, exception_type_id: u64) {
+        unsafe { trace_writer_register_catch(self.handle, exception_type_id) }
+    }
+
+    /// The innermost call exits by `exception`: its call record carries it,
+    /// and no return value.
+    pub fn register_return_exception(&mut self, exception: &ValueRecord) {
+        let cbor = place_model_cbor(exception);
+        unsafe { trace_writer_register_return_exception(self.handle, cbor.as_ptr(), cbor.len()) }
     }
 
     /// Append one span to the container's `spans.dat` stream (RS-M1).

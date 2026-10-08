@@ -17,6 +17,7 @@ pub mod base40;
 pub mod block_alloc;
 pub(crate) mod block_bounds;
 pub mod chunked;
+pub mod compact;
 pub mod concurrent_reader;
 pub mod concurrent_writer;
 pub mod file_entry;
@@ -42,6 +43,11 @@ pub mod zstd_frame;
 pub use base40::{base40_decode, base40_encode};
 pub use block_alloc::AtomicBlockAllocator;
 pub use chunked::{ChunkedReader, ChunkedWriter};
+pub use compact::{
+    choose_profile_for_raw_bytes, choose_profile_for_raw_bytes_with_threshold, compact_container_size,
+    decode_compact_container, encode_compact_container, name_is_well_formed, read_compact_directory,
+    CompactDirectory, CompactMember, CtfsProfile, WholeFileCompression, DEFAULT_RAW_BYTE_THRESHOLD,
+};
 pub use concurrent_reader::ConcurrentCtfsReader;
 pub use concurrent_writer::{ConcurrentCtfsWriter, FileWriter};
 pub use header::{ChunkIndexEntry, CompressionMethod, EncryptionMethod, CHUNK_INDEX_ENTRY_SIZE, DEFAULT_CHUNK_SIZE};

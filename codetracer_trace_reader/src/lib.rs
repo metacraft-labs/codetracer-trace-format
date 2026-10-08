@@ -34,6 +34,8 @@ pub mod value_stream_reader;
 
 pub mod io_event_stream_reader;
 
+pub mod span_stream_reader;
+
 pub mod interning_tables_reader;
 
 /// Assembles a linear event sequence from the split streams, for containers

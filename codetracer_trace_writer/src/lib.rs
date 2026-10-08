@@ -19,6 +19,9 @@ pub mod chunk_sink;
 
 pub mod call_stream;
 
+/// The span stream: `spans.dat`, `spans.idx` and `spantype.ns`.
+pub mod span_stream;
+
 pub mod step_stream;
 // The one rule that chooses between an absolute and a delta position record.
 pub mod step_rule;

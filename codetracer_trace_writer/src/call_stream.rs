@@ -306,6 +306,8 @@ pub struct CallStreamBuilder {
     /// Whether at least one step has been recorded (so `last_step_id` can be
     /// clamped to `step_index - 1`).
     any_step: bool,
+    /// The exception the next `Return` exits the innermost call by, as CBOR.
+    staged_exception: Option<Vec<u8>>,
 }
 
 impl CallStreamBuilder {
@@ -318,6 +320,23 @@ impl CallStreamBuilder {
     pub fn note_exec_record(&mut self) {
         self.step_index += 1;
         self.any_step = true;
+    }
+
+    /// The number of exec records seen: the id the next one takes.
+    pub fn exec_records(&self) -> u64 {
+        self.step_index
+    }
+
+    /// The number of calls that have not returned.
+    pub fn open_calls(&self) -> usize {
+        self.open_stack.len()
+    }
+
+    /// Make the next `Return` an exit by `exception` (CBOR): the call record
+    /// carries it as `raised_exception`, and the void marker as its return
+    /// value.
+    pub fn stage_exception(&mut self, exception: Vec<u8>) {
+        self.staged_exception = Some(exception);
     }
 
     /// Feed one event in stream order.
@@ -389,6 +408,10 @@ impl CallStreamBuilder {
                         codetracer_trace_types::ValueRecord::None { .. } => vec![VOID_RETURN_MARKER],
                         other => cbor_bytes(other),
                     };
+                    if let Some(exception) = self.staged_exception.take() {
+                        rec.raised_exception = exception;
+                        rec.return_value = vec![VOID_RETURN_MARKER];
+                    }
                 }
             }
             _ => {}

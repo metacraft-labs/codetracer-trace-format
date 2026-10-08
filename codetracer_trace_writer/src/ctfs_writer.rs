@@ -398,6 +398,19 @@ pub struct CtfsTraceWriter {
     /// cannot return it, so it is held and returned by
     /// `finish_writing_trace_events`; nothing is written after it.
     write_error: Option<String>,
+    /// The span stream, created by the first span.
+    spans: Option<SpanStream>,
+    /// The last span id minted for a crossing; 0 before the first.
+    last_crossing_id: u64,
+    /// Open crossings, innermost last: span id, span type, start step.
+    open_crossings: Vec<(u64, String, u64)>,
+}
+
+/// The span stream of a container being written.
+struct SpanStream {
+    builder: crate::span_stream::SpanStreamBuilder,
+    dat: codetracer_ctfs::FileHandle,
+    idx: codetracer_ctfs::FileHandle,
 }
 
 /// The members of a container being written, by role.
@@ -538,6 +551,9 @@ impl CtfsTraceWriter {
             interning_published: [(0, 0); 4],
             publishing: false,
             write_error: None,
+            spans: None,
+            last_crossing_id: 0,
+            open_crossings: Vec::new(),
         }
     }
 
@@ -770,6 +786,167 @@ impl CtfsTraceWriter {
         self.note_non_step_exec_record();
         self.after_record();
         Ok(())
+    }
+
+    /// Exit the innermost call by `exception`: its call record carries the
+    /// exception, and no return value. Mirrors the Nim writer's
+    /// `registerReturn(exception = ...)` (`trace-events.md` §"Call Stream
+    /// Records"). Refused when no call is open.
+    pub fn register_return_exception(&mut self, exception: &codetracer_trace_types::ValueRecord) -> Result<(), String> {
+        let Some(builder) = self.call_stream_builder.as_mut() else {
+            return Err("register_return_exception called before begin_writing_trace_events".to_string());
+        };
+        if builder.open_calls() == 0 {
+            return Err("register_return_exception: call stack underflow: return without matching call".to_string());
+        }
+        let cbor = cbor4ii::serde::to_vec(Vec::new(), exception).map_err(|e| format!("encoding an exception: {e}"))?;
+        builder.stage_exception(cbor);
+        AbstractTraceWriter::register_return(
+            self,
+            codetracer_trace_types::ValueRecord::None {
+                type_id: codetracer_trace_types::TypeId(0),
+            },
+        );
+        Ok(())
+    }
+
+    /// Append `span` to the span stream (`spans.dat`, `spans.idx`), which the
+    /// first span creates. A span may be appended open and again settled
+    /// under the same id; readers keep the last record. Refused for a record
+    /// the stream cannot carry (`span_stream::encode_span_record`).
+    pub fn register_span(&mut self, span: &crate::span_stream::SpanRecord) -> Result<(), String> {
+        if self.ctfs_writer.is_none() {
+            return Err("register_span called before begin_writing_trace_events".to_string());
+        }
+        if let Some(e) = &self.write_error {
+            return Err(format!("the trace could not be written: {e}"));
+        }
+        self.commit_meta();
+        if self.spans.is_none() {
+            let builder = crate::span_stream::SpanStreamBuilder::default();
+            let header = builder.index_header();
+            let writer = self.ctfs_writer.as_mut().expect("checked above");
+            let created = (|| -> Result<SpanStream, codetracer_ctfs::CtfsError> {
+                let dat = writer.add_file(crate::span_stream::SPANS_DATA_FILE_NAME)?;
+                let idx = writer.add_file(crate::span_stream::SPANS_INDEX_FILE_NAME)?;
+                writer.write(idx, &header)?;
+                writer.sync_entry(idx)?;
+                Ok(SpanStream { builder, dat, idx })
+            })()
+            .map_err(|e| format!("creating the span stream: {e}"))?;
+            self.spans = Some(created);
+        }
+        let spans = self.spans.as_mut().expect("created above");
+        if let Some(chunk) = spans.builder.push(span)? {
+            self.write_span_chunk(chunk)?;
+        }
+        Ok(())
+    }
+
+    /// Seal the buffered spans as a chunk, possibly a short one, and publish
+    /// it, so a reader of the growing container sees them. A no-op when no
+    /// span is buffered or none was ever registered.
+    pub fn flush_spans(&mut self) -> Result<(), String> {
+        let Some(spans) = self.spans.as_mut() else {
+            return Ok(());
+        };
+        match spans.builder.seal()? {
+            Some(chunk) => self.write_span_chunk(chunk),
+            None => Ok(()),
+        }
+    }
+
+    /// The span records registered, sealed or not; an open record and its
+    /// settled one count as two.
+    pub fn span_count(&self) -> u64 {
+        self.spans.as_ref().map_or(0, |s| s.builder.count())
+    }
+
+    /// The chunk's bytes, then its index entry, each published after its data
+    /// (`ctfs-container.md` §6, "Durability").
+    fn write_span_chunk(&mut self, chunk: crate::span_stream::SealedSpanChunk) -> Result<(), String> {
+        let (Some(spans), Some(w)) = (self.spans.as_ref(), self.ctfs_writer.as_mut()) else {
+            return Err("the span stream is not open".to_string());
+        };
+        let (dat, idx) = (spans.dat, spans.idx);
+        let r = (|| -> Result<(), codetracer_ctfs::CtfsError> {
+            w.write(dat, &chunk.data)?;
+            w.write(idx, &chunk.index_entry)?;
+            w.write_pending(dat)?;
+            w.write_pending(idx)?;
+            w.publish_entry(dat)?;
+            w.publish_entry(idx)?;
+            w.flush()
+        })()
+        .map_err(|e| format!("writing a span chunk: {e}"));
+        if let Err(e) = &r {
+            self.latch(Err::<(), _>(e.clone()));
+        }
+        r
+    }
+
+    /// Open a native-to-VM crossing of type `span_type`: a span the writer
+    /// mints the id of (1, 2, ... in this recording), starting at the next
+    /// exec record. Its open record is published at once, so a reader of the
+    /// growing container sees the crossing in flight. Returns the id, to pass
+    /// to [`Self::end_crossing`].
+    pub fn begin_crossing(&mut self, span_type: &str) -> Result<u64, String> {
+        if self.ctfs_writer.is_none() {
+            return Err("begin_crossing called before begin_writing_trace_events".to_string());
+        }
+        self.commit_meta();
+        let span_id = self.last_crossing_id + 1;
+        let start_step = self.exec_record_count();
+        let open = crate::span_stream::SpanRecord {
+            span_id,
+            is_open: true,
+            start_step,
+            span_type: span_type.to_string(),
+            contiguous_on_one_thread: true,
+            shares_timeline: true,
+            ..Default::default()
+        };
+        self.last_crossing_id = span_id;
+        self.register_span(&open)?;
+        self.flush_spans()?;
+        self.open_crossings.push((span_id, span_type.to_string(), start_step));
+        Ok(span_id)
+    }
+
+    /// Close the crossing `span_id`, which must be the innermost open one:
+    /// its settled record ends at the last exec record (0 when there is
+    /// none) and is published at once.
+    pub fn end_crossing(&mut self, span_id: u64) -> Result<(), String> {
+        if self.ctfs_writer.is_none() {
+            return Err("end_crossing called before begin_writing_trace_events".to_string());
+        }
+        self.commit_meta();
+        let Some((top, _, _)) = self.open_crossings.last() else {
+            return Err(format!(
+                "endCrossing: span_id {span_id} is not the innermost open crossing (no open crossings)"
+            ));
+        };
+        if *top != span_id {
+            return Err(format!("endCrossing: span_id {span_id} is not the innermost open crossing ({top})"));
+        }
+        let (_, span_type, start_step) = self.open_crossings.pop().expect("checked above");
+        let settled = crate::span_stream::SpanRecord {
+            span_id,
+            status: crate::span_stream::SPAN_STATUS_OK,
+            start_step,
+            end_step: self.exec_record_count().saturating_sub(1),
+            span_type,
+            contiguous_on_one_thread: true,
+            shares_timeline: true,
+            ..Default::default()
+        };
+        self.register_span(&settled)?;
+        self.flush_spans()
+    }
+
+    /// The number of exec records written: the id the next one takes.
+    pub fn exec_record_count(&self) -> u64 {
+        self.call_stream_builder.as_ref().map_or(0, |b| b.exec_records())
     }
 
     /// Declare that this recording may contain source reload markers
@@ -1979,6 +2156,9 @@ impl TraceWriter for CtfsTraceWriter {
         self.meta_committed = false;
         self.interning_published = [(0, 0); 4];
         self.write_error = None;
+        self.spans = None;
+        self.last_crossing_id = 0;
+        self.open_crossings.clear();
         self.pending_line_lengths = None;
 
         // Every stream is written: each event kind has exactly one stream to
@@ -2092,6 +2272,23 @@ impl TraceWriter for CtfsTraceWriter {
             self.latch(r);
         }
         self.publish();
+
+        // The span stream's last chunk, and the span-type index of the whole
+        // recording.
+        if self.spans.is_some() {
+            let r = self.flush_spans();
+            self.latch(r);
+            if let (Some(spans), Some(writer)) = (self.spans.as_ref(), self.ctfs_writer.as_mut())
+                && self.write_error.is_none()
+            {
+                let image = spans.builder.span_type_namespace();
+                let r = writer
+                    .add_file(crate::span_stream::SPAN_TYPE_NAMESPACE_FILE_NAME)
+                    .and_then(|h| writer.write(h, &image).map(|_| ()))
+                    .map_err(|e| format!("writing spantype.ns: {e}"));
+                self.latch(r);
+            }
+        }
 
         // Close-time members (`ctfs-container.md` §6, "Durability", rule 4).
         if let (Some(map), Some(writer)) = (self.step_map_builder.take(), self.ctfs_writer.as_mut())

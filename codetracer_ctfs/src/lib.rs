@@ -20,6 +20,7 @@ pub mod chunked;
 pub mod compact;
 pub mod concurrent_reader;
 pub mod concurrent_writer;
+pub mod cow_namespace;
 pub mod file_entry;
 pub mod filemap;
 pub mod header;
@@ -38,6 +39,7 @@ pub mod reader;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod trace_storage;
 pub mod writer;
+pub mod xxh64;
 pub mod zstd_compat;
 pub mod zstd_frame;
 

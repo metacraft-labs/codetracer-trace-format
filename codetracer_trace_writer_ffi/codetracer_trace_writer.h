@@ -11,228 +11,984 @@
 #include <stdlib.h>
 
 /**
- * Event-log kind — mirrors [`EventLogKind`].
+ * Compounds nest at most this deep.
  */
-typedef enum Elk {
-    ELK_WRITE = 0,
-    ELK_WRITE_FILE = 1,
-    ELK_WRITE_OTHER = 2,
-    ELK_READ = 3,
-    ELK_READ_FILE = 4,
-    ELK_READ_OTHER = 5,
-    ELK_READ_DIR = 6,
-    ELK_OPEN_DIR = 7,
-    ELK_CLOSE_DIR = 8,
-    ELK_SOCKET = 9,
-    ELK_OPEN = 10,
-    ELK_ERROR = 11,
-    ELK_TRACE_LOG_EVENT = 12,
-    ELK_EVM_EVENT = 13,
-} Elk;
+#define MAX_NESTING_DEPTH 32
 
 /**
- * `PassBy` mirror for the FFI.
+ * The failure return of the path-id calls.
  */
-typedef enum FfiPassBy {
-    FFI_PASS_BY_VALUE = 0,
-    FFI_PASS_BY_REFERENCE = 1,
-} FfiPassBy;
+#define CT_TW_INVALID_PATH_ID UINT64_MAX
+
+typedef struct MetaDatReader MetaDatReader;
 
 /**
- * `RValue` kind discriminator for the FFI surface introduced in M14.
- *
- * The discriminator is used by [`ct_assignment`] to pick the variant
- * inside the resulting `RValue` payload from the supplied scalar
- * arguments. The exact field semantics per discriminator are
- * documented on `ct_assignment`.
+ * The reader behind a `ct_reader_t`.
  */
-typedef enum FfiRValueKind {
-    FFI_R_VALUE_KIND_SIMPLE = 0,
-    FFI_R_VALUE_KIND_COMPOUND = 1,
-    FFI_R_VALUE_KIND_LITERAL = 2,
-    FFI_R_VALUE_KIND_FIELD_ACCESS = 3,
-    FFI_R_VALUE_KIND_INDEX_ACCESS = 4,
-    FFI_R_VALUE_KIND_FUNCTION_RETURN = 5,
-} FfiRValueKind;
+typedef struct TraceReader TraceReader;
 
 /**
- * Trace file format — mirrors [`TraceEventsFileFormat`].
- */
-typedef enum Fmt {
-    FMT_JSON = 0,
-    FMT_BINARY_V0 = 1,
-    FMT_BINARY = 2,
-} Fmt;
-
-/**
- * Type kind — mirrors [`TypeKind`] (subset used by the FFI).
- */
-typedef enum Tk {
-    TK_SEQ = 0,
-    TK_SET = 1,
-    TK_HASH_SET = 2,
-    TK_ORDERED_SET = 3,
-    TK_ARRAY = 4,
-    TK_VARARGS = 5,
-    TK_STRUCT = 6,
-    TK_INT = 7,
-    TK_FLOAT = 8,
-    TK_STRING = 9,
-    TK_C_STRING = 10,
-    TK_CHAR = 11,
-    TK_BOOL = 12,
-    TK_LITERAL = 13,
-    TK_REF = 14,
-    TK_RECURSION = 15,
-    TK_RAW = 16,
-    TK_ENUM = 17,
-    TK_ENUM16 = 18,
-    TK_ENUM32 = 19,
-    TK_C = 20,
-    TK_TABLE_KIND = 21,
-    TK_UNION = 22,
-    TK_POINTER = 23,
-    TK_ERROR = 24,
-    TK_FUNCTION_KIND = 25,
-    TK_TYPE_VALUE = 26,
-    TK_TUPLE = 27,
-    TK_VARIANT = 28,
-    TK_HTML = 29,
-    TK_NONE = 30,
-    TK_NON_EXPANDED = 31,
-    TK_ANY = 32,
-    TK_SLICE = 33,
-} Tk;
-
-/**
- * Opaque handle passed across the FFI boundary.
+ * The writer behind a `trace_writer_t`.
  */
 typedef struct TraceWriterHandle TraceWriterHandle;
 
 /**
- * Retrieve the last error message for the current thread.
- *
- * Returns a pointer to a NUL-terminated UTF-8 string.  The pointer is valid
- * until the next FFI call **on the same thread**.  Returns an empty string
- * when no error has occurred.
+ * The encoder behind a `value_encoder_t`.
+ */
+typedef struct ValueEncoder ValueEncoder;
+
+/**
+ * One file's transition across a reload, as the header lays it out.
+ */
+typedef struct CtTwSourceReloadChange {
+    uint64_t old_path_id;
+    uint64_t new_path_id;
+    uint64_t generation;
+} CtTwSourceReloadChange;
+
+/**
+ * This thread's last error: a NUL-terminated string, empty when no call has
+ * reported one, valid until the next call on this thread.
  */
 const char *trace_writer_last_error(void);
 
 /**
- * Create a new trace writer.
- *
- * `program` is a NUL-terminated C string identifying the program being
- * traced.  `format` selects the on-disk serialisation format.
- *
- * Returns a heap-allocated handle that **must** be freed with
- * [`trace_writer_free`].  Returns `NULL` on failure (check
- * [`trace_writer_last_error`]).
- *
- * # Safety
- *
- * `program` must satisfy the C-string invariant in the module-level
- * "Safety" section. The returned handle is owned by the caller and must be
- * released with [`trace_writer_free`] exactly once.
+ * Reset this thread's error buffer to the empty string.
  */
-struct TraceWriterHandle *trace_writer_new(const char *program, enum Fmt format);
+void trace_writer_clear_last_error(void);
 
 /**
- * Free a trace writer handle.  Passing `NULL` is a no-op.
+ * How this library was compiled, as `key:value` pairs joined by `;`. Static,
+ * never NULL.
+ */
+const char *trace_writer_build_config(void);
+
+/**
+ * Initialize the library. Nothing needs initializing; the call exists so a
+ * host written for the Nim library, which must call it first, links.
+ */
+void codetracer_trace_writer_init(void);
+
+/**
+ * Encode a version 6 `meta.dat` into a buffer the caller releases with
+ * [`ct_free_buffer`]. A NULL or empty `recording_id` mints one.
  *
  * # Safety
+ * Every `(pointer, length)` pair is readable or NULL/0; `args` and
+ * `arg_lens` hold `args_count` entries; `out_buf` and `out_len` are writable.
+ */
+int32_t ct_write_meta_dat_to_buffer(const uint8_t *program,
+                                    uintptr_t program_len,
+                                    const uint8_t *workdir,
+                                    uintptr_t workdir_len,
+                                    const uint8_t *const *args,
+                                    const uintptr_t *arg_lens,
+                                    uintptr_t args_count,
+                                    const uint8_t *recorder_id,
+                                    uintptr_t recorder_id_len,
+                                    const uint8_t *recording_id,
+                                    uintptr_t recording_id_len,
+                                    uint8_t **out_buf,
+                                    uintptr_t *out_len);
+
+/**
+ * Release a buffer this library handed out. NULL is a no-op.
  *
- * `handle` must be a pointer [`trace_writer_new`] returned that has not
- * already been freed. Freeing twice is undefined behaviour; passing NULL is
- * not, and does nothing.
+ * # Safety
+ * `buf` is NULL or a buffer this library returned and not yet released.
+ */
+void ct_free_buffer(uint8_t *buf);
+
+/**
+ * Decode a `meta.dat`. NULL on failure.
+ *
+ * # Safety
+ * `(data, len)` is readable or NULL/0.
+ */
+struct MetaDatReader *ct_read_meta_dat(const uint8_t *data, uintptr_t len);
+
+/**
+ * # Safety
+ * `h` is NULL or a live `meta.dat` reader; `out_len` is NULL or writable.
+ */
+const uint8_t *ct_meta_dat_program(struct MetaDatReader *h, uintptr_t *out_len);
+
+/**
+ * # Safety
+ * `h` is NULL or a live `meta.dat` reader; `out_len` is NULL or writable.
+ */
+const uint8_t *ct_meta_dat_workdir(struct MetaDatReader *h, uintptr_t *out_len);
+
+/**
+ * # Safety
+ * `h` is NULL or a live `meta.dat` reader; `out_len` is NULL or writable.
+ */
+const uint8_t *ct_meta_dat_recorder_id(struct MetaDatReader *h, uintptr_t *out_len);
+
+/**
+ * # Safety
+ * `h` is NULL or a live `meta.dat` reader; `out_len` is NULL or writable.
+ */
+const uint8_t *ct_meta_dat_recording_id(struct MetaDatReader *h, uintptr_t *out_len);
+
+/**
+ * # Safety
+ * `h` is NULL or a live `meta.dat` reader.
+ */
+uintptr_t ct_meta_dat_args_count(struct MetaDatReader *h);
+
+/**
+ * # Safety
+ * `h` is NULL or a live `meta.dat` reader; `out_len` is NULL or writable.
+ */
+const uint8_t *ct_meta_dat_arg(struct MetaDatReader *h, uintptr_t idx, uintptr_t *out_len);
+
+/**
+ * 1 when the `meta.dat` carries a filter-provenance block, else 0.
+ *
+ * # Safety
+ * `h` is NULL or a live `meta.dat` reader.
+ */
+int32_t ct_meta_dat_has_filter_provenance(struct MetaDatReader *h);
+
+/**
+ * # Safety
+ * `h` is NULL or a live `meta.dat` reader.
+ */
+uintptr_t ct_meta_dat_filter_provenance_count(struct MetaDatReader *h);
+
+/**
+ * # Safety
+ * `h` is NULL or a live `meta.dat` reader; `out_len` is NULL or writable.
+ */
+const uint8_t *ct_meta_dat_filter_provenance_path(struct MetaDatReader *h,
+                                                  uintptr_t idx,
+                                                  uintptr_t *out_len);
+
+/**
+ * Copy the 32-byte digest of filter-provenance entry `idx` to `out_buf`. 0 on
+ * success.
+ *
+ * # Safety
+ * `h` is NULL or a live `meta.dat` reader; `out_buf` is NULL or 32 writable
+ * bytes.
+ */
+int32_t ct_meta_dat_filter_provenance_sha256(struct MetaDatReader *h,
+                                             uintptr_t idx,
+                                             uint8_t *out_buf);
+
+/**
+ * # Safety
+ * `h` is NULL or a live `meta.dat` reader, not used afterwards.
+ */
+void ct_meta_dat_free(struct MetaDatReader *h);
+
+/**
+ * Write a new, empty container at `path`; `block_size` 0 is 4096.
+ *
+ * # Safety
+ * `path` is NULL or NUL-terminated.
+ */
+int32_t ct_container_create(const char *path, uint32_t block_size);
+
+/**
+ * Append `count` internal files to the closed container at `path`, as one
+ * batch: a name already present, or repeated, refuses the whole batch.
+ *
+ * # Safety
+ * `path` is NULL or NUL-terminated; `names`, `contents` and `lengths` hold
+ * `count` entries (or are NULL when `count` is 0); `contents[i]` holds
+ * `lengths[i]` readable bytes or is NULL when that is 0.
+ */
+int32_t ct_container_append_files(const char *path,
+                                  const char *const *names,
+                                  const uint8_t *const *contents,
+                                  const uintptr_t *lengths,
+                                  uintptr_t count);
+
+/**
+ * # Safety
+ * `path` is NULL or NUL-terminated.
+ */
+struct TraceReader *ct_reader_open(const char *path);
+
+/**
+ * # Safety
+ * `path` is NULL or NUL-terminated.
+ */
+struct TraceReader *ct_reader_open_assume_column_aware_paths(const char *path);
+
+/**
+ * # Safety
+ * `(data, len)` is readable or NULL/0.
+ */
+struct TraceReader *ct_reader_open_bytes(const uint8_t *data, uintptr_t len);
+
+/**
+ * Re-read the container at `path` into `h`. On failure `h` is unchanged.
+ *
+ * # Safety
+ * `h` is NULL or a live reader; `path` is NULL or NUL-terminated.
+ */
+int32_t ct_reader_refresh(struct TraceReader *h, const char *path);
+
+/**
+ * # Safety
+ * `h` is NULL or a live reader, not used afterwards.
+ */
+void ct_reader_close(struct TraceReader *h);
+
+/**
+ * # Safety
+ * `h` is NULL or a live reader; `out_len` is NULL or writable.
+ */
+uint8_t *ct_reader_path(struct TraceReader *h, uint64_t id, uintptr_t *out_len);
+
+/**
+ * # Safety
+ * `h` is NULL or a live reader; `out_len` is NULL or writable.
+ */
+uint8_t *ct_reader_function(struct TraceReader *h, uint64_t id, uintptr_t *out_len);
+
+/**
+ * # Safety
+ * `h` is NULL or a live reader; `out_len` is NULL or writable.
+ */
+uint8_t *ct_reader_type_name(struct TraceReader *h, uint64_t id, uintptr_t *out_len);
+
+/**
+ * # Safety
+ * `h` is NULL or a live reader; `out_len` is NULL or writable.
+ */
+uint8_t *ct_reader_varname(struct TraceReader *h, uint64_t id, uintptr_t *out_len);
+
+/**
+ * # Safety
+ * `h` is NULL or a live reader; `out_len` is NULL or writable.
+ */
+uint8_t *ct_reader_program(struct TraceReader *h, uintptr_t *out_len);
+
+/**
+ * # Safety
+ * `h` is NULL or a live reader; `out_len` is NULL or writable.
+ */
+uint8_t *ct_reader_workdir(struct TraceReader *h, uintptr_t *out_len);
+
+/**
+ * # Safety
+ * `h` is NULL or a live reader; `out_len` is NULL or writable.
+ */
+uint8_t *ct_reader_step(struct TraceReader *h, uint64_t n, uintptr_t *out_len);
+
+/**
+ * # Safety
+ * `h` is NULL or a live reader; `out_len` is NULL or writable.
+ */
+uint8_t *ct_reader_values(struct TraceReader *h, uint64_t n, uintptr_t *out_len);
+
+/**
+ * # Safety
+ * `h` is NULL or a live reader; `out_len` is NULL or writable.
+ */
+uint8_t *ct_reader_call(struct TraceReader *h, uint64_t key, uintptr_t *out_len);
+
+/**
+ * # Safety
+ * `h` is NULL or a live reader; `out_len` is NULL or writable.
+ */
+uint8_t *ct_reader_call_for_step(struct TraceReader *h, uint64_t step_id, uintptr_t *out_len);
+
+/**
+ * # Safety
+ * `h` is NULL or a live reader; `out_len` is NULL or writable.
+ */
+uint8_t *ct_reader_event(struct TraceReader *h, uint64_t index, uintptr_t *out_len);
+
+/**
+ * # Safety
+ * `h` is NULL or a live reader; the out pointers are NULL or writable.
+ */
+int32_t ct_reader_step_location(struct TraceReader *h,
+                                uint64_t n,
+                                uint64_t *out_path_id,
+                                uint64_t *out_line);
+
+/**
+ * # Safety
+ * `h` is NULL or a live reader; the out buffers hold `count` entries.
+ */
+uint64_t ct_reader_step_locations(struct TraceReader *h,
+                                  uint64_t start_n,
+                                  uint64_t count,
+                                  uint64_t *out_path_ids,
+                                  uint64_t *out_lines);
+
+/**
+ * # Safety
+ * `h` is NULL or a live reader; the out buffers hold `count` entries.
+ */
+uint64_t ct_reader_step_locations_with_columns(struct TraceReader *h,
+                                               uint64_t start_n,
+                                               uint64_t count,
+                                               uint64_t *out_path_ids,
+                                               uint64_t *out_lines,
+                                               uint64_t *out_columns);
+
+/**
+ * # Safety
+ * `h` is NULL or a live reader; `out_glis` holds `count` entries.
+ */
+uint64_t ct_reader_step_global_line_indices(struct TraceReader *h,
+                                            uint64_t start_n,
+                                            uint64_t count,
+                                            uint64_t *out_glis);
+
+/**
+ * # Safety
+ * `h` is NULL or a live reader; `out_value` is NULL or writable.
+ */
+int32_t ct_reader_line_length(struct TraceReader *h,
+                              uint64_t file_id,
+                              uint32_t line_index0,
+                              uint32_t *out_value);
+
+/**
+ * # Safety
+ * `h` is NULL or a live reader; `out_value` is NULL or writable.
+ */
+int32_t ct_reader_line_length_raw(struct TraceReader *h,
+                                  uint64_t file_id,
+                                  uint32_t line_index0,
+                                  uint32_t *out_value);
+
+/**
+ * # Safety
+ * `h` is NULL or a live reader.
+ */
+uint64_t ct_reader_line_count_raw(struct TraceReader *h, uint64_t file_id);
+
+/**
+ * # Safety
+ * `h` is NULL or a live reader.
+ */
+int32_t ct_reader_path_table_kind(struct TraceReader *h, uint64_t file_id);
+
+/**
+ * # Safety
+ * `h` is NULL or a live reader.
+ */
+int32_t ct_reader_has_column_aware_steps(struct TraceReader *h);
+
+/**
+ * # Safety
+ * `h` is NULL or a live reader.
+ */
+int32_t ct_reader_column_aware_paths_suspected(struct TraceReader *h);
+
+/**
+ * # Safety
+ * `h` is NULL or a live reader.
+ */
+int32_t ct_reader_supports_column_breakpoints(struct TraceReader *h);
+
+/**
+ * # Safety
+ * `h` is NULL or a live reader.
+ */
+int32_t ct_reader_supports_column_motions(struct TraceReader *h);
+
+/**
+ * # Safety
+ * `h` is NULL or a live reader.
+ */
+uint64_t ct_reader_step_value_count(struct TraceReader *h, uint64_t n);
+
+/**
+ * # Safety
+ * `h` is NULL or a live reader; the out pointers are NULL or writable.
+ */
+int32_t ct_reader_step_value(struct TraceReader *h,
+                             uint64_t n,
+                             uint64_t value_idx,
+                             uint64_t *out_varname_id,
+                             uint64_t *out_type_id,
+                             uint8_t **out_data,
+                             uintptr_t *out_data_len);
+
+/**
+ * # Safety
+ * `h` is NULL or a live reader; the out pointers are NULL or writable.
+ */
+int32_t ct_reader_call_fields(struct TraceReader *h,
+                              uint64_t key,
+                              uint64_t *out_function_id,
+                              int64_t *out_parent_key,
+                              uint64_t *out_entry_step,
+                              uint64_t *out_exit_step,
+                              uint32_t *out_depth,
+                              uint64_t *out_children_count);
+
+/**
+ * # Safety
+ * `h` is NULL or a live reader.
+ */
+uint64_t ct_reader_call_child(struct TraceReader *h, uint64_t key, uint64_t child_idx);
+
+/**
+ * # Safety
+ * `h` is NULL or a live reader.
+ */
+uint64_t ct_reader_call_arg_count(struct TraceReader *h, uint64_t key);
+
+/**
+ * # Safety
+ * `h` is NULL or a live reader; the out pointers are NULL or writable.
+ */
+int32_t ct_reader_call_arg(struct TraceReader *h,
+                           uint64_t key,
+                           uint64_t arg_idx,
+                           uint64_t *out_varname_id,
+                           uint8_t **out_data,
+                           uintptr_t *out_data_len);
+
+/**
+ * # Safety
+ * `h` is NULL or a live reader; the out pointers are NULL or writable.
+ */
+int32_t ct_reader_event_fields(struct TraceReader *h,
+                               uint64_t index,
+                               uint8_t *out_kind,
+                               uint64_t *out_step_id,
+                               uint8_t **out_data,
+                               uintptr_t *out_data_len);
+
+/**
+ * # Safety
+ * `h` is NULL or a live reader; the out pointers are NULL or writable.
+ */
+int32_t ct_reader_event_metadata(struct TraceReader *h,
+                                 uint64_t index,
+                                 uint8_t **out_data,
+                                 uintptr_t *out_data_len);
+
+struct ValueEncoder *ct_value_encoder_new(void);
+
+/**
+ * # Safety
+ * `h` is NULL or an encoder `ct_value_encoder_new` returned, not yet freed.
+ */
+void ct_value_encoder_free(struct ValueEncoder *h);
+
+/**
+ * # Safety
+ * `h` is NULL or a live encoder.
+ */
+void ct_value_encoder_reset(struct ValueEncoder *h);
+
+/**
+ * # Safety
+ * `h` is NULL or a live encoder.
+ */
+int32_t ct_value_write_int(struct ValueEncoder *h, int64_t value, uint64_t type_id);
+
+/**
+ * # Safety
+ * `h` is NULL or a live encoder.
+ */
+int32_t ct_value_write_float(struct ValueEncoder *h, double value, uint64_t type_id);
+
+/**
+ * A bool with type id 0.
+ *
+ * # Safety
+ * `h` is NULL or a live encoder.
+ */
+int32_t ct_value_write_bool(struct ValueEncoder *h, int32_t value);
+
+/**
+ * # Safety
+ * `h` is NULL or a live encoder.
+ */
+int32_t ct_value_write_bool_typed(struct ValueEncoder *h, int32_t value, uint64_t type_id);
+
+/**
+ * # Safety
+ * `h` is NULL or a live encoder; `(data, len)` is readable or NULL/0.
+ */
+int32_t ct_value_write_string(struct ValueEncoder *h,
+                              const uint8_t *data,
+                              uintptr_t len,
+                              uint64_t type_id);
+
+/**
+ * A None with type id 0.
+ *
+ * # Safety
+ * `h` is NULL or a live encoder.
+ */
+int32_t ct_value_write_none(struct ValueEncoder *h);
+
+/**
+ * # Safety
+ * `h` is NULL or a live encoder.
+ */
+int32_t ct_value_write_none_typed(struct ValueEncoder *h, uint64_t type_id);
+
+/**
+ * # Safety
+ * `h` is NULL or a live encoder; `(data, len)` is readable or NULL/0.
+ */
+int32_t ct_value_write_raw(struct ValueEncoder *h,
+                           const uint8_t *data,
+                           uintptr_t len,
+                           uint64_t type_id);
+
+/**
+ * # Safety
+ * `h` is NULL or a live encoder; `(data, len)` is readable or NULL/0.
+ */
+int32_t ct_value_write_error(struct ValueEncoder *h,
+                             const uint8_t *data,
+                             uintptr_t len,
+                             uint64_t type_id);
+
+/**
+ * # Safety
+ * `h` is NULL or a live encoder.
+ */
+int32_t ct_value_begin_struct(struct ValueEncoder *h, uint64_t type_id, int32_t field_count);
+
+/**
+ * # Safety
+ * `h` is NULL or a live encoder.
+ */
+int32_t ct_value_begin_sequence(struct ValueEncoder *h, uint64_t type_id, int32_t element_count);
+
+/**
+ * # Safety
+ * `h` is NULL or a live encoder.
+ */
+int32_t ct_value_begin_sequence_with_slice(struct ValueEncoder *h,
+                                           uint64_t type_id,
+                                           int32_t element_count,
+                                           int32_t is_slice);
+
+/**
+ * # Safety
+ * `h` is NULL or a live encoder.
+ */
+int32_t ct_value_begin_tuple(struct ValueEncoder *h, uint64_t type_id, int32_t element_count);
+
+/**
+ * # Safety
+ * `h` is NULL or a live encoder; `(discriminator, disc_len)` is readable or
+ * NULL/0.
+ */
+int32_t ct_value_begin_variant(struct ValueEncoder *h,
+                               const uint8_t *discriminator,
+                               uintptr_t disc_len,
+                               uint64_t type_id);
+
+/**
+ * # Safety
+ * `h` is NULL or a live encoder.
+ */
+int32_t ct_value_begin_reference(struct ValueEncoder *h,
+                                 uint64_t address,
+                                 int32_t mutable_,
+                                 uint64_t type_id);
+
+/**
+ * # Safety
+ * `h` is NULL or a live encoder.
+ */
+int32_t ct_value_end_compound(struct ValueEncoder *h);
+
+/**
+ * A character: the low byte of `codepoint`, as a one-byte text string.
+ *
+ * # Safety
+ * `h` is NULL or a live encoder.
+ */
+int32_t ct_value_write_char(struct ValueEncoder *h, uint32_t codepoint, uint64_t type_id);
+
+/**
+ * # Safety
+ * `h` is NULL or a live encoder; `(data, len)` is readable or NULL/0.
+ */
+int32_t ct_value_write_bigint(struct ValueEncoder *h,
+                              const uint8_t *data,
+                              uintptr_t len,
+                              int32_t negative,
+                              uint64_t type_id);
+
+/**
+ * The bytes encoded so far, valid until the next call on the encoder; NULL
+ * when there are none.
+ *
+ * # Safety
+ * `h` is NULL or a live encoder; `out_len` is NULL or writable.
+ */
+const uint8_t *ct_value_get_bytes(struct ValueEncoder *h, uintptr_t *out_len);
+
+/**
+ * Create a writer. `format` 2 (`FFI_TRACE_FORMAT_BINARY`) is the split-stream
+ * container; 0 and 1 the non-container JSON and binary-v0 files.
+ *
+ * # Safety
+ * `program` is NULL or NUL-terminated.
+ */
+struct TraceWriterHandle *trace_writer_new(const char *program, int32_t format);
+
+/**
+ * Free a writer, finishing its container first when it was not closed.
+ *
+ * # Safety
+ * `handle` is NULL or a writer not yet freed, not used afterwards.
  */
 void trace_writer_free(struct TraceWriterHandle *handle);
 
 /**
- * # Safety
+ * Close the writer: write the buffered step and what is held, and finish
+ * the container. 0 on success; non-zero when the close failed or an earlier
+ * call's failure was held.
  *
- * `handle` must satisfy the handle invariant and `path` the C-string
- * invariant, both in the module-level "Safety" section.
+ * # Safety
+ * `handle` is NULL or a live writer.
  */
-bool trace_writer_begin_metadata(struct TraceWriterHandle *handle, const char *path);
+int32_t trace_writer_close(struct TraceWriterHandle *handle);
 
 /**
  * # Safety
- *
- * `handle` must satisfy the handle invariant in the module-level "Safety"
- * section.
+ * `handle` is NULL or a live writer; `path` is NULL or NUL-terminated.
  */
-bool trace_writer_finish_metadata(struct TraceWriterHandle *handle);
+int32_t trace_writer_begin_metadata(struct TraceWriterHandle *handle, const char *path);
 
 /**
  * # Safety
- *
- * `handle` must satisfy the handle invariant and `path` the C-string
- * invariant, both in the module-level "Safety" section.
+ * `handle` is NULL or a live writer.
  */
-bool trace_writer_begin_events(struct TraceWriterHandle *handle, const char *path);
+int32_t trace_writer_finish_metadata(struct TraceWriterHandle *handle);
 
 /**
  * # Safety
- *
- * `handle` must satisfy the handle invariant in the module-level "Safety"
- * section.
+ * `handle` is NULL or a live writer; `path` is NULL or NUL-terminated.
  */
-bool trace_writer_finish_events(struct TraceWriterHandle *handle);
+int32_t trace_writer_begin_paths(struct TraceWriterHandle *handle, const char *path);
 
 /**
  * # Safety
- *
- * `handle` must satisfy the handle invariant and `path` the C-string
- * invariant, both in the module-level "Safety" section.
+ * `handle` is NULL or a live writer.
  */
-bool trace_writer_begin_paths(struct TraceWriterHandle *handle, const char *path);
+int32_t trace_writer_finish_paths(struct TraceWriterHandle *handle);
+
+/**
+ * Open the container at `<dir of path>/<program stem>.ct`. A writer already
+ * open on a file is left as it is; one open in memory is refused.
+ *
+ * # Safety
+ * `handle` is NULL or a live writer; `path` is NULL or NUL-terminated.
+ */
+int32_t trace_writer_begin_events(struct TraceWriterHandle *handle, const char *path);
+
+/**
+ * Open the container in memory; after the close its bytes are read with
+ * `trace_writer_container_ptr` / `_len`.
+ *
+ * # Safety
+ * `handle` is NULL or a live writer.
+ */
+int32_t trace_writer_begin_in_memory(struct TraceWriterHandle *handle);
 
 /**
  * # Safety
- *
- * `handle` must satisfy the handle invariant in the module-level "Safety"
- * section.
+ * `handle` is NULL or a live writer.
  */
-bool trace_writer_finish_paths(struct TraceWriterHandle *handle);
+int32_t trace_writer_finish_events(struct TraceWriterHandle *handle);
 
 /**
  * # Safety
- *
- * `handle` must satisfy the handle invariant and `path` the C-string
- * invariant, both in the module-level "Safety" section.
+ * `handle` is NULL or a live writer.
  */
-void trace_writer_start(struct TraceWriterHandle *handle, const char *path, int64_t line);
+uintptr_t trace_writer_container_len(struct TraceWriterHandle *handle);
 
 /**
- * Override the working directory recorded in the trace metadata.
- *
- * By default the workdir is set to the process's current directory at
- * the time [`trace_writer_new`] is called.  Call this before
- * [`trace_writer_finish_metadata`] to record a different directory.
- *
  * # Safety
- *
- * `handle` must satisfy the handle invariant and `workdir` the C-string
- * invariant, both in the module-level "Safety" section.
+ * `handle` is NULL or a live writer.
+ */
+int32_t trace_writer_container_ready(struct TraceWriterHandle *handle);
+
+/**
+ * # Safety
+ * `handle` is NULL or a live writer.
+ */
+uint8_t *trace_writer_container_ptr(struct TraceWriterHandle *handle);
+
+/**
+ * # Safety
+ * `handle` is NULL or a live writer.
+ */
+int32_t trace_writer_set_compact_threshold(struct TraceWriterHandle *handle, uint64_t raw_bytes);
+
+/**
+ * # Safety
+ * `handle` is NULL or a live writer; `recording_id` is NULL or
+ * NUL-terminated.
+ */
+int32_t trace_writer_set_recording_id(struct TraceWriterHandle *handle, const char *recording_id);
+
+/**
+ * # Safety
+ * `handle` is NULL or a live writer; `workdir` is NULL or NUL-terminated.
  */
 void trace_writer_set_workdir(struct TraceWriterHandle *handle, const char *workdir);
 
 /**
- * # Safety
+ * Record the program's arguments in `meta.dat`.
  *
- * `handle` must satisfy the handle invariant and `path` the C-string
- * invariant, both in the module-level "Safety" section.
+ * # Safety
+ * `handle` is NULL or a live writer; `args` and `arg_lens` hold `args_count`
+ * entries, each `(args[i], arg_lens[i])` readable or NULL/0.
+ */
+void trace_writer_set_args(struct TraceWriterHandle *handle,
+                           const uint8_t *const *args,
+                           const uintptr_t *arg_lens,
+                           uintptr_t args_count);
+
+/**
+ * Stamp a producer namespace on every interned string. Only the empty
+ * qualifier — bare payloads, as a standalone recording has — is written by
+ * this library; a writer open with another is refused.
+ *
+ * # Safety
+ * `handle` is NULL or a live writer; `qualifier` is NULL or NUL-terminated.
+ */
+void trace_writer_set_interning_qualifier(struct TraceWriterHandle *handle, const char *qualifier);
+
+/**
+ * # Safety
+ * `handle` is NULL or a live writer; every string is NULL or
+ * NUL-terminated; `hook_strategies` holds `hook_strategies_count` strings.
+ */
+int32_t trace_writer_set_mcr_fields(struct TraceWriterHandle *handle,
+                                    int32_t tick_source,
+                                    uint32_t total_threads,
+                                    int32_t atomic_mode,
+                                    uint64_t total_events,
+                                    uint32_t total_checkpoints,
+                                    uint64_t start_time_unix_us,
+                                    const char *platform,
+                                    const char *tick_granularity,
+                                    const char *tick_source_str,
+                                    const char *atomic_mode_str,
+                                    const char *start_time_str,
+                                    const char *hook_profile,
+                                    const char *const *hook_strategies,
+                                    uintptr_t hook_strategies_count);
+
+/**
+ * # Safety
+ * `handle` is NULL or a live writer.
+ */
+int32_t trace_writer_set_replay_launch_fields(struct TraceWriterHandle *handle,
+                                              int32_t aslr_disabled);
+
+/**
+ * # Safety
+ * `handle` is NULL or a live writer; `(fingerprint, fingerprint_len)` is
+ * readable or NULL/0.
+ */
+int32_t trace_writer_set_layout_snapshot(struct TraceWriterHandle *handle,
+                                         uint64_t layout_hash,
+                                         const uint8_t *fingerprint,
+                                         uintptr_t fingerprint_len);
+
+/**
+ * Record one trace-filter file in the filter-provenance block.
+ *
+ * # Safety
+ * `handle` is NULL or a live writer; both `(pointer, length)` pairs are
+ * readable or NULL/0.
+ */
+int32_t trace_writer_add_filter_provenance(struct TraceWriterHandle *handle,
+                                           const uint8_t *path,
+                                           uintptr_t path_len,
+                                           const uint8_t *sha256,
+                                           uintptr_t sha256_len);
+
+/**
+ * Record that the recorder implements trace filters and its chain is empty.
+ *
+ * # Safety
+ * `handle` is NULL or a live writer.
+ */
+int32_t trace_writer_record_empty_filter_provenance(struct TraceWriterHandle *handle);
+
+/**
+ * `meta.dat` is written by the container's first record; this succeeds on a
+ * begun container writer.
+ *
+ * # Safety
+ * `handle` is NULL or a live writer.
+ */
+int32_t ct_write_meta_dat(struct TraceWriterHandle *handle,
+                          const uint8_t *_recorder_id,
+                          uintptr_t _recorder_id_len);
+
+/**
+ * # Safety
+ * `handle` is NULL or a live writer.
+ */
+int32_t trace_writer_declare_source_reload(struct TraceWriterHandle *handle);
+
+/**
+ * # Safety
+ * `handle` is NULL or a live writer.
+ */
+void trace_writer_enable_column_aware_steps(struct TraceWriterHandle *handle);
+
+/**
+ * # Safety
+ * `handle` is NULL or a live writer.
+ */
+void trace_writer_enable_column_breakpoints_support(struct TraceWriterHandle *handle);
+
+/**
+ * # Safety
+ * `handle` is NULL or a live writer.
+ */
+void trace_writer_enable_column_motions_support(struct TraceWriterHandle *handle);
+
+/**
+ * # Safety
+ * `handle` is NULL or a live writer.
+ */
+int32_t trace_writer_enable_line_count_table(struct TraceWriterHandle *handle);
+
+/**
+ * # Safety
+ * `handle` is NULL or a live writer; `path` is NULL or NUL-terminated.
+ */
+int32_t trace_writer_register_path_with_line_count(struct TraceWriterHandle *handle,
+                                                   const char *path,
+                                                   uint64_t line_count);
+
+/**
+ * # Safety
+ * `handle` is NULL or a live writer; `path` is NULL or NUL-terminated; when
+ * `line_count > 0`, `line_lengths` is NULL or holds that many entries.
+ */
+int32_t trace_writer_register_path_with_line_lengths(struct TraceWriterHandle *handle,
+                                                     const char *path,
+                                                     int32_t line_count,
+                                                     const uint32_t *line_lengths);
+
+/**
+ * # Safety
+ * `handle` is NULL or a live writer; `path` is NULL or NUL-terminated.
+ */
+uint64_t trace_writer_register_path_version(struct TraceWriterHandle *handle,
+                                            const char *path,
+                                            uint64_t line_count);
+
+/**
+ * # Safety
+ * `handle` is NULL or a live writer; `path` is NULL or NUL-terminated.
+ */
+uint64_t trace_writer_current_path_id(struct TraceWriterHandle *handle, const char *path);
+
+/**
+ * # Safety
+ * `handle` is NULL or a live writer; `path` is NULL or NUL-terminated.
+ */
+uint64_t trace_writer_register_path(struct TraceWriterHandle *handle, const char *path);
+
+/**
+ * # Safety
+ * `handle` is NULL or a live writer; `name` is NULL or NUL-terminated.
+ */
+uint64_t trace_writer_register_variable_name(struct TraceWriterHandle *handle, const char *name);
+
+/**
+ * # Safety
+ * `handle` is NULL or a live writer; `changed` holds `changed_count`
+ * entries.
+ */
+uint64_t trace_writer_register_source_reload(struct TraceWriterHandle *handle,
+                                             const struct CtTwSourceReloadChange *changed,
+                                             uintptr_t changed_count,
+                                             uint64_t in_flight_frames);
+
+/**
+ * Buffer an alternate source view of the registered path `path_id`; its
+ * 0-based index, or -1 on failure.
+ *
+ * # Safety
+ * `handle` is NULL or a live writer; each `(pointer, length)` pair is
+ * readable or NULL/0.
+ */
+int64_t trace_writer_register_source_view(struct TraceWriterHandle *handle,
+                                          uint64_t path_id,
+                                          uint8_t view_kind,
+                                          const char *view_name,
+                                          uintptr_t view_name_len,
+                                          const uint8_t *content,
+                                          uintptr_t content_len,
+                                          const uint8_t *sourcemap,
+                                          uintptr_t sourcemap_len);
+
+/**
+ * # Safety
+ * `handle` is NULL or a live writer.
+ */
+uint64_t trace_writer_source_reload_count(struct TraceWriterHandle *handle);
+
+/**
+ * # Safety
+ * `handle` is NULL or a live writer.
+ */
+uint64_t trace_writer_next_step_index(struct TraceWriterHandle *handle);
+
+/**
+ * The `<toplevel>` function, its call, and the entry step.
+ *
+ * # Safety
+ * `handle` is NULL or a live writer; `path` is NULL or NUL-terminated.
+ */
+void trace_writer_start(struct TraceWriterHandle *handle, const char *path, int64_t line);
+
+/**
+ * # Safety
+ * `handle` is NULL or a live writer; `path` is NULL or NUL-terminated.
  */
 void trace_writer_register_step(struct TraceWriterHandle *handle, const char *path, int64_t line);
 
 /**
- * Register a function and return its ID.  Returns `usize::MAX` on error.
+ * A step at `(path, line)`; a column is not carried by this entry point,
+ * and asking for one is reported.
  *
  * # Safety
+ * `handle` is NULL or a live writer; `path` is NULL or NUL-terminated.
+ */
+void ct_assignment_with_column(struct TraceWriterHandle *handle,
+                               const char *path,
+                               int64_t line,
+                               int64_t column,
+                               int32_t has_column);
+
+/**
+ * Move the buffered step's column by `column_delta`; with no step buffered,
+ * a column step of its own.
  *
- * `handle` must satisfy the handle invariant; `name` and `path` must each
- * satisfy the C-string invariant. Both are in the module-level "Safety"
- * section.
+ * # Safety
+ * `handle` is NULL or a live writer.
+ */
+void trace_writer_register_delta_column(struct TraceWriterHandle *handle, int64_t column_delta);
+
+/**
+ * # Safety
+ * `handle` is NULL or a live writer; `name` and `path` are NULL or
+ * NUL-terminated.
  */
 uintptr_t trace_writer_ensure_function_id(struct TraceWriterHandle *handle,
                                           const char *name,
@@ -240,136 +996,228 @@ uintptr_t trace_writer_ensure_function_id(struct TraceWriterHandle *handle,
                                           int64_t line);
 
 /**
- * Register a type and return its ID.  Returns `usize::MAX` on error.
- *
  * # Safety
- *
- * `handle` must satisfy the handle invariant and `lang_type` the C-string
- * invariant, both in the module-level "Safety" section.
+ * `handle` is NULL or a live writer; `lang_type` is NULL or NUL-terminated.
  */
 uintptr_t trace_writer_ensure_type_id(struct TraceWriterHandle *handle,
-                                      enum Tk kind,
+                                      int32_t kind,
                                       const char *lang_type);
 
 /**
- * Register a call to the function identified by `function_id`.
- *
- * For simplicity the FFI does not expose argument passing — call
- * `trace_writer_register_variable_with_full_value` for each arg before
- * this function.
+ * Stage one argument of the next call: its name and encoded value.
  *
  * # Safety
- *
- * `handle` must satisfy the handle invariant in the module-level "Safety"
- * section.
+ * `handle` is NULL or a live writer; `name` is NULL or NUL-terminated;
+ * `(cbor_data, cbor_len)` is readable or NULL/0.
+ */
+void trace_writer_register_call_arg(struct TraceWriterHandle *handle,
+                                    const char *name,
+                                    const uint8_t *cbor_data,
+                                    uintptr_t cbor_len);
+
+/**
+ * # Safety
+ * `handle` is NULL or a live writer.
  */
 void trace_writer_register_call(struct TraceWriterHandle *handle, uintptr_t function_id);
 
 /**
- * Register a function return with no explicit return value.
- *
  * # Safety
- *
- * `handle` must satisfy the handle invariant in the module-level "Safety"
- * section.
+ * `handle` is NULL or a live writer.
  */
 void trace_writer_register_return(struct TraceWriterHandle *handle);
 
 /**
- * Register a function return with an integer return value.
- *
  * # Safety
- *
- * `handle` must satisfy the handle invariant and `type_name` the C-string
- * invariant, both in the module-level "Safety" section.
+ * `handle` is NULL or a live writer; `type_name` is NULL or NUL-terminated.
  */
 void trace_writer_register_return_int(struct TraceWriterHandle *handle,
                                       int64_t value,
-                                      enum Tk type_kind,
+                                      int32_t type_kind,
                                       const char *type_name);
 
 /**
- * Register a function return with a string (raw) return value.
- *
  * # Safety
- *
- * `handle` must satisfy the handle invariant; `value_repr` and `type_name`
- * must each satisfy the C-string invariant. Both are in the module-level
- * "Safety" section.
+ * `handle` is NULL or a live writer.
+ */
+void trace_writer_register_return_int_by_type_id(struct TraceWriterHandle *handle,
+                                                 int64_t value,
+                                                 uintptr_t type_id);
+
+/**
+ * # Safety
+ * `handle` is NULL or a live writer; `value_repr` and `type_name` are NULL
+ * or NUL-terminated.
  */
 void trace_writer_register_return_raw(struct TraceWriterHandle *handle,
                                       const char *value_repr,
-                                      enum Tk type_kind,
+                                      int32_t type_kind,
                                       const char *type_name);
 
 /**
- * Register a variable with an integer value.
+ * A return whose value is already encoded; an empty value is no value.
  *
  * # Safety
- *
- * `handle` must satisfy the handle invariant; `name` and `type_name` must
- * each satisfy the C-string invariant. Both are in the module-level
- * "Safety" section.
+ * `handle` is NULL or a live writer; `(cbor_data, cbor_len)` is readable or
+ * NULL/0.
+ */
+void trace_writer_register_return_cbor(struct TraceWriterHandle *handle,
+                                       const uint8_t *cbor_data,
+                                       uintptr_t cbor_len);
+
+/**
+ * # Safety
+ * `handle` is NULL or a live writer; the strings are NULL or NUL-terminated.
  */
 void trace_writer_register_variable_int(struct TraceWriterHandle *handle,
                                         const char *name,
                                         int64_t value,
-                                        enum Tk type_kind,
+                                        int32_t type_kind,
                                         const char *type_name);
 
 /**
- * Register a variable with a string (raw) value representation.
- *
  * # Safety
- *
- * `handle` must satisfy the handle invariant; `name`, `value_repr` and
- * `type_name` must each satisfy the C-string invariant. Both are in the
- * module-level "Safety" section.
+ * `handle` is NULL or a live writer; `name` is NULL or NUL-terminated.
+ */
+void trace_writer_register_variable_int_by_type_id(struct TraceWriterHandle *handle,
+                                                   const char *name,
+                                                   int64_t value,
+                                                   uintptr_t type_id);
+
+/**
+ * # Safety
+ * `handle` is NULL or a live writer; the strings are NULL or NUL-terminated.
  */
 void trace_writer_register_variable_raw(struct TraceWriterHandle *handle,
                                         const char *name,
                                         const char *value_repr,
-                                        enum Tk type_kind,
+                                        int32_t type_kind,
                                         const char *type_name);
 
 /**
- * Register an I/O or special event with optional metadata.
- *
- * `metadata` is an arbitrary NUL-terminated string attached to the event
- * (for example a file descriptor or channel name).  Pass `NULL` or an empty
- * string when no metadata is needed.
- *
  * # Safety
- *
- * `handle` must satisfy the handle invariant; `metadata` and `content` must
- * each satisfy the C-string invariant. Both are in the module-level
- * "Safety" section.
+ * `handle` is NULL or a live writer; the strings are NULL or NUL-terminated.
  */
-void trace_writer_register_special_event(struct TraceWriterHandle *handle,
-                                         enum Elk kind,
-                                         const char *metadata,
-                                         const char *content);
+void trace_writer_register_variable_raw_by_type_id(struct TraceWriterHandle *handle,
+                                                   const char *name,
+                                                   const char *value_repr,
+                                                   uintptr_t type_id);
 
 /**
- * Emit an `Assignment` event.
- *
- * `target_name` is the destination variable's display name (it is interned
- * by the writer if not already present). The other arguments describe the
- * RHS via [`FfiRValueKind`]; see [`build_rvalue`] for the per-discriminator
- * argument semantics.
+ * A variable whose value is already encoded, stored verbatim.
  *
  * # Safety
+ * `handle` is NULL or a live writer; `name` is NULL or NUL-terminated;
+ * `(cbor_data, cbor_len)` is readable or NULL/0.
+ */
+void trace_writer_register_variable_cbor(struct TraceWriterHandle *handle,
+                                         const char *name,
+                                         const uint8_t *cbor_data,
+                                         uintptr_t cbor_len);
+
+/**
+ * # Safety
+ * `handle` is NULL or a live writer; `target_name` is NULL or
+ * NUL-terminated; `(rvalue_cbor, rvalue_cbor_len)` is readable or NULL/0.
+ */
+int32_t trace_writer_register_assignment(struct TraceWriterHandle *handle,
+                                         const char *target_name,
+                                         uint8_t pass_by,
+                                         const uint8_t *rvalue_cbor,
+                                         uintptr_t rvalue_cbor_len);
+
+/**
+ * # Safety
+ * `handle` is NULL or a live writer; `names` holds `count` strings, each NULL
+ * or NUL-terminated (`names` may be NULL when `count` is 0).
+ */
+int32_t trace_writer_register_drop_variables(struct TraceWriterHandle *handle,
+                                             const char *const *names,
+                                             uintptr_t count);
+
+/**
+ * # Safety
+ * `handle` is NULL or a live writer; `name` is NULL or NUL-terminated.
+ */
+int32_t trace_writer_register_drop_variable(struct TraceWriterHandle *handle, const char *name);
+
+/**
+ * # Safety
+ * `handle` is NULL or a live writer; `variable_name` is NULL or
+ * NUL-terminated.
+ */
+int32_t trace_writer_bind_variable(struct TraceWriterHandle *handle,
+                                   const char *variable_name,
+                                   int64_t place);
+
+/**
+ * # Safety
+ * `handle` is NULL or a live writer; `variable_name` is NULL or
+ * NUL-terminated.
+ */
+int32_t trace_writer_register_variable_cell(struct TraceWriterHandle *handle,
+                                            const char *variable_name,
+                                            int64_t place);
+
+/**
+ * # Safety
+ * `handle` is NULL or a live writer; `(value_cbor, value_cbor_len)` is
+ * readable or NULL/0.
+ */
+int32_t trace_writer_register_cell_value(struct TraceWriterHandle *handle,
+                                         int64_t place,
+                                         const uint8_t *value_cbor,
+                                         uintptr_t value_cbor_len);
+
+/**
+ * # Safety
+ * `handle` is NULL or a live writer; `(value_cbor, value_cbor_len)` is
+ * readable or NULL/0.
+ */
+int32_t trace_writer_register_compound_value(struct TraceWriterHandle *handle,
+                                             int64_t place,
+                                             const uint8_t *value_cbor,
+                                             uintptr_t value_cbor_len);
+
+/**
+ * # Safety
+ * `handle` is NULL or a live writer; `(new_value_cbor, new_value_cbor_len)`
+ * is readable or NULL/0.
+ */
+int32_t trace_writer_assign_cell(struct TraceWriterHandle *handle,
+                                 int64_t place,
+                                 const uint8_t *new_value_cbor,
+                                 uintptr_t new_value_cbor_len);
+
+/**
+ * # Safety
+ * `handle` is NULL or a live writer.
+ */
+int32_t trace_writer_assign_compound_item(struct TraceWriterHandle *handle,
+                                          int64_t place,
+                                          uint64_t index,
+                                          int64_t item_place);
+
+/**
+ * `BindVariable` for a host with no use for the failure value.
  *
- * `handle` must be a writer obtained from [`trace_writer_new`].
- * `target_name` must be a valid NUL-terminated UTF-8 C string. The
- * `compound_ids` pointer (if non-null) must point at `compound_len`
- * contiguous `usize` values. `field_name` (if used) must be a valid
- * NUL-terminated UTF-8 C string.
+ * # Safety
+ * `handle` is NULL or a live writer; `variable_name` is NULL or
+ * NUL-terminated.
+ */
+void ct_bind_variable(struct TraceWriterHandle *handle, const char *variable_name, int64_t place);
+
+/**
+ * An assignment whose right-hand side is given by kind and operands.
+ *
+ * # Safety
+ * `handle` is NULL or a live writer; the strings are NULL or NUL-terminated;
+ * `compound_ids` holds `compound_len` entries or is NULL.
  */
 void ct_assignment(struct TraceWriterHandle *handle,
                    const char *target_name,
-                   enum FfiPassBy pass_by,
-                   enum FfiRValueKind rvalue_kind,
+                   int32_t pass_by,
+                   int32_t rvalue_kind,
                    uintptr_t simple_variable_id,
                    const uintptr_t *compound_ids,
                    uintptr_t compound_len,
@@ -378,32 +1226,50 @@ void ct_assignment(struct TraceWriterHandle *handle,
                    int64_t call_key);
 
 /**
- * Emit a `BindVariable` event associating `variable_name` with `place`.
+ * `kind` is the event's `EventLogKind` ordinal (0-13); another value is
+ * refused.
  *
  * # Safety
- *
- * `handle` must be a writer obtained from [`trace_writer_new`].
- * `variable_name` must be a valid NUL-terminated UTF-8 C string.
+ * `handle` is NULL or a live writer; `metadata` and `content` are NULL or
+ * NUL-terminated.
  */
-void ct_bind_variable(struct TraceWriterHandle *handle, const char *variable_name, int64_t place);
+void trace_writer_register_special_event(struct TraceWriterHandle *handle,
+                                         int32_t kind,
+                                         const char *metadata,
+                                         const char *content);
 
 /**
- * Emit a `Step` event at (path, line, column).
- *
- * `column` is taken as-is when `has_column` is non-zero; otherwise the
- * event is recorded without column information. This matches the M14
- * back-compat rule (recorders without column data continue to emit the
- * legacy-shaped Step event).
- *
  * # Safety
- *
- * `handle` must be a writer obtained from [`trace_writer_new`].
- * `path` must be a valid NUL-terminated UTF-8 C string.
+ * `handle` is NULL or a live writer.
  */
-void ct_assignment_with_column(struct TraceWriterHandle *handle,
-                               const char *path,
-                               int64_t line,
-                               int64_t column,
-                               bool has_column);
+void trace_writer_register_thread_start(struct TraceWriterHandle *handle, uint64_t thread_id);
+
+/**
+ * # Safety
+ * `handle` is NULL or a live writer.
+ */
+void trace_writer_register_thread_exit(struct TraceWriterHandle *handle, uint64_t thread_id);
+
+/**
+ * # Safety
+ * `handle` is NULL or a live writer.
+ */
+void trace_writer_register_thread_switch(struct TraceWriterHandle *handle, uint64_t thread_id);
+
+/**
+ * # Safety
+ * `handle` is NULL or a live writer; `(message, message_len)` is readable or
+ * NULL/0.
+ */
+void trace_writer_register_raise(struct TraceWriterHandle *handle,
+                                 uint64_t exception_type_id,
+                                 const uint8_t *message,
+                                 uintptr_t message_len);
+
+/**
+ * # Safety
+ * `handle` is NULL or a live writer.
+ */
+void trace_writer_register_catch(struct TraceWriterHandle *handle, uint64_t exception_type_id);
 
 #endif  /* CODETRACER_TRACE_WRITER_H */

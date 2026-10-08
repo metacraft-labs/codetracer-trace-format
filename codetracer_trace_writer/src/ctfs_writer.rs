@@ -656,13 +656,20 @@ impl CtfsTraceWriter {
         self.base.paths.get(path).copied()
     }
 
+    /// Append the `paths.dat` record of `path`, whose id the caller has
+    /// already assigned.
+    fn emit_path_record(&mut self, path: &Path) {
+        self.base.path_list.push(path.to_path_buf());
+        AbstractTraceWriter::add_event(self, TraceLowLevelEvent::Path(path.to_path_buf()));
+    }
+
     /// Append a `paths.dat` record for `path` with `line_count`, and point the
     /// path's name at it.
     fn append_path_record(&mut self, path: &Path, line_count: u64) -> codetracer_trace_types::PathId {
         let id = codetracer_trace_types::PathId(self.base.path_list.len());
         self.base.paths.insert(path.to_path_buf(), id);
         self.pending_line_count = Some(line_count);
-        AbstractTraceWriter::register_path(self, path);
+        self.emit_path_record(path);
         self.pending_line_count = None;
         id
     }
@@ -1746,8 +1753,14 @@ impl AbstractTraceWriter for CtfsTraceWriter {
         }
         let id = codetracer_trace_types::PathId(self.base.path_list.len());
         self.base.paths.insert(path.to_path_buf(), id);
-        AbstractTraceWriter::register_path(self, path);
+        self.emit_path_record(path);
         id
+    }
+
+    /// Register `path`: intern it, as every other mention of a path does. A
+    /// path already registered keeps its id and gains no `paths.dat` record.
+    fn register_path(&mut self, path: &std::path::Path) {
+        AbstractTraceWriter::ensure_path_id(self, path);
     }
 
     /// Record a step, refusing one the container cannot represent: a path with

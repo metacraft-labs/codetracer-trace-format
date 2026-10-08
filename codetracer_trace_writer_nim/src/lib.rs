@@ -199,8 +199,9 @@ extern "C" {
     // process, a test — appended to the container's `spans.dat` stream instead
     // of a `codetracer_spans.jsonl` sidecar.  Spec:
     // `codetracer-specs/Trace-Files/CTFS-Request-Span-Streams.md`.  Only the
-    // multi-stream backend supports spans; registering at least one sets
-    // meta.dat bit 13 (`FlagHasSpanStream`) on the finished container.
+    // multi-stream backend supports spans. A reader finds the stream by the
+    // presence of `spans.dat`; the writer leaves meta.dat bit 13 clear, since
+    // meta.dat is written before the first span.
     fn trace_writer_register_span(
         handle: *mut std::ffi::c_void,
         span_id: u64,
@@ -223,6 +224,8 @@ extern "C" {
         metadata_count: usize,
     ) -> i32;
     fn trace_writer_flush_spans(handle: *mut std::ffi::c_void) -> i32;
+    fn trace_writer_begin_crossing(handle: *mut std::ffi::c_void, span_type: *const std::os::raw::c_char) -> u64;
+    fn trace_writer_end_crossing(handle: *mut std::ffi::c_void, span_id: u64) -> i32;
 
     // ----- Correlation markers -----
     //
@@ -296,6 +299,7 @@ extern "C" {
     // Read side: the span stream of a finished container as JSON.  Freed with
     // ct_free_buffer.
     fn ct_spans_json(path: *const std::os::raw::c_char, settled: i32, out_len: *mut usize) -> *mut u8;
+    fn ct_span_types_json(path: *const std::os::raw::c_char, out_len: *mut usize) -> *mut u8;
 
     // ----- Column-aware step mode (P6.3 / P6.4) -----
     //
@@ -1187,6 +1191,22 @@ pub fn read_span_stream_json(path: &Path, settled: bool) -> Result<String, Box<d
     let buf = unsafe { ct_spans_json(c_path.as_ptr(), i32::from(settled), &mut out_len) };
     if buf.is_null() {
         return Err(format!("ct_spans_json({}): {}", path.display(), last_error()).into());
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(buf, out_len) }.to_vec();
+    unsafe { ct_free_buffer(buf) };
+    Ok(String::from_utf8(bytes)?)
+}
+
+/// Decode the span-type index (`spantype.ns`) of the `.ct` container at `path`
+/// into JSON through the canonical Nim decoder: an array of
+/// `{"type_id", "name", "span_ids"}` objects in the index's order.
+pub fn read_span_types_json(path: &Path) -> Result<String, Box<dyn Error>> {
+    ensure_nim_initialized();
+    let c_path = path_to_cstring(path);
+    let mut out_len: usize = 0;
+    let buf = unsafe { ct_span_types_json(c_path.as_ptr(), &mut out_len) };
+    if buf.is_null() {
+        return Err(format!("ct_span_types_json({}): {}", path.display(), last_error()).into());
     }
     let bytes = unsafe { std::slice::from_raw_parts(buf, out_len) }.to_vec();
     unsafe { ct_free_buffer(buf) };
@@ -2105,9 +2125,9 @@ impl NimTraceWriter {
     /// Append one span to the container's `spans.dat` stream (RS-M1).
     ///
     /// This is what a recorder's HTTP middleware calls instead of writing a
-    /// `codetracer_spans.jsonl` sidecar.  Registering at least one span sets
-    /// `meta.dat` bit 13 (`FlagHasSpanStream`) at close; a recording that
-    /// registers none is byte-for-byte unchanged.  Only the multi-stream
+    /// `codetracer_spans.jsonl` sidecar.  The first span creates `spans.dat`
+    /// and `spans.idx`; a recording that registers none has neither, and
+    /// `meta.dat` bit 13 stays clear either way.  Only the multi-stream
     /// (CTFS) backend supports spans — any other format returns an error.
     ///
     /// To publish an in-flight interval, call once with
@@ -2168,6 +2188,29 @@ impl NimTraceWriter {
         let rc = unsafe { trace_writer_flush_spans(self.handle) };
         if rc != 0 {
             return Err(format!("trace_writer_flush_spans: {}", last_error()).into());
+        }
+        Ok(())
+    }
+
+    /// Open a native-to-VM crossing: a span of type `span_type` starting at
+    /// the next step, published at once as an open record. Returns the span
+    /// id the writer minted, to pass to [`end_crossing`](Self::end_crossing).
+    pub fn begin_crossing(&mut self, span_type: &str) -> Result<u64, Box<dyn Error>> {
+        let c_span_type = str_to_cstring(span_type);
+        let id = unsafe { trace_writer_begin_crossing(self.handle, c_span_type.as_ptr()) };
+        if id == 0 {
+            return Err(format!("trace_writer_begin_crossing: {}", last_error()).into());
+        }
+        Ok(id)
+    }
+
+    /// Close the innermost open crossing, which must be `span_id`: its
+    /// settled record ends at the last step recorded, and is published at
+    /// once.
+    pub fn end_crossing(&mut self, span_id: u64) -> Result<(), Box<dyn Error>> {
+        let rc = unsafe { trace_writer_end_crossing(self.handle, span_id) };
+        if rc != 0 {
+            return Err(format!("trace_writer_end_crossing: {}", last_error()).into());
         }
         Ok(())
     }
@@ -3295,7 +3338,7 @@ pub trait TraceWriter: Send {
     /// RS-M1: append one span — a bounded, labeled interval of execution — to
     /// the container's `spans.dat` stream.  See
     /// [`NimTraceWriter::register_span`] for the contract (open records,
-    /// last-record-wins, the `meta.dat` bit 13 side effect).
+    /// last-record-wins, lazily created members).
     ///
     /// The default implementation ERRORS rather than silently dropping the
     /// span: a middleware that believes it recorded a request must not be told

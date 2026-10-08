@@ -1713,6 +1713,18 @@ impl CtfsTraceWriter {
         self.publish();
     }
 
+    /// After an interning registration: append its record, and after a path,
+    /// the function records it made writable. Kept out of line, since
+    /// `add_event` runs for every record and this for few.
+    #[cold]
+    #[inline(never)]
+    fn after_interning(&mut self, path: bool) {
+        self.append_interning_records();
+        if path {
+            self.write_ready_functions();
+        }
+    }
+
     /// Append every interning record registered since the last append, as
     /// the record is registered: its bytes to the table's `.dat`, then its
     /// end offset to the `.off` (`ctfs-container.md` §6, "Block placement").
@@ -2202,14 +2214,10 @@ impl AbstractTraceWriter for CtfsTraceWriter {
         if let Some(ref mut builder) = self.interning_tables_builder {
             builder.observe(&event);
         }
-        if matches!(
-            event,
-            TraceLowLevelEvent::Path(_) | TraceLowLevelEvent::Function(_) | TraceLowLevelEvent::Type(_) | TraceLowLevelEvent::VariableName(_)
-        ) {
-            self.append_interning_records();
-            if matches!(event, TraceLowLevelEvent::Path(_)) {
-                self.write_ready_functions();
-            }
+        match event {
+            TraceLowLevelEvent::Path(_) => self.after_interning(true),
+            TraceLowLevelEvent::Function(_) | TraceLowLevelEvent::Type(_) | TraceLowLevelEvent::VariableName(_) => self.after_interning(false),
+            _ => {}
         }
         self.after_record();
     }

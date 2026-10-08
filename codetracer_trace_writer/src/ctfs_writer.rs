@@ -221,9 +221,10 @@ pub struct CtfsTraceWriter {
     /// Interning records published so far, per table, and each table's
     /// `.dat` length.
     interning_published: [(usize, u64); 4],
-    /// Re-entrancy guard: a function written while publishing goes through
-    /// `add_event`, which must not publish again.
-    publishing: bool,
+    /// Interning tables appended to since their entries were last published.
+    interning_dirty: [bool; 4],
+    /// Re-entrancy guard: writing a function record goes through `add_event`.
+    writing_functions: bool,
     /// The first failure to encode or write the container. Recording calls
     /// cannot return it, so it is held and returned by
     /// `finish_writing_trace_events`; nothing is written after it.
@@ -390,7 +391,8 @@ impl CtfsTraceWriter {
             values_sink: None,
             events_sink: None,
             interning_published: [(0, 0); 4],
-            publishing: false,
+            interning_dirty: [false; 4],
+            writing_functions: false,
             write_error: None,
             spans: None,
             last_crossing_id: 0,
@@ -1676,29 +1678,70 @@ impl CtfsTraceWriter {
             return;
         }
         self.meta_committed = true;
-        let meta = self.meta_dat_bytes();
-        self.create_members();
-        let Some(members) = self.members.take() else {
+        if self.members.is_none() {
             return;
-        };
-        let result = (|| -> Result<Members, codetracer_ctfs::CtfsError> {
-            let w = self.ctfs_writer.as_mut().expect("checked above");
+        }
+        let meta = self.meta_dat_bytes();
+        let w = self.ctfs_writer.as_mut().expect("checked above");
+        let result = (|| -> Result<(), codetracer_ctfs::CtfsError> {
             let meta_handle = w.add_file("meta.dat")?;
             w.write(meta_handle, &meta)?;
-            // Every offset table starts with record 0's offset, `0`.
-            for (_, off) in members.interning {
+            w.sync_entry(meta_handle)
+        })();
+        self.latch(result.map_err(|e| format!("writing meta.dat: {e}")));
+    }
+
+    /// Create the trace's members, in the order the container lists them,
+    /// and write what each holds before any record: every offset table's
+    /// record-0 offset `0`, in table order, then every stream index's header,
+    /// in stream order (`ctfs-container.md` §6, "Block placement").
+    fn open_members(&mut self) {
+        self.create_members();
+        let Some(members) = self.members.as_ref() else {
+            return;
+        };
+        let offs: Vec<_> = members.interning.iter().map(|&(_, off)| off).collect();
+        let w = self.ctfs_writer.as_mut().expect("members exist only while the container is open");
+        let result = (|| -> Result<(), codetracer_ctfs::CtfsError> {
+            for off in offs {
                 w.write(off, &0u64.to_le_bytes())?;
             }
-            w.sync_entry(meta_handle)?;
-            Ok(members)
+            Ok(())
         })();
-        match result {
-            Ok(members) => self.members = Some(members),
-            Err(e) => self.latch(Err::<(), _>(format!("writing meta.dat: {e}"))),
-        }
-        // The index headers, so that every stream is readable — empty — from
-        // here on.
+        self.latch(result.map_err(|e| format!("opening the trace's members: {e}")));
+        self.interning_dirty = [true; 4];
         self.publish();
+    }
+
+    /// Append every interning record registered since the last append, as
+    /// the record is registered: its bytes to the table's `.dat`, then its
+    /// end offset to the `.off` (`ctfs-container.md` §6, "Block placement").
+    /// They are published with the next sealed chunk.
+    fn append_interning_records(&mut self) {
+        let (Some(members), Some(tables), Some(w)) = (self.members.as_ref(), self.interning_tables_builder.as_ref(), self.ctfs_writer.as_mut())
+        else {
+            return;
+        };
+        let counts = [tables.path_count(), tables.func_count(), tables.type_count(), tables.varname_count()];
+        let mut result: Result<(), codetracer_ctfs::CtfsError> = Ok(());
+        for (t, &(dat_h, off_h)) in members.interning.iter().enumerate() {
+            let (published, mut dat_len) = self.interning_published[t];
+            for id in published..counts[t] {
+                let rec = match t {
+                    0 => tables.path_record(id),
+                    1 => tables.func_record(id),
+                    2 => tables.type_record(id),
+                    _ => tables.varname_record(id),
+                };
+                dat_len += rec.len() as u64;
+                if result.is_ok() {
+                    result = w.write(dat_h, &rec).and_then(|_| w.write(off_h, &dat_len.to_le_bytes())).map(|_| ());
+                }
+                self.interning_dirty[t] = true;
+            }
+            self.interning_published[t] = (counts[t], dat_len);
+        }
+        self.latch(result.map_err(|e| format!("writing an interning record: {e}")));
     }
 
     /// Move every record that has become final into its stream: steps as they
@@ -1757,9 +1800,6 @@ impl CtfsTraceWriter {
     /// After a record: drain what became final and, if a chunk sealed,
     /// publish it.
     fn after_record(&mut self) {
-        if self.publishing {
-            return;
-        }
         self.drain_streams();
         if self.sealed_unpublished() {
             self.publish();
@@ -1770,6 +1810,10 @@ impl CtfsTraceWriter {
     /// stopping at the first whose path is not: its record can only be written
     /// once its file is laid out, and `funcs.dat` is in id order.
     fn write_ready_functions(&mut self) {
+        if self.members.is_none() || self.writing_functions {
+            return;
+        }
+        self.writing_functions = true;
         while let Some((_, path, _, known)) = self.pending_functions.first() {
             let Some(path_id) = known.or_else(|| self.base.paths.get(path).copied()) else {
                 break;
@@ -1781,6 +1825,7 @@ impl CtfsTraceWriter {
                 TraceLowLevelEvent::Function(codetracer_trace_types::FunctionRecord { name, path_id, line }),
             );
         }
+        self.writing_functions = false;
     }
 
     /// Publish everything sealed so far (`ctfs-container.md` §6,
@@ -1788,52 +1833,38 @@ impl CtfsTraceWriter {
     /// every interning record registered so far, then the root entries of
     /// every member that grew — data before the entry that publishes it.
     fn publish(&mut self) {
+        self.publish_in_order(false);
+    }
+
+    /// [`Self::publish`]; `closing` puts the call stream's chunks first, as
+    /// the writer seals them at close.
+    fn publish_in_order(&mut self, closing: bool) {
         if self.write_error.is_some() || self.members.is_none() {
             return;
         }
-        self.publishing = true;
-        self.write_ready_functions();
-        self.publishing = false;
-
         let members = self.members.as_ref().expect("checked above");
         let mut writes: Vec<(codetracer_ctfs::FileHandle, Vec<u8>)> = Vec::new();
         let mut stream = |handles: (codetracer_ctfs::FileHandle, codetracer_ctfs::FileHandle), (dat, idx): (Vec<u8>, Vec<u8>)| {
             writes.push((handles.0, dat));
             writes.push((handles.1, idx));
         };
+        // While recording, one record seals the step stream before the value
+        // stream; at close the call stream's last chunk seals first.
+        let mut calls = self.calls_sink.as_mut().map(ChunkSink::take);
+        if closing && let Some(c) = calls.take() {
+            stream(members.calls, c);
+        }
         if let Some(e) = self.exec_encoder.as_mut() {
             stream(members.steps, e.take_sealed());
-        }
-        if let Some(s) = self.calls_sink.as_mut() {
-            stream(members.calls, s.take());
         }
         if let Some(s) = self.values_sink.as_mut() {
             stream(members.values, s.take());
         }
+        if let Some(c) = calls {
+            stream(members.calls, c);
+        }
         if let Some(s) = self.events_sink.as_mut() {
             stream(members.events, s.take());
-        }
-        if let Some(tables) = self.interning_tables_builder.as_ref() {
-            let counts = [tables.path_count(), tables.func_count(), tables.type_count(), tables.varname_count()];
-            for (t, &(dat_h, off_h)) in members.interning.iter().enumerate() {
-                let (published, mut dat_len) = self.interning_published[t];
-                let mut dat = Vec::new();
-                let mut off = Vec::new();
-                for id in published..counts[t] {
-                    let rec = match t {
-                        0 => tables.path_record(id),
-                        1 => tables.func_record(id),
-                        2 => tables.type_record(id),
-                        _ => tables.varname_record(id),
-                    };
-                    dat_len += rec.len() as u64;
-                    dat.extend_from_slice(&rec);
-                    off.extend_from_slice(&dat_len.to_le_bytes());
-                }
-                self.interning_published[t] = (counts[t], dat_len);
-                writes.push((dat_h, dat));
-                writes.push((off_h, off));
-            }
         }
         writes.retain(|(_, bytes)| !bytes.is_empty());
         let w = self.ctfs_writer.as_mut().expect("members exist only while the container is open");
@@ -1841,10 +1872,24 @@ impl CtfsTraceWriter {
             for (h, bytes) in &writes {
                 w.write(*h, bytes)?;
             }
-            for (h, _) in &writes {
+            Ok(())
+        })();
+        self.latch(result.map_err(|e| format!("publishing a sealed chunk: {e}")));
+
+        let members = self.members.as_ref().expect("checked above");
+        let mut handles: Vec<codetracer_ctfs::FileHandle> = writes.iter().map(|(h, _)| *h).collect();
+        for (t, &(dat_h, off_h)) in members.interning.iter().enumerate() {
+            if std::mem::take(&mut self.interning_dirty[t]) {
+                handles.push(dat_h);
+                handles.push(off_h);
+            }
+        }
+        let w = self.ctfs_writer.as_mut().expect("members exist only while the container is open");
+        let result = (|| -> Result<(), codetracer_ctfs::CtfsError> {
+            for h in &handles {
                 w.write_pending(*h)?;
             }
-            for (h, _) in &writes {
+            for h in &handles {
                 w.publish_entry(*h)?;
             }
             w.flush()
@@ -1962,9 +2007,13 @@ impl AbstractTraceWriter for CtfsTraceWriter {
     /// to be accepted. At finish every such registration has happened; a path
     /// still unregistered then is interned there, and under the line-count
     /// table refused by name.
+    /// Register a function. Its `funcs.dat` record is written as soon as it
+    /// and every function registered before it have a registered declaration
+    /// path: now, or when that path is registered.
     fn register_function(&mut self, name: &str, path: &std::path::Path, line: codetracer_trace_types::Line) {
         let known = self.base.paths.get(path).copied();
         self.pending_functions.push((name.to_string(), path.to_path_buf(), line, known));
+        self.write_ready_functions();
     }
 
     /// Record a step at `(path, line, column)`.
@@ -2153,6 +2202,15 @@ impl AbstractTraceWriter for CtfsTraceWriter {
         if let Some(ref mut builder) = self.interning_tables_builder {
             builder.observe(&event);
         }
+        if matches!(
+            event,
+            TraceLowLevelEvent::Path(_) | TraceLowLevelEvent::Function(_) | TraceLowLevelEvent::Type(_) | TraceLowLevelEvent::VariableName(_)
+        ) {
+            self.append_interning_records();
+            if matches!(event, TraceLowLevelEvent::Path(_)) {
+                self.write_ready_functions();
+            }
+        }
         self.after_record();
     }
 
@@ -2254,6 +2312,7 @@ impl TraceWriter for CtfsTraceWriter {
         self.correlation_markers.clear();
         self.meta_committed = false;
         self.interning_published = [(0, 0); 4];
+        self.interning_dirty = [false; 4];
         self.write_error = None;
         self.spans = None;
         self.last_crossing_id = 0;
@@ -2283,14 +2342,16 @@ impl TraceWriter for CtfsTraceWriter {
         tables.set_column_aware(self.column_aware_active);
         tables.set_line_count_table(self.line_count_table);
         self.interning_tables_builder = Some(tables);
+        self.open_members();
 
         Ok(())
     }
 
     fn finish_writing_trace_events(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        // Write the deferred function records first, in id order: every path
-        // is registered now, and `funcs.dat` is interned before the tables are
-        // encoded.
+        // A trace with no record commits its meta.dat now.
+        self.commit_meta();
+        // The function records still waiting for their declaration path, in
+        // id order: each path is registered now if no step did.
         for (name, path, line, known) in std::mem::take(&mut self.pending_functions) {
             let path_id = known.unwrap_or_else(|| AbstractTraceWriter::ensure_path_id(self, &path));
             if path_id == INVALID_PATH_ID {
@@ -2309,9 +2370,6 @@ impl TraceWriter for CtfsTraceWriter {
         if let Some(err) = self.fatal_refusal.take() {
             return Err(err.into());
         }
-
-        // A trace with no record commits its meta.dat now.
-        self.commit_meta();
 
         // Close every stream: what was still open becomes final, the trailing
         // partial chunks seal, and all of it is published.
@@ -2341,7 +2399,7 @@ impl TraceWriter for CtfsTraceWriter {
             let r = encoder.seal();
             self.latch(r);
         }
-        self.publish();
+        self.publish_in_order(true);
 
         // The span stream's last chunk, and the span-type index of the whole
         // recording.

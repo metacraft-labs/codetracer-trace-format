@@ -288,6 +288,35 @@ impl InterningTablesBuilder {
         self.varnames.len()
     }
 
+    /// Append record `id` of table `table` (0 `paths`, 1 `funcs`, 2 `types`,
+    /// 3 `varnames`) to `out`.
+    pub fn append_record(&self, table: usize, id: usize, out: &mut Vec<u8>) {
+        match table {
+            0 if !self.column_aware && !self.line_count_table => out.extend_from_slice(&self.paths[id]),
+            0 => out.extend_from_slice(&self.path_record(id)),
+            1 => {
+                let (gli, name) = &self.funcs[id];
+                encode_func_record(*gli, name, out);
+            }
+            2 => {
+                let (kind, lang_type, specific_info) = &self.types[id];
+                encode_type_record(*kind, lang_type, specific_info, out);
+            }
+            _ => out.extend_from_slice(&self.varnames[id]),
+        }
+    }
+
+    /// The number of records table `table` holds (numbered as in
+    /// [`Self::append_record`]).
+    pub fn count(&self, table: usize) -> usize {
+        match table {
+            0 => self.paths.len(),
+            1 => self.funcs.len(),
+            2 => self.types.len(),
+            _ => self.varnames.len(),
+        }
+    }
+
     /// The `paths.dat` record of path `id`, in the trace's layout.
     pub fn path_record(&self, id: usize) -> Vec<u8> {
         let raw_path = &self.paths[id];

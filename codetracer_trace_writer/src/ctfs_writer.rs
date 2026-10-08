@@ -225,6 +225,8 @@ pub struct CtfsTraceWriter {
     interning_dirty: [bool; 4],
     /// Re-entrancy guard: writing a function record goes through `add_event`.
     writing_functions: bool,
+    /// The interning record being appended.
+    interning_scratch: Vec<u8>,
     /// The first failure to encode or write the container. Recording calls
     /// cannot return it, so it is held and returned by
     /// `finish_writing_trace_events`; nothing is written after it.
@@ -393,6 +395,7 @@ impl CtfsTraceWriter {
             interning_published: [(0, 0); 4],
             interning_dirty: [false; 4],
             writing_functions: false,
+            interning_scratch: Vec::new(),
             write_error: None,
             spans: None,
             last_crossing_id: 0,
@@ -1718,41 +1721,41 @@ impl CtfsTraceWriter {
     /// `add_event` runs for every record and this for few.
     #[cold]
     #[inline(never)]
-    fn after_interning(&mut self, path: bool) {
-        self.append_interning_records();
-        if path {
+    fn after_interning(&mut self, table: usize) {
+        self.append_interning_records(table);
+        if table == 0 {
             self.write_ready_functions();
         }
     }
 
-    /// Append every interning record registered since the last append, as
-    /// the record is registered: its bytes to the table's `.dat`, then its
-    /// end offset to the `.off` (`ctfs-container.md` §6, "Block placement").
-    /// They are published with the next sealed chunk.
-    fn append_interning_records(&mut self) {
+    /// Append the records of interning table `t` (0 `paths`, 1 `funcs`, 2
+    /// `types`, 3 `varnames`) registered since the last append, as they are
+    /// registered: each record's bytes to the table's `.dat`, then its end
+    /// offset to the `.off`. They are published with the next sealed chunk.
+    fn append_interning_records(&mut self, t: usize) {
         let (Some(members), Some(tables), Some(w)) = (self.members.as_ref(), self.interning_tables_builder.as_ref(), self.ctfs_writer.as_mut())
         else {
             return;
         };
-        let counts = [tables.path_count(), tables.func_count(), tables.type_count(), tables.varname_count()];
+        let (dat_h, off_h) = members.interning[t];
+        let (published, mut dat_len) = self.interning_published[t];
+        let count = tables.count(t);
         let mut result: Result<(), codetracer_ctfs::CtfsError> = Ok(());
-        for (t, &(dat_h, off_h)) in members.interning.iter().enumerate() {
-            let (published, mut dat_len) = self.interning_published[t];
-            for id in published..counts[t] {
-                let rec = match t {
-                    0 => tables.path_record(id),
-                    1 => tables.func_record(id),
-                    2 => tables.type_record(id),
-                    _ => tables.varname_record(id),
-                };
-                dat_len += rec.len() as u64;
-                if result.is_ok() {
-                    result = w.write(dat_h, &rec).and_then(|_| w.write(off_h, &dat_len.to_le_bytes())).map(|_| ());
-                }
-                self.interning_dirty[t] = true;
+        for id in published..count {
+            self.interning_scratch.clear();
+            tables.append_record(t, id, &mut self.interning_scratch);
+            dat_len += self.interning_scratch.len() as u64;
+            if result.is_ok() {
+                result = w
+                    .write(dat_h, &self.interning_scratch)
+                    .and_then(|_| w.write(off_h, &dat_len.to_le_bytes()))
+                    .map(|_| ());
             }
-            self.interning_published[t] = (counts[t], dat_len);
         }
+        if count > published {
+            self.interning_dirty[t] = true;
+        }
+        self.interning_published[t] = (count, dat_len);
         self.latch(result.map_err(|e| format!("writing an interning record: {e}")));
     }
 
@@ -2215,8 +2218,10 @@ impl AbstractTraceWriter for CtfsTraceWriter {
             builder.observe(&event);
         }
         match event {
-            TraceLowLevelEvent::Path(_) => self.after_interning(true),
-            TraceLowLevelEvent::Function(_) | TraceLowLevelEvent::Type(_) | TraceLowLevelEvent::VariableName(_) => self.after_interning(false),
+            TraceLowLevelEvent::Path(_) => self.after_interning(0),
+            TraceLowLevelEvent::Function(_) => self.after_interning(1),
+            TraceLowLevelEvent::Type(_) => self.after_interning(2),
+            TraceLowLevelEvent::VariableName(_) | TraceLowLevelEvent::Variable(_) => self.after_interning(3),
             _ => {}
         }
         self.after_record();

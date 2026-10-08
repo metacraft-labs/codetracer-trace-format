@@ -591,9 +591,15 @@ impl PositionSpace {
 /// shape — that one is the bare path bytes, with the length recovered from
 /// `paths.off`.
 pub fn encode_path_record_layout_a(path: &str, line_lengths: &[u32]) -> Vec<u8> {
+    encode_path_bytes_record_layout_a(path.as_bytes(), line_lengths)
+}
+
+/// [`encode_path_record_layout_a`] for a path given as its bytes, which a
+/// `paths.dat` record stores as they are.
+pub fn encode_path_bytes_record_layout_a(path: &[u8], line_lengths: &[u32]) -> Vec<u8> {
     let mut record = Vec::with_capacity(path.len() + 8 + line_lengths.len());
     encode_varint(path.len() as u64, &mut record);
-    record.extend_from_slice(path.as_bytes());
+    record.extend_from_slice(path);
     encode_varint(line_lengths.len() as u64, &mut record);
     if !line_lengths.is_empty() {
         encode_signed_varint(i64::from(line_lengths[0]), &mut record);

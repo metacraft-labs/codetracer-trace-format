@@ -177,6 +177,10 @@ pub struct InterningTablesBuilder {
     /// The line count the NEXT `Path` event's record carries and its file is
     /// sized with. Consumed by that event.
     next_path_line_count: Option<u64>,
+    /// The bytes a name stands for when they are not UTF-8: a function,
+    /// type or variable name interned under a key of this map is recorded as
+    /// these bytes. See [`InterningTablesBuilder::register_raw_name`].
+    raw_names: std::collections::HashMap<String, Vec<u8>>,
 }
 
 impl InterningTablesBuilder {
@@ -230,6 +234,18 @@ impl InterningTablesBuilder {
         self.path_line_lengths[path_id] = line_lengths.to_vec();
     }
 
+    /// Record the name interned under `key` as `bytes`. Interning tables
+    /// store names as bytes, which need not be UTF-8; a writer whose events
+    /// carry names as `String` interns such a name under a key no UTF-8 name
+    /// equals and registers its bytes here.
+    pub fn register_raw_name(&mut self, key: String, bytes: Vec<u8>) {
+        self.raw_names.insert(key, bytes);
+    }
+
+    fn name_bytes(&self, name: &str) -> Vec<u8> {
+        self.raw_names.get(name).cloned().unwrap_or_else(|| name.as_bytes().to_vec())
+    }
+
     /// Feed one event in stream order. Only the four interning events contribute
     /// records; all others are ignored. The legacy `Variable` event (tag 3) is a
     /// backward-compat alias of `VariableName` and is interned the same way so
@@ -237,7 +253,7 @@ impl InterningTablesBuilder {
     pub fn observe(&mut self, event: &TraceLowLevelEvent) {
         match event {
             TraceLowLevelEvent::Path(path) => {
-                self.paths.push(path.to_string_lossy().into_owned().into_bytes());
+                self.paths.push(path.as_os_str().as_encoded_bytes().to_vec());
                 match self.next_path_line_count.take() {
                     Some(count) => {
                         self.space.push_file(count);
@@ -251,18 +267,20 @@ impl InterningTablesBuilder {
             }
             TraceLowLevelEvent::Function(FunctionRecord { path_id, line, name }) => {
                 let gli = self.space.global_index(path_id.0, line.0);
-                self.funcs.push((gli, name.clone().into_bytes()));
+                let name = self.name_bytes(name);
+                self.funcs.push((gli, name));
             }
             TraceLowLevelEvent::Type(TypeRecord {
                 kind,
                 lang_type,
                 specific_info,
             }) => {
-                self.types
-                    .push((*kind as u8, lang_type.clone().into_bytes(), serialize_specific_info(specific_info)));
+                let lang_type = self.name_bytes(lang_type);
+                self.types.push((*kind as u8, lang_type, serialize_specific_info(specific_info)));
             }
             TraceLowLevelEvent::VariableName(name) | TraceLowLevelEvent::Variable(name) => {
-                self.varnames.push(name.clone().into_bytes());
+                let name = self.name_bytes(name);
+                self.varnames.push(name);
             }
             _ => {}
         }
@@ -321,10 +339,9 @@ impl InterningTablesBuilder {
     pub fn path_record(&self, id: usize) -> Vec<u8> {
         let raw_path = &self.paths[id];
         if self.column_aware {
-            let path = String::from_utf8_lossy(raw_path);
             let empty: Vec<u32> = Vec::new();
             let lls = self.path_line_lengths.get(id).unwrap_or(&empty);
-            crate::column_aware::encode_path_record_layout_a(&path, lls)
+            crate::column_aware::encode_path_bytes_record_layout_a(raw_path, lls)
         } else if self.line_count_table {
             let mut rec = Vec::with_capacity(raw_path.len() + 12);
             encode_varint(raw_path.len() as u64, &mut rec);

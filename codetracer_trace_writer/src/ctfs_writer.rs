@@ -298,17 +298,17 @@ fn is_record(event: &TraceLowLevelEvent) -> bool {
 /// JSON string escaping for a `MarkerPayload` field: `"` and `\` escaped,
 /// newline, carriage return and tab by their short escapes, every other byte
 /// below 0x20 as `\u00XX` (lowercase hex), everything else as is.
-fn marker_json_escape(s: &str) -> String {
-    let mut out = String::with_capacity(s.len() + 8);
-    for c in s.chars() {
-        match c {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => out.push_str(&format!("\\u00{:02x}", c as u32)),
-            c => out.push(c),
+fn marker_json_escape(s: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(s.len() + 8);
+    for &b in s {
+        match b {
+            b'"' => out.extend_from_slice(b"\\\""),
+            b'\\' => out.extend_from_slice(b"\\\\"),
+            b'\n' => out.extend_from_slice(b"\\n"),
+            b'\r' => out.extend_from_slice(b"\\r"),
+            b'\t' => out.extend_from_slice(b"\\t"),
+            b if b < 0x20 => out.extend_from_slice(format!("\\u00{b:02x}").as_bytes()),
+            b => out.push(b),
         }
     }
     out
@@ -699,6 +699,16 @@ impl CtfsTraceWriter {
             return Err(format!("the trace could not be written: {e}"));
         }
         self.commit_meta();
+        self.ensure_span_stream()?;
+        let spans = self.spans.as_mut().expect("created above");
+        if let Some(chunk) = spans.builder.push(span)? {
+            self.write_span_chunk(chunk)?;
+        }
+        Ok(())
+    }
+
+    /// Create `spans.dat` / `spans.idx` if the recording has none yet.
+    fn ensure_span_stream(&mut self) -> Result<(), String> {
         if self.spans.is_none() {
             let builder = crate::span_stream::SpanStreamBuilder::default();
             let header = builder.index_header();
@@ -713,11 +723,49 @@ impl CtfsTraceWriter {
             .map_err(|e| format!("creating the span stream: {e}"))?;
             self.spans = Some(created);
         }
-        let spans = self.spans.as_mut().expect("created above");
-        if let Some(chunk) = spans.builder.push(span)? {
-            self.write_span_chunk(chunk)?;
-        }
         Ok(())
+    }
+
+    /// Refuse a span record whose `what` was given as bytes that are not
+    /// UTF-8, as the span stream's text must be (`internal-files.md` §"Span
+    /// stream"). The record is refused where a record is encoded: the span
+    /// stream exists afterwards, as it would had the record been written.
+    pub fn refuse_span_text(&mut self, what: &str) -> Result<(), String> {
+        if self.ctfs_writer.is_none() {
+            return Err("register_span called before begin_writing_trace_events".to_string());
+        }
+        if let Some(e) = &self.write_error {
+            return Err(format!("the trace could not be written: {e}"));
+        }
+        self.commit_meta();
+        self.ensure_span_stream()?;
+        Err(format!("span record: {what} is not UTF-8"))
+    }
+
+    /// [`begin_crossing`](Self::begin_crossing) for a span type given as its
+    /// bytes: one that is not UTF-8 is refused as its open record is, after
+    /// the crossing's span id is taken.
+    pub fn begin_crossing_bytes(&mut self, span_type: &[u8]) -> Result<u64, String> {
+        match std::str::from_utf8(span_type) {
+            Ok(t) => self.begin_crossing(t),
+            Err(_) => {
+                if self.ctfs_writer.is_none() {
+                    return Err("begin_crossing called before begin_writing_trace_events".to_string());
+                }
+                self.commit_meta();
+                self.last_crossing_id += 1;
+                self.refuse_span_text("span_type").map(|()| 0)
+            }
+        }
+    }
+
+    /// Record the name interned under `key` (a function, type or variable
+    /// name) as `bytes` in the interning tables: names are bytes there, and
+    /// need not be UTF-8. `key` must be one no UTF-8 name equals.
+    pub fn register_raw_name(&mut self, key: String, bytes: Vec<u8>) {
+        if let Some(builder) = self.interning_tables_builder.as_mut() {
+            builder.register_raw_name(key, bytes);
+        }
     }
 
     /// Seal the buffered spans as a chunk, possibly a short one, and publish
@@ -850,6 +898,12 @@ impl CtfsTraceWriter {
     /// `markers.dat` / `markers.off` on the first call. A recording that
     /// declares no marker has neither.
     pub fn ensure_marker_id(&mut self, label: &str) -> Result<u64, String> {
+        self.ensure_marker_id_bytes(label.as_bytes())
+    }
+
+    /// [`ensure_marker_id`](Self::ensure_marker_id) for a label given as its
+    /// bytes, which `markers.dat` stores as they are.
+    pub fn ensure_marker_id_bytes(&mut self, label: &[u8]) -> Result<u64, String> {
         if self.ctfs_writer.is_none() {
             return Err("ensure_marker_id called before begin_writing_trace_events".to_string());
         }
@@ -875,14 +929,14 @@ impl CtfsTraceWriter {
             self.marker_labels = Some(created);
         }
         let labels = self.marker_labels.as_mut().expect("created above");
-        if let Some(&id) = labels.ids.get(label.as_bytes()) {
+        if let Some(&id) = labels.ids.get(label) {
             return Ok(id);
         }
         let id = labels.ids.len() as u64;
         let w = self.ctfs_writer.as_mut().expect("checked above");
         let result = (|| -> Result<(), codetracer_ctfs::CtfsError> {
             if !label.is_empty() {
-                w.write(labels.dat, label.as_bytes())?;
+                w.write(labels.dat, label)?;
                 w.sync_entry(labels.dat)?;
             }
             w.write(labels.off, &(labels.dat_len + label.len() as u64).to_le_bytes())?;
@@ -890,7 +944,7 @@ impl CtfsTraceWriter {
         })();
         result.map_err(|e| format!("writing markers.dat: {e}"))?;
         labels.dat_len += label.len() as u64;
-        labels.ids.insert(label.as_bytes().to_vec(), id);
+        labels.ids.insert(label.to_vec(), id);
         Ok(id)
     }
 
@@ -914,49 +968,75 @@ impl CtfsTraceWriter {
         show_text: &str,
         step_id: Option<u64>,
     ) -> Result<(), String> {
+        self.register_correlation_marker_by_id_bytes(
+            direction.as_bytes(),
+            marker_id,
+            boundary_label.as_bytes(),
+            key_value.as_bytes(),
+            show_value.as_bytes(),
+            description.as_bytes(),
+            key_text.as_bytes(),
+            show_text.as_bytes(),
+            step_id,
+        )
+    }
+
+    /// [`register_correlation_marker_by_id`](Self::register_correlation_marker_by_id)
+    /// for strings given as their bytes, which the marker payload and the
+    /// index carry as they are.
+    #[allow(clippy::too_many_arguments)]
+    pub fn register_correlation_marker_by_id_bytes(
+        &mut self,
+        direction: &[u8],
+        marker_id: u64,
+        boundary_label: &[u8],
+        key_value: &[u8],
+        show_value: &[u8],
+        description: &[u8],
+        key_text: &[u8],
+        show_text: &[u8],
+        step_id: Option<u64>,
+    ) -> Result<(), String> {
         if self.ctfs_writer.is_none() {
             return Err("register_correlation_marker called before begin_writing_trace_events".to_string());
         }
         self.commit_meta();
-        let recv = direction == "recv" || direction == "receive";
-        let mut payload = format!("{{\"marker_id\":{marker_id}");
-        payload.push_str(&format!(",\"boundary_id\":\"{}\"", marker_json_escape(boundary_label)));
-        payload.push_str(&format!(",\"direction\":\"{}\"", if recv { "recv" } else { "send" }));
-        payload.push_str(&format!(
-            ",\"key_text\":\"{}\"",
-            marker_json_escape(if key_text.is_empty() { "key" } else { key_text })
-        ));
-        payload.push_str(&format!(",\"key_value\":\"{}\"", marker_json_escape(key_value)));
+        let recv = direction == b"recv" || direction == b"receive";
+        let field = |out: &mut Vec<u8>, name: &str, value: &[u8]| {
+            out.extend_from_slice(format!(",\"{name}\":\"").as_bytes());
+            out.extend_from_slice(&marker_json_escape(value));
+            out.push(b'"');
+        };
+        let mut payload = format!("{{\"marker_id\":{marker_id}").into_bytes();
+        field(&mut payload, "boundary_id", boundary_label);
+        field(&mut payload, "direction", if recv { b"recv" } else { b"send" });
+        field(&mut payload, "key_text", if key_text.is_empty() { b"key" } else { key_text });
+        field(&mut payload, "key_value", key_value);
         if !show_value.is_empty() || !show_text.is_empty() {
-            payload.push_str(&format!(
-                ",\"show_text\":\"{}\"",
-                marker_json_escape(if show_text.is_empty() { "show" } else { show_text })
-            ));
-            payload.push_str(&format!(",\"show_value\":\"{}\"", marker_json_escape(show_value)));
+            field(&mut payload, "show_text", if show_text.is_empty() { b"show" } else { show_text });
+            field(&mut payload, "show_value", show_value);
         }
         if !description.is_empty() {
-            payload.push_str(&format!(",\"description\":\"{}\"", marker_json_escape(description)));
+            field(&mut payload, "description", description);
         }
-        payload.push('}');
+        payload.push(b'}');
         let step = step_id.unwrap_or_else(|| self.enclosing_step());
         if let Some(builder) = self.io_event_stream_builder.as_mut() {
             builder.push_record(crate::event_stream::IoEventRecord {
                 kind: 0,
                 step_id: step,
-                metadata: payload.into_bytes(),
+                metadata: payload,
                 content: Vec::new(),
             });
         }
         self.correlation_markers.push((
-            crate::corrmark::boundary_key(marker_id, key_value.as_bytes()),
-            crate::corrmark::CorrelationMarker::boundary(marker_id, key_value.as_bytes(), recv, step, 0),
+            crate::corrmark::boundary_key(marker_id, key_value),
+            crate::corrmark::CorrelationMarker::boundary(marker_id, key_value, recv, step, 0),
         ));
         self.after_record();
         self.write_error.clone().map_or(Ok(()), Err)
     }
 
-    /// [`Self::register_correlation_marker_by_id`] with the label interned
-    /// here.
     #[allow(clippy::too_many_arguments)]
     pub fn register_correlation_marker(
         &mut self,
@@ -969,8 +1049,34 @@ impl CtfsTraceWriter {
         show_text: &str,
         step_id: Option<u64>,
     ) -> Result<(), String> {
-        let id = self.ensure_marker_id(boundary_id)?;
-        self.register_correlation_marker_by_id(
+        self.register_correlation_marker_bytes(
+            direction.as_bytes(),
+            boundary_id.as_bytes(),
+            key_value.as_bytes(),
+            show_value.as_bytes(),
+            description.as_bytes(),
+            key_text.as_bytes(),
+            show_text.as_bytes(),
+            step_id,
+        )
+    }
+
+    /// [`register_correlation_marker`](Self::register_correlation_marker) for
+    /// strings given as their bytes.
+    #[allow(clippy::too_many_arguments)]
+    pub fn register_correlation_marker_bytes(
+        &mut self,
+        direction: &[u8],
+        boundary_id: &[u8],
+        key_value: &[u8],
+        show_value: &[u8],
+        description: &[u8],
+        key_text: &[u8],
+        show_text: &[u8],
+        step_id: Option<u64>,
+    ) -> Result<(), String> {
+        let id = self.ensure_marker_id_bytes(boundary_id)?;
+        self.register_correlation_marker_by_id_bytes(
             direction,
             id,
             boundary_id,
@@ -983,10 +1089,6 @@ impl CtfsTraceWriter {
         )
     }
 
-    /// Declare that the recording covers the distributed-trace span
-    /// `(trace_id, span_id)`, given as wire bytes (16 and 8): a kind-0
-    /// `corrmark.ns` entry at `step_id` (default: the last exec record). No
-    /// I/O event is written.
     #[allow(clippy::too_many_arguments)]
     pub fn register_span_coverage(
         &mut self,

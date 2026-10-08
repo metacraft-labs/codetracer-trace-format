@@ -174,9 +174,82 @@ pub fn declared_content_size(frame: &[u8]) -> Option<u64> {
     Some(if fcs_size == 2 { v + 256 } else { v })
 }
 
+/// The length of the zstd frame at the start of `data`: what libzstd's
+/// `ZSTD_findFrameCompressedSize` answers, read from the frame's header and
+/// block headers alone (RFC 8878 §3.1), so it is the same under either zstd
+/// backend. A skippable frame's length is its header plus its declared size.
+/// Refused when the frame is not one, uses the reserved block type, or runs
+/// past `data`.
+pub fn frame_compressed_size(data: &[u8]) -> Result<usize, String> {
+    let too_short = || "zstd frame runs past the end of its input".to_string();
+    if data.len() < 4 {
+        return Err(too_short());
+    }
+    let magic = u32::from_le_bytes([data[0], data[1], data[2], data[3]]);
+    if magic & 0xFFFF_FFF0 == 0x184D_2A50 {
+        let size = data.get(4..8).ok_or_else(too_short)?;
+        let end = 8usize
+            .checked_add(u32::from_le_bytes(size.try_into().expect("4 bytes")) as usize)
+            .ok_or_else(too_short)?;
+        return if end <= data.len() { Ok(end) } else { Err(too_short()) };
+    }
+    if magic != 0xFD2F_B528 {
+        return Err("not a zstd frame".to_string());
+    }
+    let fhd = *data.get(4).ok_or_else(too_short)?;
+    let single_segment = fhd & 0x20 != 0;
+    let fcs_size = match fhd >> 6 {
+        0 if single_segment => 1,
+        0 => 0,
+        1 => 2,
+        2 => 4,
+        _ => 8,
+    };
+    let dict_size = [0usize, 1, 2, 4][(fhd & 3) as usize];
+    let mut at = 5 + usize::from(!single_segment) + dict_size + fcs_size;
+    loop {
+        let header = data.get(at..at + 3).ok_or_else(too_short)?;
+        let bh = u32::from(header[0]) | (u32::from(header[1]) << 8) | (u32::from(header[2]) << 16);
+        let last = bh & 1 != 0;
+        let size = (bh >> 3) as usize;
+        at += 3 + match (bh >> 1) & 3 {
+            0 | 2 => size,
+            1 => 1,
+            _ => return Err("zstd frame uses the reserved block type".to_string()),
+        };
+        if at > data.len() {
+            return Err(too_short());
+        }
+        if last {
+            break;
+        }
+    }
+    if fhd & 0x04 != 0 {
+        at += 4;
+    }
+    if at > data.len() {
+        Err(too_short())
+    } else {
+        Ok(at)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_frame_is_measured_without_what_follows_it() {
+        for len in [0usize, 1, 300, 200_000] {
+            let raw: Vec<u8> = (0..len).map(|i| (i * 7 % 251) as u8).collect();
+            let frame = compress_pledged(&raw, 3, "test.dat").expect("compress");
+            let mut followed = frame.clone();
+            followed.extend_from_slice(&frame[..frame.len().min(9)]);
+            assert_eq!(frame_compressed_size(&followed), Ok(frame.len()), "len {len}");
+            assert!(frame_compressed_size(&frame[..frame.len() - 1]).is_err(), "len {len}: a truncated frame");
+        }
+        assert!(frame_compressed_size(b"not a frame").is_err());
+    }
 
     #[test]
     fn the_declared_content_size_is_read_from_every_field_width() {

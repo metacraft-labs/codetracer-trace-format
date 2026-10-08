@@ -50,7 +50,7 @@ pub use header::{ChunkIndexEntry, CompressionMethod, EncryptionMethod, CHUNK_IND
 pub use member::MemberBytes;
 pub use reader::CtfsReader;
 pub use writer::{CtfsStore, CtfsWriter, FileHandle, FileStore, MemoryStore};
-pub use zstd_frame::{compress_pledged, pledge_frame_content_size};
+pub use zstd_frame::{compress_pledged, declared_content_size, frame_compressed_size, pledge_frame_content_size};
 
 use std::fmt;
 

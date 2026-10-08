@@ -192,7 +192,14 @@ pub struct CtfsTraceWriter {
     /// line)`. Written at `finish_writing_trace_events`, when every path the
     /// recorder registers is registered — see
     /// [`AbstractTraceWriter::register_function`] on this type.
-    pending_functions: Vec<(String, std::path::PathBuf, codetracer_trace_types::Line)>,
+    /// The id is the declaration file's when it was already registered at the
+    /// function's registration: the version current then.
+    pending_functions: Vec<(
+        String,
+        std::path::PathBuf,
+        codetracer_trace_types::Line,
+        Option<codetracer_trace_types::PathId>,
+    )>,
 
     // --- Durability (`ctfs-container.md` §6) ---------------------------------
     //
@@ -1599,11 +1606,11 @@ impl CtfsTraceWriter {
     /// stopping at the first whose path is not: its record can only be written
     /// once its file is laid out, and `funcs.dat` is in id order.
     fn write_ready_functions(&mut self) {
-        while let Some((_, path, _)) = self.pending_functions.first() {
-            let Some(&path_id) = self.base.paths.get(path) else {
+        while let Some((_, path, _, known)) = self.pending_functions.first() {
+            let Some(path_id) = known.or_else(|| self.base.paths.get(path).copied()) else {
                 break;
             };
-            let (name, _, line) = self.pending_functions.remove(0);
+            let (name, _, line, _) = self.pending_functions.remove(0);
             self.base.function_list.push((name.clone(), path_id, line));
             AbstractTraceWriter::add_event(
                 self,
@@ -1764,7 +1771,9 @@ impl AbstractTraceWriter for CtfsTraceWriter {
 
     /// Register a function. Its record is written once its declaration path
     /// is registered — at the next publication after that, or at finish — not
-    /// now.
+    /// now. A path registered already resolves now, to the version current
+    /// now (`internal-files.md` §"`paths.dat` path versions"), so a version
+    /// registered later does not move the function.
     ///
     /// A function's declaration path may be a file no step has visited yet.
     /// Interning it now would give it the next path id ahead of the files the
@@ -1776,7 +1785,8 @@ impl AbstractTraceWriter for CtfsTraceWriter {
     /// still unregistered then is interned there, and under the line-count
     /// table refused by name.
     fn register_function(&mut self, name: &str, path: &std::path::Path, line: codetracer_trace_types::Line) {
-        self.pending_functions.push((name.to_string(), path.to_path_buf(), line));
+        let known = self.base.paths.get(path).copied();
+        self.pending_functions.push((name.to_string(), path.to_path_buf(), line, known));
     }
 
     /// Record a step at `(path, line, column)`.
@@ -2103,8 +2113,8 @@ impl TraceWriter for CtfsTraceWriter {
         // Write the deferred function records first, in id order: every path
         // is registered now, and `funcs.dat` is interned before the tables are
         // encoded.
-        for (name, path, line) in std::mem::take(&mut self.pending_functions) {
-            let path_id = AbstractTraceWriter::ensure_path_id(self, &path);
+        for (name, path, line, known) in std::mem::take(&mut self.pending_functions) {
+            let path_id = known.unwrap_or_else(|| AbstractTraceWriter::ensure_path_id(self, &path));
             if path_id == INVALID_PATH_ID {
                 self.fatal_refusal.get_or_insert(format!(
                     "function {name} is declared at {}, which has no recorded line count under the line-count table",

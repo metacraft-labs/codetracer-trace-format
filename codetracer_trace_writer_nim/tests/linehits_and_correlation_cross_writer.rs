@@ -43,6 +43,8 @@ use codetracer_trace_writer_nim::{
     MemberAnswer, NimTraceWriter, TraceEventsFileFormat,
 };
 
+mod whole_file;
+
 static NIM_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 fn nim_lock() -> MutexGuard<'static, ()> {
@@ -442,6 +444,7 @@ fn assert_same_container(nim: &Path, rust: &Path, s: Scenario) {
     assert_eq!(size(nim), size(rust), "{s:?}: the containers differ in size");
     let order = |p: &Path| CtfsReader::open(p).unwrap().list_files();
     assert_eq!(order(nim), order(rust), "{s:?}: the members are in a different order");
+    whole_file::assert_same_file(nim, rust, &format!("{s:?}"));
 }
 
 fn assert_read_alike(nim: &Path, rust: &Path, s: Scenario) {

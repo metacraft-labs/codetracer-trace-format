@@ -31,6 +31,8 @@ use codetracer_trace_writer::ctfs_writer::{conventional_line_diagnostic, late_co
 use codetracer_trace_writer::trace_writer::TraceWriter;
 use codetracer_trace_writer_nim::{NimTraceReaderHandle, NimTraceWriter, PathTableKind, TraceEventsFileFormat};
 
+mod whole_file;
+
 static NIM_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 fn nim_lock() -> MutexGuard<'static, ()> {
@@ -216,6 +218,7 @@ fn both_writers_decide_tables_alike_and_yield_the_same_container() {
     );
     let differing: Vec<&String> = a.keys().filter(|k| a[*k] != b[*k]).collect();
     assert!(differing.is_empty(), "files differ between the writers: {differing:?}");
+    whole_file::assert_same_file(&nim_ct, &rust_ct, "the column tables");
     // Every conventional-table file is the record `path_len, path, 0` in both
     // writers' paths.dat: a one-byte table body (`internal-files.md`
     // §"`paths.dat` Layout A").

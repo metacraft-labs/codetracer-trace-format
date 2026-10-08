@@ -41,6 +41,8 @@ use codetracer_trace_writer::span_stream::{
 use codetracer_trace_writer::trace_writer::TraceWriter;
 use codetracer_trace_writer_nim::{read_span_stream_json, read_span_types_json, NimTraceReaderHandle, NimTraceWriter, TraceEventsFileFormat};
 
+mod whole_file;
+
 static NIM_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 fn nim_lock() -> MutexGuard<'static, ()> {
@@ -458,6 +460,7 @@ fn both_writers_write_the_same_container() {
         std::fs::metadata(&p.rust).unwrap().len(),
         "the two containers allocate a different number of blocks"
     );
+    whole_file::assert_same_file(&p.nim, &p.rust, "spans, crossings and a call exception");
 }
 
 #[test]

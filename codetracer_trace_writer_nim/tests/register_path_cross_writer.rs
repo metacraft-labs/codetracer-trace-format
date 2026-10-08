@@ -21,6 +21,8 @@ use codetracer_trace_writer::ctfs_writer::CtfsTraceWriter;
 use codetracer_trace_writer::trace_writer::TraceWriter;
 use codetracer_trace_writer_nim::{NimTraceWriter, TraceEventsFileFormat};
 
+mod whole_file;
+
 static NIM_TEST_LOCK: Mutex<()> = Mutex::new(());
 
 fn nim_lock() -> MutexGuard<'static, ()> {
@@ -93,4 +95,5 @@ fn a_path_registered_before_use_is_interned_once_by_both_writers() {
     for name in ["paths.dat", "paths.off", "funcs.dat", "funcs.off", "steps.dat", "step-map.ns", "meta.dat"] {
         assert_eq!(member(&nim, name), member(&rust, name), "{name} differs between the writers");
     }
+    whole_file::assert_same_file(&nim, &rust, "paths registered before use");
 }

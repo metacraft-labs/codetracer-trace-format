@@ -43,6 +43,8 @@ mod mixed_workload;
 
 use mixed_workload::{nim_lock, write_nim, write_rust, Drive};
 
+mod whole_file;
+
 /// Exec-record index of `steps.dat`'s second chunk.
 const SECOND_CHUNK: u64 = 4096;
 
@@ -125,6 +127,7 @@ fn assert_containers_match(drive: Drive) {
         len(&rust_ct),
         "{drive:?}: the containers differ in size (block allocation)\n{sizes}"
     );
+    whole_file::assert_same_file(&nim_ct, &rust_ct, &format!("{drive:?}"));
 }
 
 /// The kinds of `events.dat`'s records, in order.

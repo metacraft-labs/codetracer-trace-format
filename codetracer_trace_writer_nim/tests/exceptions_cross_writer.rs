@@ -29,6 +29,8 @@ use codetracer_trace_writer::ctfs_writer::CtfsTraceWriter;
 use codetracer_trace_writer::trace_writer::TraceWriter;
 use codetracer_trace_writer_nim::{NimTraceReaderHandle, NimTraceWriter, TraceEventsFileFormat};
 
+mod whole_file;
+
 /// The Nim runtime is not re-entrant across threads; every test in this
 /// binary takes this lock.
 static NIM_TEST_LOCK: Mutex<()> = Mutex::new(());
@@ -215,6 +217,7 @@ fn a_call_that_exits_by_an_exception_carries_it_from_both_writers() {
     for name in ["calls.dat", "calls.idx", "steps.dat", "values.dat"] {
         assert_eq!(member(&nim, name), member(&rust, name), "{name} differs between the writers");
     }
+    whole_file::assert_same_file(&nim, &rust, "a call that exits by an exception");
     for ct in [&nim, &rust] {
         let t = read(ct);
         let calls = &t.details.calls;

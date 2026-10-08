@@ -56,7 +56,7 @@ const A: &str = "/src/a.py";
 const B: &str = "/src/b.py";
 const TRACE_ID: [u8; 16] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16];
 const SPAN_ID: [u8; 8] = [0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5, 0xA6, 0xA7];
-const ODD_KEY: &str = "q\"uo\\te\n\t\r\u{1}é";
+const ODD_KEY: &str = "q\"uo\\te\n\t\r\u{1}\u{1b}é";
 
 /// The calls both writers receive.
 #[allow(clippy::too_many_arguments)]
@@ -700,6 +700,14 @@ fn both_readers_refuse_the_same_damaged_correlation_index() {
             let d = first_descriptor(i);
             let len = get_u64(i, d + 8);
             put_u64(i, d + 8, len - 1)
+        }),
+    ));
+    damages.push((
+        "bucket-shorter-than-descriptor",
+        Box::new(|i: &mut Vec<u8>| {
+            let d = first_descriptor(i);
+            let len = get_u64(i, d + 8);
+            put_u64(i, d + 8, len + 1)
         }),
     ));
     damages.push((

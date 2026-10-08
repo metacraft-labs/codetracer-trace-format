@@ -477,6 +477,9 @@ pub struct ValueStreamBuilder {
     /// Index in `records` of the most recent step's record, for the terminus:
     /// values still staged at `finish` attach to it.
     last_step_record: Option<usize>,
+    /// Bytes the next value-carrying event stores in place of its own CBOR
+    /// encoding: a value a caller handed over already encoded.
+    blob_override: Option<Vec<u8>>,
 }
 
 impl Default for ValueStreamBuilder {
@@ -494,7 +497,19 @@ impl ValueStreamBuilder {
             seen_step: false,
             staging: false,
             last_step_record: None,
+            blob_override: None,
         }
+    }
+
+    /// Store `blob` verbatim as the payload of the next event that carries a
+    /// value (`StepValues`, `CellValue`, `CompoundValue`, `AssignCell`,
+    /// `Assignment`), instead of that event's own encoding.
+    pub fn override_next_blob(&mut self, blob: Vec<u8>) {
+        self.blob_override = Some(blob);
+    }
+
+    fn blob<T: serde::Serialize>(&mut self, value: &T) -> Vec<u8> {
+        self.blob_override.take().unwrap_or_else(|| cbor_bytes(value))
     }
 
     /// A step: close the previous step's record and open this one, or — when
@@ -540,7 +555,7 @@ impl ValueStreamBuilder {
     /// Append `FullValueRecord` values to the current step's `StepValues` event.
     fn push_step_value(&mut self, fv: &FullValueRecord) {
         let name_id = fv.variable_id.0 as u64;
-        let cbor = cbor_bytes(&fv.value);
+        let cbor = self.blob(&fv.value);
         add_step_values(&mut self.current, vec![(name_id, cbor)]);
     }
 
@@ -573,22 +588,16 @@ impl ValueStreamBuilder {
                 });
             }
             TraceLowLevelEvent::CellValue(CellValueRecord { place, value }) => {
-                self.current.events.push(ValueStreamEvent::CellValue {
-                    place: place.0,
-                    value: cbor_bytes(value),
-                });
+                let value = self.blob(value);
+                self.current.events.push(ValueStreamEvent::CellValue { place: place.0, value });
             }
             TraceLowLevelEvent::CompoundValue(CompoundValueRecord { place, value }) => {
-                self.current.events.push(ValueStreamEvent::CompoundValue {
-                    place: place.0,
-                    value: cbor_bytes(value),
-                });
+                let value = self.blob(value);
+                self.current.events.push(ValueStreamEvent::CompoundValue { place: place.0, value });
             }
             TraceLowLevelEvent::AssignCell(AssignCellRecord { place, new_value }) => {
-                self.current.events.push(ValueStreamEvent::AssignCell {
-                    place: place.0,
-                    new_value: cbor_bytes(new_value),
-                });
+                let new_value = self.blob(new_value);
+                self.current.events.push(ValueStreamEvent::AssignCell { place: place.0, new_value });
             }
             TraceLowLevelEvent::AssignCompoundItem(AssignCompoundItemRecord { place, index, item_place }) => {
                 self.current.events.push(ValueStreamEvent::AssignCompoundItem {
@@ -604,10 +613,11 @@ impl ValueStreamBuilder {
                 });
             }
             TraceLowLevelEvent::Assignment(AssignmentRecord { to, pass_by, from }) => {
+                let from = self.blob(from);
                 self.current.events.push(ValueStreamEvent::Assignment {
                     to: to.0 as u64,
                     pass_by: pass_by_ord(pass_by),
-                    from: cbor_bytes(from),
+                    from,
                 });
             }
             _ => {}

@@ -308,6 +308,12 @@ pub struct CallStreamBuilder {
     any_step: bool,
     /// The exception the next `Return` exits the innermost call by, as CBOR.
     staged_exception: Option<Vec<u8>>,
+    /// Arguments the next `Call` records in place of its own: arguments a
+    /// caller handed over already encoded.
+    args_override: Option<Vec<CallArg>>,
+    /// The bytes the next `Return` records as its return value in place of
+    /// its own encoding; empty is the VoidReturn marker.
+    return_override: Option<Vec<u8>>,
 }
 
 impl CallStreamBuilder {
@@ -339,6 +345,17 @@ impl CallStreamBuilder {
         self.staged_exception = Some(exception);
     }
 
+    /// Record `args` on the next call in place of the `Call` event's own.
+    pub fn override_next_call_args(&mut self, args: Vec<CallArg>) {
+        self.args_override = Some(args);
+    }
+
+    /// Record `value` as the next return's value in place of the `Return`
+    /// event's own; an empty `value` is the VoidReturn marker.
+    pub fn override_next_return(&mut self, value: Vec<u8>) {
+        self.return_override = Some(value);
+    }
+
     /// Feed one event in stream order.
     pub fn observe(&mut self, event: &TraceLowLevelEvent) {
         match event {
@@ -363,13 +380,14 @@ impl CallStreamBuilder {
                 };
                 let depth = self.open_stack.len() as u64;
                 let first_step_id = self.entry_step_id();
-                let args_entries: Vec<CallArg> = args
-                    .iter()
-                    .map(|a| CallArg {
-                        varname_id: a.variable_id.0 as u64,
-                        value: cbor_bytes(&a.value),
-                    })
-                    .collect();
+                let args_entries: Vec<CallArg> = self.args_override.take().unwrap_or_else(|| {
+                    args.iter()
+                        .map(|a| CallArg {
+                            varname_id: a.variable_id.0 as u64,
+                            value: cbor_bytes(&a.value),
+                        })
+                        .collect()
+                });
                 self.records.push(CallStreamRecord {
                     call_key,
                     function_id: function_id.0 as u64,
@@ -386,6 +404,7 @@ impl CallStreamBuilder {
                 self.open_stack.push(call_key as usize);
             }
             TraceLowLevelEvent::Return(ReturnRecord { return_value }) => {
+                let return_override = self.return_override.take();
                 if let Some(key) = self.open_stack.pop() {
                     let idx = key - self.taken;
                     self.complete[idx] = true;
@@ -404,9 +423,11 @@ impl CallStreamBuilder {
                     // value", and the spec's VoidReturn marker is how the
                     // container says it — the Nim writer writes the marker for
                     // the same call (`trace-events.md` §"Call Stream").
-                    rec.return_value = match return_value {
-                        codetracer_trace_types::ValueRecord::None { .. } => vec![VOID_RETURN_MARKER],
-                        other => cbor_bytes(other),
+                    rec.return_value = match (return_override, return_value) {
+                        (Some(raw), _) if raw.is_empty() => vec![VOID_RETURN_MARKER],
+                        (Some(raw), _) => raw,
+                        (None, codetracer_trace_types::ValueRecord::None { .. }) => vec![VOID_RETURN_MARKER],
+                        (None, other) => cbor_bytes(other),
                     };
                     if let Some(exception) = self.staged_exception.take() {
                         rec.raised_exception = exception;

@@ -245,6 +245,12 @@ pub struct CtfsTraceWriter {
     /// The correlation markers declared, each with its index key, written to
     /// `corrmark.ns` at close. None declared: no `corrmark.ns`.
     correlation_markers: Vec<(u64, crate::corrmark::CorrelationMarker)>,
+    /// Interned type ids by `(kind, lang_type)`: `types.dat` records a type's
+    /// kind as well as its name, so two kinds sharing a name are two types.
+    type_ids: std::collections::HashMap<(u8, String), codetracer_trace_types::TypeId>,
+    /// Alternate source views, encoded, written at finish as
+    /// `srcviews.dat` / `srcviews.off`.
+    source_views: Vec<Vec<u8>>,
 }
 
 /// The span stream of a container being written.
@@ -392,6 +398,8 @@ impl CtfsTraceWriter {
             line_hits_requested: false,
             marker_labels: None,
             correlation_markers: Vec::new(),
+            type_ids: std::collections::HashMap::new(),
+            source_views: Vec::new(),
         }
     }
 
@@ -808,7 +816,7 @@ impl CtfsTraceWriter {
     /// before the first.
     fn enclosing_step(&self) -> u64 {
         match (&self.io_event_stream_builder, &self.exec_encoder) {
-            (Some(builder), _) => builder.current_step(),
+            (Some(builder), _) => builder.current_step().unwrap_or(0),
             (None, Some(encoder)) => encoder.total_events().saturating_sub(1),
             (None, None) => 0,
         }
@@ -1009,6 +1017,147 @@ impl CtfsTraceWriter {
     /// first record: `meta.dat` is written by that record and never
     /// rewritten, so it is refused after it. A trace that declares it and
     /// records no reload is well-formed.
+    /// Record an alternate source view of the registered path `path_id`
+    /// (`internal-files.md` §"Alternate Source Views") and return its index.
+    /// The views are written at finish, as `srcviews.dat` / `srcviews.off`.
+    pub fn register_source_view(&mut self, path_id: u64, view_kind: u8, view_name: &[u8], content: &[u8], sourcemap: &[u8]) -> Result<u64, String> {
+        if self.ctfs_writer.is_none() {
+            return Err("register_source_view called before begin_writing_trace_events".to_string());
+        }
+        let paths = self.base.path_list.len() as u64;
+        if path_id >= paths {
+            return Err(format!(
+                "registerSourceView: path_id {path_id} is out of range (only {paths} path(s) registered)"
+            ));
+        }
+        let mut rec = Vec::new();
+        let varint = |v: u64, out: &mut Vec<u8>| {
+            let mut v = v;
+            loop {
+                let b = (v & 0x7f) as u8;
+                v >>= 7;
+                if v == 0 {
+                    out.push(b);
+                    break;
+                }
+                out.push(b | 0x80);
+            }
+        };
+        varint(path_id, &mut rec);
+        rec.push(view_kind);
+        for part in [view_name, content, sourcemap] {
+            varint(part.len() as u64, &mut rec);
+            rec.extend_from_slice(part);
+        }
+        self.source_views.push(rec);
+        Ok(self.source_views.len() as u64 - 1)
+    }
+
+    /// Whether the first record has been written, and with it `meta.dat`:
+    /// from then on every field and flag in it is fixed.
+    pub fn recording_started(&self) -> bool {
+        self.meta_committed
+    }
+
+    /// Record an I/O event attributed to the exec record `step_id`, with its
+    /// metadata and content as bytes.
+    ///
+    /// [`register_special_event`](AbstractTraceWriter::register_special_event)
+    /// attributes an event to the last exec record written. A caller that
+    /// holds a step back so later values can join its record names the step
+    /// the event belongs to here instead.
+    pub fn register_io_event_at(&mut self, kind: u8, metadata: &[u8], content: &[u8], step_id: u64) -> Result<(), String> {
+        crate::event_stream::event_log_kind(kind)?;
+        if self.ctfs_writer.is_none() {
+            return Err("register_io_event_at called before begin_writing_trace_events".to_string());
+        }
+        self.commit_meta();
+        if let Some(builder) = self.io_event_stream_builder.as_mut() {
+            builder.push_record(crate::event_stream::IoEventRecord {
+                kind,
+                step_id,
+                metadata: metadata.to_vec(),
+                content: content.to_vec(),
+            });
+        }
+        self.after_record();
+        Ok(())
+    }
+
+    /// Record a step at an already-interned path id, with the refusals
+    /// [`register_step`](AbstractTraceWriter::register_step) applies to a step
+    /// at a path. A `column` is folded into the step on a column-aware trace.
+    pub fn register_step_at(
+        &mut self,
+        path_id: codetracer_trace_types::PathId,
+        line: codetracer_trace_types::Line,
+        column: Option<codetracer_trace_types::Line>,
+    ) {
+        let Some(path) = self.base.path_list.get(path_id.0).cloned() else {
+            self.refusals
+                .push(format!("step at path id {}, which is not a registered path", path_id.0));
+            return;
+        };
+        if self.line_count_table
+            && let Some(count) = self.path_line_counts.get(path_id.0)
+            && line.0 > 0
+            && line.0 as u64 > *count
+        {
+            self.refusals.push(format!(
+                "step at line {} of {}, which this trace records as having {count} line(s); its address would fall \
+                 inside the next file's range",
+                line.0,
+                path.display()
+            ));
+            return;
+        }
+        if self.column_aware_active {
+            self.pending_column_delta = column.map(|c| c.0 - 1).unwrap_or(0);
+        }
+        AbstractTraceWriter::add_event(self, TraceLowLevelEvent::Step(codetracer_trace_types::StepRecord { path_id, line }));
+        self.pending_column_delta = 0;
+    }
+
+    /// Record `event`, a value-stream event, storing `cbor` verbatim as its
+    /// value payload in place of the event's own encoding of it.
+    pub fn register_value_event_cbor(&mut self, event: TraceLowLevelEvent, cbor: Vec<u8>) {
+        if let Some(builder) = self.value_stream_builder.as_mut() {
+            builder.override_next_blob(cbor);
+        }
+        AbstractTraceWriter::add_event(self, event);
+    }
+
+    /// Record a call whose arguments are already encoded: `(varname id, CBOR
+    /// value)` pairs, stored verbatim on the call record and not as step
+    /// values.
+    pub fn register_call_cbor(&mut self, function_id: codetracer_trace_types::FunctionId, args: Vec<(u64, Vec<u8>)>) {
+        if let Some(builder) = self.call_stream_builder.as_mut() {
+            builder.override_next_call_args(
+                args.into_iter()
+                    .map(|(varname_id, value)| crate::call_stream::CallArg { varname_id, value })
+                    .collect(),
+            );
+        }
+        AbstractTraceWriter::add_event(
+            self,
+            TraceLowLevelEvent::Call(codetracer_trace_types::CallRecord { function_id, args: vec![] }),
+        );
+    }
+
+    /// Record a return whose value is already encoded, stored verbatim; an
+    /// empty `cbor` is a return with no value.
+    pub fn register_return_cbor_value(&mut self, cbor: Vec<u8>) {
+        if let Some(builder) = self.call_stream_builder.as_mut() {
+            builder.override_next_return(cbor);
+        }
+        AbstractTraceWriter::add_event(
+            self,
+            TraceLowLevelEvent::Return(codetracer_trace_types::ReturnRecord {
+                return_value: codetracer_trace_types::NONE_VALUE,
+            }),
+        );
+    }
+
     pub fn declare_source_reload(&mut self) -> Result<(), String> {
         if self.meta_committed {
             return Err("declare_source_reload: the trace has recorded already, and meta.dat, which carries the \
@@ -1079,9 +1228,24 @@ impl CtfsTraceWriter {
     /// Mirrors the Nim writer's `enableColumnAwareSteps`.
     pub fn enable_column_aware_steps(&mut self) {
         self.column_aware_requested = true;
+        if self.column_aware_active {
+            return;
+        }
         if self.ctfs_writer.is_some() {
-            // Too late: the trace is already open.
-            self.column_awareness_dropped = true;
+            // Until the first record, and before any path is laid out, the
+            // trace is still empty: the step stream and the position space
+            // are rebuilt column-aware. After either, it is too late.
+            if self.meta_committed || !self.base.path_list.is_empty() {
+                self.column_awareness_dropped = true;
+                return;
+            }
+            self.column_aware_active = true;
+            self.position_space = PositionSpace::new(true);
+            self.step_stream_builder = None;
+            self.step_map_builder = None;
+            if let Some(tables) = self.interning_tables_builder.as_mut() {
+                tables.set_column_aware(true);
+            }
             return;
         }
         self.column_aware_active = true;
@@ -1694,6 +1858,20 @@ impl AbstractTraceWriter for CtfsTraceWriter {
         &self.base
     }
 
+    /// Intern a type by its kind and name: `types.dat` records both, so a
+    /// name shared by two kinds is two types.
+    fn ensure_raw_type_id(&mut self, typ: codetracer_trace_types::TypeRecord) -> codetracer_trace_types::TypeId {
+        let key = (typ.kind as u8, typ.lang_type.clone());
+        if let Some(id) = self.type_ids.get(&key) {
+            return *id;
+        }
+        let id = codetracer_trace_types::TypeId(self.type_ids.len());
+        self.type_ids.insert(key, id);
+        self.base.types.entry(typ.lang_type.clone()).or_insert(id);
+        AbstractTraceWriter::register_raw_type(self, typ);
+        id
+    }
+
     fn get_mut_data(&mut self) -> &mut AbstractTraceWriterData {
         &mut self.base
     }
@@ -2183,6 +2361,26 @@ impl TraceWriter for CtfsTraceWriter {
         }
 
         // Close-time members (`ctfs-container.md` §6, "Durability", rule 4).
+        if !self.source_views.is_empty()
+            && self.write_error.is_none()
+            && let Some(writer) = self.ctfs_writer.as_mut()
+        {
+            let views = std::mem::take(&mut self.source_views);
+            let r = (|| -> Result<(), codetracer_ctfs::CtfsError> {
+                let dat = writer.add_file("srcviews.dat")?;
+                let off = writer.add_file("srcviews.off")?;
+                let mut offsets = 0u64.to_le_bytes().to_vec();
+                let mut end = 0u64;
+                for v in &views {
+                    end += v.len() as u64;
+                    offsets.extend_from_slice(&end.to_le_bytes());
+                }
+                writer.write(dat, &views.concat())?;
+                writer.write(off, &offsets)?;
+                Ok(())
+            })();
+            self.latch(r.map_err(|e| format!("writing srcviews.dat: {e}")));
+        }
         if let (Some(map), Some(writer)) = (self.step_map_builder.take(), self.ctfs_writer.as_mut())
             && self.write_error.is_none()
         {

@@ -1390,13 +1390,15 @@ fn a_line_only_trace_still_uses_the_legacy_paths_dat_record() {
 #[test]
 fn a_late_column_request_is_refused_and_reported() {
     // `dropped_column_awareness` has to be able to answer BOTH ways or it is
-    // not a signal. This is the reachable `true`: the mode is trace-global, so
-    // a request that arrives after the trace opened cannot be honoured, and
-    // silently half-applying it would produce a container no reader can parse.
+    // not a signal. This is the reachable `true`: the mode is trace-global and
+    // `meta.dat`, which declares it, is written by the first record, so a
+    // request that arrives after that cannot be honoured, and silently
+    // half-applying it would produce a container no reader can parse.
     let dir = tempfile::tempdir().expect("tempdir");
     let mut writer = CtfsTraceWriter::new("late_request", &[]);
     let out = dir.path().join("late_request");
     TraceWriter::begin_writing_trace_events(&mut writer, &out).expect("begin");
+    AbstractTraceWriter::register_step(&mut writer, std::path::Path::new("/src/a.rs"), Line(1));
     writer.enable_column_aware_steps();
     assert!(writer.dropped_column_awareness(), "a post-begin request must be reported as dropped");
     assert!(!writer.column_aware_steps_enabled(), "and must not half-apply");
@@ -1404,9 +1406,17 @@ fn a_late_column_request_is_refused_and_reported() {
     assert!(err.contains("column-aware"), "{err}");
     TraceWriter::finish_writing_trace_events(&mut writer).expect("finish");
 
-    // The `false` side, on a writer that asked in time.
+    // The `false` side, on writers that asked in time: before the trace
+    // opened, and after it opened but before its first record, as the Nim
+    // writer allows.
     let mut ok = CtfsTraceWriter::new("timely_request", &[]);
     ok.enable_column_aware_steps();
     assert!(!ok.dropped_column_awareness());
     assert!(ok.column_aware_steps_enabled());
+    let mut opened = CtfsTraceWriter::new("opened_request", &[]);
+    TraceWriter::begin_writing_trace_events(&mut opened, &dir.path().join("opened_request")).expect("begin");
+    opened.enable_column_aware_steps();
+    assert!(!opened.dropped_column_awareness(), "a request before the first record is honoured");
+    assert!(opened.column_aware_steps_enabled());
+    TraceWriter::finish_writing_trace_events(&mut opened).expect("finish");
 }

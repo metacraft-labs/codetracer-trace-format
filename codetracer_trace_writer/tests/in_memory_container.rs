@@ -140,6 +140,9 @@ fn the_nim_writer_trait_surface_is_callable_and_harmless() {
 
     {
         let w: &mut dyn TraceWriter = &mut writer;
+        // A first record fixes `meta.dat`, so the column request below comes
+        // too late to be honoured.
+        TraceWriter::register_step(w, Path::new("/src/first.rs"), Line(1));
         w.enable_column_aware_steps();
         w.enable_column_breakpoints_support();
         w.enable_column_motions_support();

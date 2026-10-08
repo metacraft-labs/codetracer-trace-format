@@ -218,6 +218,11 @@ impl IoEventStreamBuilder {
         }
     }
 
+    /// The index of the most recent exec record, or `None` before the first.
+    pub fn current_step(&self) -> Option<u64> {
+        self.current_step
+    }
+
     /// Account for one exec record written without a `Step` event (a column
     /// step, a source reload marker). Step 0 is the first exec record.
     pub fn note_exec_record(&mut self) {
@@ -246,12 +251,6 @@ impl IoEventStreamBuilder {
             }
             _ => {}
         }
-    }
-
-    /// The step an I/O event declared now is attributed to: the last exec
-    /// record, or 0 before the first.
-    pub fn current_step(&self) -> u64 {
-        self.current_step.unwrap_or(0)
     }
 
     /// Append a record built by the caller, with its own step id.

@@ -29,6 +29,10 @@ extern "C" {
     fn trace_writer_new(program: *const std::os::raw::c_char, format: i32) -> *mut std::ffi::c_void;
     fn trace_writer_free(handle: *mut std::ffi::c_void);
     fn trace_writer_close(handle: *mut std::ffi::c_void) -> i32;
+    fn trace_writer_begin_in_memory(handle: *mut std::ffi::c_void) -> i32;
+    fn trace_writer_container_ready(handle: *mut std::ffi::c_void) -> i32;
+    fn trace_writer_container_ptr(handle: *mut std::ffi::c_void) -> *const u8;
+    fn trace_writer_container_len(handle: *mut std::ffi::c_void) -> usize;
 
     fn trace_writer_begin_metadata(handle: *mut std::ffi::c_void, path: *const std::os::raw::c_char) -> i32;
     fn trace_writer_finish_metadata(handle: *mut std::ffi::c_void) -> i32;
@@ -1957,6 +1961,28 @@ impl NimTraceWriter {
     pub fn begin_writing_trace_events(&mut self, path: &Path) -> Result<(), Box<dyn Error>> {
         let c_path = path_to_cstring(path);
         check_result(unsafe { trace_writer_begin_events(self.handle, c_path.as_ptr()) })
+    }
+
+    /// Write the container in memory instead of to a file: chosen instead of
+    /// [`begin_writing_trace_events`](Self::begin_writing_trace_events), and
+    /// read back with [`container_bytes`](Self::container_bytes) after
+    /// [`close`](Self::close).
+    pub fn begin_in_memory(&mut self) -> Result<(), Box<dyn Error>> {
+        check_result(unsafe { trace_writer_begin_in_memory(self.handle) })
+    }
+
+    /// The finished container of an in-memory writer; `None` before it is
+    /// closed, or for a writer that wrote a file.
+    pub fn container_bytes(&self) -> Option<Vec<u8>> {
+        if self.handle.is_null() || unsafe { trace_writer_container_ready(self.handle) } == 0 {
+            return None;
+        }
+        let len = unsafe { trace_writer_container_len(self.handle) };
+        let ptr = unsafe { trace_writer_container_ptr(self.handle) };
+        if ptr.is_null() {
+            return None;
+        }
+        Some(unsafe { std::slice::from_raw_parts(ptr, len) }.to_vec())
     }
 
     pub fn finish_writing_trace_events(&mut self) -> Result<(), Box<dyn Error>> {

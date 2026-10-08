@@ -61,7 +61,9 @@ fn with_member(ct: &Path, name: &str, content: &[u8], out: &Path) {
 fn both_refuse(ct: &Path, member: &str) {
     let rust = read_trace_from_ctfs(ct).expect_err("the Rust reader read it");
     assert!(rust.to_string().contains(member), "the Rust refusal does not name {member}: {rust}");
-    let nim = NimTraceReaderHandle::open(ct.to_str().unwrap()).err().expect("the Nim reader read it");
+    let Err(nim) = NimTraceReaderHandle::open(ct.to_str().unwrap()) else {
+        panic!("the Nim reader read a container carrying {member}");
+    };
     assert!(nim.to_string().contains(member), "the Nim refusal does not name {member}: {nim}");
 }
 

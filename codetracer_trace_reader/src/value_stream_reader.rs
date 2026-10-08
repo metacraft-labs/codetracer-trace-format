@@ -214,6 +214,33 @@ impl InflatedChunk {
     }
 }
 
+/// Inflate chunk `chunk_number` of the stream `index` locates in `dat` into
+/// `chunk`, and start its framing over.
+fn inflate_chunk(index: &ValuesIndex, dat: &MemberBytes, form: ChunkForm, chunk_number: usize, chunk: &mut InflatedChunk) -> Result<(), String> {
+    let start = index.chunk_offsets[chunk_number] as usize;
+    let end = crate::follow::chunk_end("values.dat", form, dat, &index.chunk_offsets, chunk_number)?;
+    let frame = dat.get(start, end).map_err(|e| format!("values.dat: chunk {chunk_number}: {e}"))?;
+    form.content_into(&frame, &mut chunk.raw)
+        .map_err(|e| format!("values.dat: zstd decode failed: {e}"))?;
+    chunk.reset(chunk_number);
+    Ok(())
+}
+
+/// The records the stream holds when its index is `index` and its data
+/// `dat`: every chunk but the last holds `chunk_size`, and the last as many as
+/// are framed in it, framed in `scratch`.
+fn count_records(index: &ValuesIndex, dat: &MemberBytes, form: ChunkForm, scratch: &mut InflatedChunk) -> Result<u64, String> {
+    let Some(last_chunk) = index.chunk_offsets.len().checked_sub(1) else {
+        return Ok(0);
+    };
+    if index.chunk_offsets[last_chunk] as usize > dat.len() {
+        return Err("values.idx: last chunk offset past end of values.dat".to_string());
+    }
+    inflate_chunk(index, dat, form, last_chunk, scratch)?;
+    scratch.frame_to(usize::MAX, index.chunk_size)?;
+    Ok((last_chunk * index.chunk_size + scratch.frames.len()) as u64)
+}
+
 /// A seekable reader over a container's `values.dat` stream.
 ///
 /// The index (`values.idx`) and the raw `values.dat` bytes are loaded once;
@@ -221,6 +248,8 @@ impl InflatedChunk {
 /// target record, and decodes only that record. The last inflated chunk is
 /// kept, so sequential or clustered reads inflate each chunk once.
 pub struct ValueStreamReader {
+    /// Chunks inflated so far; see [`ValueStreamReader::inflations`].
+    inflations: u64,
     index: ValuesIndex,
     /// `values.dat`, shared with the container when it is in memory.
     dat: MemberBytes,
@@ -260,6 +289,7 @@ impl ValueStreamReader {
         // is retained for source compatibility.
         let index = ValuesIndex::parse(idx)?;
         let mut reader = ValueStreamReader {
+            inflations: 0,
             index,
             dat,
             record_count: 0,
@@ -277,15 +307,15 @@ impl ValueStreamReader {
         // chunk_size records; the last holds however many records are framed
         // in it. Empty stream ⇒ zero records. Counting is not a read: the
         // cache starts empty, as `cached_chunk` reports.
-        if let Some(last_chunk) = reader.index.chunk_offsets.len().checked_sub(1) {
-            if reader.index.chunk_offsets[last_chunk] as usize > reader.dat.len() {
-                return Err("values.idx: last chunk offset past end of values.dat".to_string());
-            }
-            reader.inflate(last_chunk)?;
-            reader.chunk.frame_to(usize::MAX, reader.index.chunk_size)?;
-            let last_records = reader.chunk.frames.len();
-            reader.record_count = (last_chunk * reader.index.chunk_size + last_records) as u64;
-            reader.cached_chunk = None;
+        if !reader.index.chunk_offsets.is_empty() {
+            let mut scratch = InflatedChunk {
+                number: 0,
+                raw: Vec::new(),
+                frames: Vec::new(),
+                pos: 0,
+            };
+            reader.record_count = count_records(&reader.index, &reader.dat, reader.form, &mut scratch)?;
+            reader.inflations += 1;
         }
         Ok(Some(reader))
     }
@@ -294,21 +324,49 @@ impl ValueStreamReader {
     /// there.
     fn inflate(&mut self, chunk_number: usize) -> Result<(), String> {
         if self.cached_chunk != Some(chunk_number) {
-            let start = self.index.chunk_offsets[chunk_number] as usize;
-            let end = if chunk_number + 1 < self.index.chunk_offsets.len() {
-                self.index.chunk_offsets[chunk_number + 1] as usize
-            } else {
-                self.dat.len()
-            };
-            let frame = self.dat.get(start, end).map_err(|e| format!("values.dat: chunk {chunk_number}: {e}"))?;
             self.cached_chunk = None;
-            self.form
-                .content_into(&frame, &mut self.chunk.raw)
-                .map_err(|e| format!("values.dat: zstd decode failed: {e}"))?;
-            self.chunk.reset(chunk_number);
+            inflate_chunk(&self.index, &self.dat, self.form, chunk_number, &mut self.chunk)?;
+            self.inflations += 1;
             self.cached_chunk = Some(chunk_number);
         }
         Ok(())
+    }
+
+    /// Follow a container that is being written: extend this reader by the
+    /// chunks `reader`'s container has published since it was opened or last
+    /// refreshed (`ctfs-container.md` §6). Only the new last chunk is decoded,
+    /// to count its records; the chunk already held stays held. A re-read
+    /// index that does not extend the one already read is refused.
+    pub fn refresh(&mut self, reader: &mut CtfsReader) -> Result<(), String> {
+        let (dat, idx) = crate::follow::read_published(reader, "values")?;
+        let index = ValuesIndex::parse(&idx)?;
+        crate::follow::check_extends(
+            "values.idx",
+            self.index.chunk_size,
+            &self.index.chunk_offsets,
+            index.chunk_size,
+            &index.chunk_offsets,
+            dat.len(),
+        )?;
+        if index.chunk_offsets.len() != self.index.chunk_offsets.len() {
+            let mut scratch = InflatedChunk {
+                number: 0,
+                raw: Vec::new(),
+                frames: Vec::new(),
+                pos: 0,
+            };
+            self.record_count = count_records(&index, &dat, self.form, &mut scratch)?;
+            self.inflations += 1;
+        }
+        self.index = index;
+        self.dat = dat;
+        Ok(())
+    }
+
+    /// How many chunks this reader has inflated: reads, counting the last
+    /// chunk at open, and counting a new last chunk at a refresh.
+    pub fn inflations(&self) -> u64 {
+        self.inflations
     }
 
     /// Open the value stream from an already-open CTFS reader. Returns

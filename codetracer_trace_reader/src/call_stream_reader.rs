@@ -119,6 +119,38 @@ fn frame_records(raw: &[u8], frames: &mut Vec<(usize, usize)>) -> Result<(), Str
     Ok(())
 }
 
+/// Inflate chunk `chunk_number` of the stream `index` locates in `dat` into
+/// `raw`, and frame its records into `frames`.
+fn inflate_chunk(
+    index: &CallsIndex,
+    dat: &MemberBytes,
+    form: ChunkForm,
+    chunk_number: usize,
+    raw: &mut Vec<u8>,
+    frames: &mut Vec<(usize, usize)>,
+) -> Result<(), String> {
+    let start = index.chunk_offsets[chunk_number] as usize;
+    let end = crate::follow::chunk_end("calls.dat", form, dat, &index.chunk_offsets, chunk_number)?;
+    let frame = dat.get(start, end).map_err(|e| format!("calls.dat: chunk {chunk_number}: {e}"))?;
+    form.content_into(&frame, raw)
+        .map_err(|e| format!("calls.dat: zstd decode failed: {e}"))?;
+    frame_records(raw, frames)
+}
+
+/// The records the stream holds when its index is `index` and its data
+/// `dat`: every chunk but the last holds `chunk_size`, and the last as many as
+/// are framed in it, framed in `raw` and `frames`.
+fn count_records(index: &CallsIndex, dat: &MemberBytes, form: ChunkForm, raw: &mut Vec<u8>, frames: &mut Vec<(usize, usize)>) -> Result<u64, String> {
+    let Some(last_chunk) = index.chunk_offsets.len().checked_sub(1) else {
+        return Ok(0);
+    };
+    if index.chunk_offsets[last_chunk] as usize > dat.len() {
+        return Err("calls.idx: last chunk offset past end of calls.dat".to_string());
+    }
+    inflate_chunk(index, dat, form, last_chunk, raw, frames)?;
+    Ok((last_chunk * index.chunk_size + frames.len()) as u64)
+}
+
 /// A seekable reader over a container's `calls.dat` stream.
 ///
 /// The index (`calls.idx`) and the raw `calls.dat` bytes are loaded once; each
@@ -126,6 +158,8 @@ fn frame_records(raw: &[u8], frames: &mut Vec<(usize, usize)>) -> Result<(), Str
 /// record. A simple last-chunk cache avoids re-decompressing when reads are
 /// sequential or clustered within a chunk.
 pub struct CallStreamReader {
+    /// Chunks inflated so far; see [`CallStreamReader::inflations`].
+    inflations: u64,
     index: CallsIndex,
     /// `calls.dat`, shared with the container when it is in memory.
     dat: MemberBytes,
@@ -168,6 +202,7 @@ impl CallStreamReader {
         // retained for source compatibility.
         let index = CallsIndex::parse(idx)?;
         let mut reader = CallStreamReader {
+            inflations: 0,
             index,
             dat,
             record_count: 0,
@@ -181,37 +216,55 @@ impl CallStreamReader {
         // chunk_size records; the last holds however many records are framed
         // in it. Empty stream ⇒ zero records. Counting is not a read: the
         // cache starts empty, as `cached_chunk` reports.
-        if let Some(last_chunk) = reader.index.chunk_offsets.len().checked_sub(1) {
-            if reader.index.chunk_offsets[last_chunk] as usize > reader.dat.len() {
-                return Err("calls.idx: last chunk offset past end of calls.dat".to_string());
-            }
-            reader.inflate(last_chunk)?;
-            reader.record_count = (last_chunk * reader.index.chunk_size + reader.frames.len()) as u64;
-            reader.cached_chunk = None;
+        if !reader.index.chunk_offsets.is_empty() {
+            reader.record_count = count_records(&reader.index, &reader.dat, reader.form, &mut Vec::new(), &mut Vec::new())?;
+            reader.inflations += 1;
         }
         Ok(Some(reader))
     }
 
-    /// Inflate chunk `chunk_number` and locate its records, unless it is the
-    /// one already held.
+    /// Inflate chunk `chunk_number` into the cache, unless it is already
+    /// there.
     fn inflate(&mut self, chunk_number: usize) -> Result<(), String> {
         if self.cached_chunk == Some(chunk_number) {
             return Ok(());
         }
-        let start = self.index.chunk_offsets[chunk_number] as usize;
-        let end = if chunk_number + 1 < self.index.chunk_offsets.len() {
-            self.index.chunk_offsets[chunk_number + 1] as usize
-        } else {
-            self.dat.len()
-        };
-        let frame = self.dat.get(start, end).map_err(|e| format!("calls.dat: chunk {chunk_number}: {e}"))?;
         self.cached_chunk = None;
-        self.form
-            .content_into(&frame, &mut self.raw)
-            .map_err(|e| format!("calls.dat: zstd decode failed: {e}"))?;
-        frame_records(&self.raw, &mut self.frames)?;
+        inflate_chunk(&self.index, &self.dat, self.form, chunk_number, &mut self.raw, &mut self.frames)?;
+        self.inflations += 1;
         self.cached_chunk = Some(chunk_number);
         Ok(())
+    }
+
+    /// Follow a container that is being written: extend this reader by the
+    /// chunks `reader`'s container has published since it was opened or last
+    /// refreshed (`ctfs-container.md` §6). Only the new last chunk is decoded,
+    /// to count its records; the chunk already held stays held. A re-read
+    /// index that does not extend the one already read is refused.
+    pub fn refresh(&mut self, reader: &mut CtfsReader) -> Result<(), String> {
+        let (dat, idx) = crate::follow::read_published(reader, "calls")?;
+        let index = CallsIndex::parse(&idx)?;
+        crate::follow::check_extends(
+            "calls.idx",
+            self.index.chunk_size,
+            &self.index.chunk_offsets,
+            index.chunk_size,
+            &index.chunk_offsets,
+            dat.len(),
+        )?;
+        if index.chunk_offsets.len() != self.index.chunk_offsets.len() {
+            self.record_count = count_records(&index, &dat, self.form, &mut Vec::new(), &mut Vec::new())?;
+            self.inflations += 1;
+        }
+        self.index = index;
+        self.dat = dat;
+        Ok(())
+    }
+
+    /// How many chunks this reader has inflated: reads, counting the last
+    /// chunk at open, and counting a new last chunk at a refresh.
+    pub fn inflations(&self) -> u64 {
+        self.inflations
     }
 
     /// Open the call stream from an already-open CTFS reader. Returns

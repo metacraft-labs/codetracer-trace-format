@@ -218,6 +218,64 @@ impl CtfsReader {
         Ok((header, ext_header, entries))
     }
 
+    /// Re-read the root directory of a container that is being written
+    /// (`ctfs-container.md` §6, "Reader Protocol" step 2), so that members
+    /// it has grown, and members it has added, read at their new sizes.
+    ///
+    /// Only a full-profile container read from its file can grow under a
+    /// reader; for any other this does nothing. A member never shrinks and an
+    /// entry never changes its name: a root directory in which either has
+    /// happened is refused, naming the member, and the reader keeps the
+    /// directory it had.
+    pub fn refresh(&mut self) -> Result<(), CtfsError> {
+        let Source::File(file) = &self.source else {
+            return Ok(());
+        };
+        if self.compact_offsets.is_some() {
+            return Ok(());
+        }
+        let header_size = match compact::read_v6_header(&{
+            let mut head = vec![0u8; compact::V6_HEADER_SIZE];
+            pread_exact(file, &mut head, 0)?;
+            head
+        })? {
+            Some(_) => compact::V6_HEADER_SIZE,
+            None => HEADER_SIZE_V5,
+        };
+        let mut root = vec![0u8; header_size + self.entries.len() * crate::file_entry::FILE_ENTRY_SIZE];
+        pread_exact(file, &mut root, 0)?;
+        let (_, ext_header, entries) = Self::read_root(&mut root.as_slice(), header_size)?;
+        if ext_header.block_size != self.block_size || entries.len() != self.entries.len() {
+            return Err(Self::followed_refusal(
+                "the container's block size or root directory changed while it was followed".to_string(),
+            ));
+        }
+        for (old, new) in self.entries.iter().zip(&entries) {
+            if old.is_empty() {
+                continue;
+            }
+            let name = base40_decode(old.name);
+            if new.name != old.name {
+                return Err(Self::followed_refusal(format!(
+                    "member {name} was renamed to {} while the container was followed",
+                    base40_decode(new.name)
+                )));
+            }
+            if new.size < old.size {
+                return Err(Self::followed_refusal(format!(
+                    "member {name} shrank from {} to {} bytes while the container was followed",
+                    old.size, new.size
+                )));
+            }
+        }
+        self.entries = entries;
+        Ok(())
+    }
+
+    fn followed_refusal(why: String) -> CtfsError {
+        CtfsError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, why))
+    }
+
     /// The body layout the container declares: [`Profile::Full`] for every
     /// version-5 container.
     pub fn profile(&self) -> Profile {

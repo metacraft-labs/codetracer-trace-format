@@ -239,16 +239,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn a_frame_is_measured_without_what_follows_it() {
-        for len in [0usize, 1, 300, 200_000] {
-            let raw: Vec<u8> = (0..len).map(|i| (i * 7 % 251) as u8).collect();
+    fn a_frame_is_measured_from_its_block_headers() {
+        for len in [0usize, 1, 300, 200_000, 1_000_000] {
+            let raw: Vec<u8> = (0..len).map(|i| (i * 7 % 253) as u8).collect();
             let frame = compress_pledged(&raw, 3, "test.dat").expect("compress");
-            let mut followed = frame.clone();
-            followed.extend_from_slice(&frame[..frame.len().min(9)]);
-            assert_eq!(frame_compressed_size(&followed), Ok(frame.len()), "len {len}");
-            assert!(frame_compressed_size(&frame[..frame.len() - 1]).is_err(), "len {len}: a truncated frame");
+            assert_eq!(frame_compressed_size(&frame).ok(), Some(frame.len()), "len {len}");
+            // Followed by the start of the next frame, it is still itself.
+            let mut two = frame.clone();
+            two.extend_from_slice(&frame[..frame.len().min(9)]);
+            assert_eq!(frame_compressed_size(&two).ok(), Some(frame.len()), "len {len}, followed");
+            // Cut short, it is not a whole frame.
+            assert_eq!(frame_compressed_size(&frame[..frame.len() - 1]).ok(), None, "len {len}, cut");
         }
-        assert!(frame_compressed_size(b"not a frame").is_err());
+        let streamed = zstd::encode_all(std::io::Cursor::new(&[3u8; 5000][..]), 3).expect("encode_all");
+        assert_eq!(frame_compressed_size(&streamed).ok(), Some(streamed.len()));
+        assert_eq!(frame_compressed_size(b"not a frame at all").ok(), None);
     }
 
     #[test]

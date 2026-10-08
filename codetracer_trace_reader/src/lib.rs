@@ -20,6 +20,13 @@ pub mod seekable_reader;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod ctfs_reader;
 
+/// Following a container that is being written.
+mod follow;
+
+/// A reader of a container that is still being written.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod trace_follower;
+
 /// The members a reader refuses: `events.log` and `events.fmt`.
 pub mod retired_streams;
 

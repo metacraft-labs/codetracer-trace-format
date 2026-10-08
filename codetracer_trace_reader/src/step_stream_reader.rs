@@ -201,6 +201,20 @@ pub struct StepStreamReader {
     allow_source_reload: bool,
     /// Whether a chunk is a frame to inflate or its content.
     form: ChunkForm,
+    /// Chunks inflated so far; see [`StepStreamReader::inflations`].
+    inflations: u64,
+}
+
+/// Inflate chunk `chunk_number` of the stream `index` locates in `dat` into
+/// `chunk`, and start its decode over.
+fn inflate_chunk(index: &StepsIndex, dat: &MemberBytes, form: ChunkForm, chunk_number: usize, chunk: &mut StepChunk) -> Result<(), String> {
+    let start = index.chunk_offsets[chunk_number] as usize;
+    let end = crate::follow::chunk_end("steps.dat", form, dat, &index.chunk_offsets, chunk_number)?;
+    let frame = dat.get(start, end).map_err(|e| format!("steps.dat: chunk {chunk_number}: {e}"))?;
+    form.content_into(&frame, &mut chunk.raw)
+        .map_err(|e| format!("steps.dat chunk {chunk_number}: steps.dat: zstd decode failed: {e}"))?;
+    chunk.reset();
+    Ok(())
 }
 
 /// Whether a `meta.dat` declares source reload markers. An absent `meta.dat`
@@ -249,26 +263,25 @@ impl StepStreamReader {
             chunk: StepChunk::default(),
             allow_source_reload,
             form,
+            inflations: 0,
         };
 
-        // Compute the total record count: all chunks but the last hold
-        // chunk_size records; the last holds however many records decode out of
-        // it, every one of which is decoded here. Empty stream ⇒ zero records.
-        // Counting is not a read: the cache starts empty, as `cached_chunk`
-        // reports.
-        if let Some(last_chunk) = reader.index.chunk_offsets.len().checked_sub(1) {
-            if reader.index.chunk_offsets[last_chunk] as usize > reader.dat.len() {
-                return Err("steps.idx: last chunk offset past end of steps.dat".to_string());
-            }
-            reader.inflate(last_chunk)?;
-            while reader
-                .chunk
-                .next(reader.allow_source_reload)
-                .map_err(|e| format!("steps.dat chunk {last_chunk}: {e}"))?
-                .is_some()
-            {}
-            reader.record_count = (last_chunk * reader.index.chunk_size + reader.chunk.cursor.record) as u64;
-            reader.cached_chunk = None;
+        // Compute the total record count. Counting is not a read: the cache
+        // starts empty, as `cached_chunk` reports.
+        let mut scratch = std::mem::take(&mut reader.chunk);
+        let index = std::mem::replace(
+            &mut reader.index,
+            StepsIndex {
+                chunk_size: 1,
+                chunk_offsets: Vec::new(),
+            },
+        );
+        let counted = reader.count_records(&index, &reader.dat, &mut scratch);
+        reader.index = index;
+        reader.chunk = scratch;
+        reader.record_count = counted?;
+        if !reader.index.chunk_offsets.is_empty() {
+            reader.inflations += 1;
         }
         Ok(Some(reader))
     }
@@ -278,20 +291,62 @@ impl StepStreamReader {
         if self.cached_chunk == Some(chunk_number) {
             return Ok(());
         }
-        let start = self.index.chunk_offsets[chunk_number] as usize;
-        let end = if chunk_number + 1 < self.index.chunk_offsets.len() {
-            self.index.chunk_offsets[chunk_number + 1] as usize
-        } else {
-            self.dat.len()
-        };
-        let frame = self.dat.get(start, end).map_err(|e| format!("steps.dat: chunk {chunk_number}: {e}"))?;
         self.cached_chunk = None;
-        self.form
-            .content_into(&frame, &mut self.chunk.raw)
-            .map_err(|e| format!("steps.dat chunk {chunk_number}: steps.dat: zstd decode failed: {e}"))?;
-        self.chunk.reset();
+        inflate_chunk(&self.index, &self.dat, self.form, chunk_number, &mut self.chunk)?;
+        self.inflations += 1;
         self.cached_chunk = Some(chunk_number);
         Ok(())
+    }
+
+    /// The records the stream holds when its index is `index` and its data
+    /// `dat`: every chunk but the last holds `chunk_size`, and the last as many
+    /// as decode out of it, decoded into `scratch`.
+    fn count_records(&self, index: &StepsIndex, dat: &MemberBytes, scratch: &mut StepChunk) -> Result<u64, String> {
+        let Some(last_chunk) = index.chunk_offsets.len().checked_sub(1) else {
+            return Ok(0);
+        };
+        if index.chunk_offsets[last_chunk] as usize > dat.len() {
+            return Err("steps.idx: last chunk offset past end of steps.dat".to_string());
+        }
+        inflate_chunk(index, dat, self.form, last_chunk, scratch)?;
+        while scratch
+            .next(self.allow_source_reload)
+            .map_err(|e| format!("steps.dat chunk {last_chunk}: {e}"))?
+            .is_some()
+        {}
+        Ok((last_chunk * index.chunk_size + scratch.cursor.record) as u64)
+    }
+
+    /// Follow a container that is being written: extend this reader by the
+    /// chunks `reader`'s container has published since it was opened or last
+    /// refreshed (`ctfs-container.md` §6). Only the new last chunk is decoded,
+    /// to count its records; chunks already read stay as they were read. A
+    /// re-read index that does not extend the one already read is refused.
+    pub fn refresh(&mut self, reader: &mut CtfsReader) -> Result<(), String> {
+        let (dat, idx) = crate::follow::read_published(reader, "steps")?;
+        let index = StepsIndex::parse(&idx)?;
+        crate::follow::check_extends(
+            "steps.idx",
+            self.index.chunk_size,
+            &self.index.chunk_offsets,
+            index.chunk_size,
+            &index.chunk_offsets,
+            dat.len(),
+        )?;
+        if index.chunk_offsets.len() != self.index.chunk_offsets.len() {
+            let mut scratch = StepChunk::default();
+            self.record_count = self.count_records(&index, &dat, &mut scratch)?;
+            self.inflations += 1;
+        }
+        self.index = index;
+        self.dat = dat;
+        Ok(())
+    }
+
+    /// How many chunks this reader has inflated: reads, counting the last
+    /// chunk at open, and counting a new last chunk at a refresh.
+    pub fn inflations(&self) -> u64 {
+        self.inflations
     }
 
     /// Open the step stream from an already-open CTFS reader. Returns

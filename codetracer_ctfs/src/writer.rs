@@ -222,7 +222,11 @@ impl CtfsWriter {
     }
 
     /// Create a new CTFS container at the given path with the specified compression method.
+    ///
+    /// A block size the container may not declare is refused before the file
+    /// is opened, so nothing is created or truncated.
     pub fn create_with_compression(path: &Path, block_size: u32, max_root_entries: u32, compression: CompressionMethod) -> Result<Self, CtfsError> {
+        ExtendedHeader::new(block_size, max_root_entries)?;
         let file = OpenOptions::new().read(true).write(true).create(true).truncate(true).open(path)?;
         Self::create_in_store(Box::new(FileStore::new(file)), block_size, max_root_entries, compression)
     }

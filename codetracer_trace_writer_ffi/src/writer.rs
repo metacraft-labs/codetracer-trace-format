@@ -257,6 +257,39 @@ fn close_container(h: &mut TraceWriterHandle, who: &str) -> i32 {
 }
 
 // ---------------------------------------------------------------------------
+// Bytes the container keeps
+// ---------------------------------------------------------------------------
+
+/// The key a name given as `bytes` is interned under: the name itself when it
+/// is UTF-8, else a key no C string equals (it begins with a NUL), whose bytes
+/// the interning tables record. Names are bytes in the interning tables and
+/// need not be UTF-8.
+fn name_key(h: &mut TraceWriterHandle, bytes: &[u8]) -> String {
+    match std::str::from_utf8(bytes) {
+        Ok(s) => s.to_string(),
+        Err(_) => {
+            let key = format!("\0raw:{}", bytes.iter().map(|b| format!("{b:02x}")).collect::<String>());
+            if let Some(w) = h.ctfs.as_mut() {
+                w.register_raw_name(key.clone(), bytes.to_vec());
+            }
+            key
+        }
+    }
+}
+
+/// `bytes` as meta.dat text, which is UTF-8; otherwise the refusal, naming
+/// `what`, reported with `prefix`.
+fn meta_text(bytes: &[u8], prefix: &str, what: &str) -> Option<String> {
+    match std::str::from_utf8(bytes) {
+        Ok(s) => Some(s.to_string()),
+        Err(_) => {
+            set_error(&format!("{prefix}meta.dat: {what} is not UTF-8"));
+            None
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Lifecycle
 // ---------------------------------------------------------------------------
 
@@ -268,7 +301,9 @@ fn close_container(h: &mut TraceWriterHandle, who: &str) -> i32 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_new(program: *const c_char, format: i32) -> *mut TraceWriterHandle {
     guarded("trace_writer_new", None, std::ptr::null_mut(), || {
-        let program = unsafe { cstr_string(program) };
+        let Some(program) = meta_text(unsafe { cstr_bytes(program) }, "trace_writer_new: ", "program") else {
+            return std::ptr::null_mut();
+        };
         if format != FORMAT_BINARY {
             set_error(&format!(
                 "trace_writer_new: format {format} selects the combined `events.log` stream, which is not part of the trace \
@@ -546,7 +581,9 @@ pub unsafe extern "C" fn trace_writer_set_recording_id(handle: *mut TraceWriterH
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_set_workdir(handle: *mut TraceWriterHandle, workdir: *const c_char) {
     with_handle("trace_writer_set_workdir", handle, true, (), (), |h| {
-        let wd = unsafe { cstr_string(workdir) };
+        let Some(wd) = meta_text(unsafe { cstr_bytes(workdir) }, "trace_writer_set_workdir: ", "workdir") else {
+            return;
+        };
         if let Some(w) = h.ctfs.as_mut() {
             if w.recording_started() {
                 set_error("trace_writer_set_workdir: setWorkdir after the first record: meta.dat is already written");
@@ -569,7 +606,10 @@ pub unsafe extern "C" fn trace_writer_set_args(handle: *mut TraceWriterHandle, a
         let mut list = vec![String::new(); args_count];
         if !args.is_null() && !arg_lens.is_null() {
             for (i, item) in list.iter_mut().enumerate() {
-                *item = String::from_utf8_lossy(unsafe { bytes(*args.add(i), *arg_lens.add(i)) }).into_owned();
+                let Some(arg) = meta_text(unsafe { bytes(*args.add(i), *arg_lens.add(i)) }, "trace_writer_set_args: ", "an argument") else {
+                    return;
+                };
+                *item = arg;
             }
         }
         if let Some(w) = h.ctfs.as_mut() {
@@ -675,9 +715,29 @@ pub unsafe extern "C" fn trace_writer_set_mcr_fields(
             set_error(&format!("hook_strategies is NULL with a count of {hook_strategies_count}"));
             return 1;
         }
-        let strategies = (0..hook_strategies_count)
-            .map(|i| unsafe { cstr_string(*hook_strategies.add(i)) })
-            .collect();
+        let mut text = Vec::new();
+        for (p, what) in [
+            (platform, "platform"),
+            (tick_granularity, "tick_granularity"),
+            (tick_source_str, "tick_source_str"),
+            (atomic_mode_str, "atomic_mode_str"),
+            (start_time_str, "start_time_str"),
+            (hook_profile, "hook_profile"),
+        ] {
+            let Some(t) = meta_text(unsafe { cstr_bytes(p) }, "", what) else {
+                return 1;
+            };
+            text.push(t);
+        }
+        let mut strategies = Vec::with_capacity(hook_strategies_count);
+        for i in 0..hook_strategies_count {
+            let Some(t) = meta_text(unsafe { cstr_bytes(*hook_strategies.add(i)) }, "", "a hook strategy") else {
+                return 1;
+            };
+            strategies.push(t);
+        }
+        let [platform, tick_granularity, tick_source_str, atomic_mode_str, start_time_str, hook_profile]: [String; 6] =
+            text.try_into().expect("six strings");
         let fields = McrFields {
             tick_source: tick,
             total_threads,
@@ -685,12 +745,12 @@ pub unsafe extern "C" fn trace_writer_set_mcr_fields(
             total_events,
             total_checkpoints,
             start_time_unix_us,
-            platform: unsafe { cstr_string(platform) },
-            tick_granularity: unsafe { cstr_string(tick_granularity) },
-            tick_source_str: unsafe { cstr_string(tick_source_str) },
-            atomic_mode_str: unsafe { cstr_string(atomic_mode_str) },
-            start_time_str: unsafe { cstr_string(start_time_str) },
-            hook_profile: unsafe { cstr_string(hook_profile) },
+            platform,
+            tick_granularity,
+            tick_source_str,
+            atomic_mode_str,
+            start_time_str,
+            hook_profile,
             hook_strategies: strategies,
         };
         apply_meta_blocks(h, |b| b.mcr = Some(fields))
@@ -767,10 +827,10 @@ pub unsafe extern "C" fn trace_writer_add_filter_provenance(
         if !sha256.is_null() {
             digest.copy_from_slice(unsafe { bytes(sha256, 32) });
         }
-        let entry = FilterProvenance {
-            path: String::from_utf8_lossy(unsafe { bytes(path, path_len) }).into_owned(),
-            sha256: digest,
+        let Some(path) = meta_text(unsafe { bytes(path, path_len) }, "", "a filter-provenance path") else {
+            return 1;
         };
+        let entry = FilterProvenance { path, sha256: digest };
         apply_meta_blocks(h, |b| b.filter_provenance.get_or_insert_with(Vec::new).push(entry))
     })
 }
@@ -1082,10 +1142,11 @@ pub unsafe extern "C" fn trace_writer_register_variable_name(handle: *mut TraceW
         u64::MAX,
         "trace_writer_register_variable_name: NULL handle",
         |h| {
+            let key = name_key(h, unsafe { cstr_bytes(name) });
             let Ok(w) = ready(h, "trace_writer_register_variable_name") else {
                 return u64::MAX;
             };
-            AbstractTraceWriter::ensure_variable_id(w, &unsafe { cstr_string(name) }).0 as u64
+            AbstractTraceWriter::ensure_variable_id(w, &key).0 as u64
         },
     )
 }
@@ -1322,7 +1383,7 @@ pub unsafe extern "C" fn trace_writer_ensure_function_id(
     line: i64,
 ) -> usize {
     with_handle("trace_writer_ensure_function_id", handle, true, usize::MAX, usize::MAX, |h| {
-        let n = unsafe { cstr_string(name) };
+        let n = name_key(h, unsafe { cstr_bytes(name) });
         if let Some(&id) = h.function_ids.get(&n) {
             return id;
         }
@@ -1344,7 +1405,8 @@ pub unsafe extern "C" fn trace_writer_ensure_function_id(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_ensure_type_id(handle: *mut TraceWriterHandle, kind: i32, lang_type: *const c_char) -> usize {
     with_handle("trace_writer_ensure_type_id", handle, true, usize::MAX, usize::MAX, |h| {
-        ensure_type_id(h, kind, unsafe { cstr_string(lang_type) })
+        let t = name_key(h, unsafe { cstr_bytes(lang_type) });
+        ensure_type_id(h, kind, t)
     })
 }
 
@@ -1390,10 +1452,11 @@ fn dangling(h: &TraceWriterHandle, type_id: usize, what: &str) -> bool {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_register_call_arg(handle: *mut TraceWriterHandle, name: *const c_char, cbor_data: *const u8, cbor_len: usize) {
     with_handle("trace_writer_register_call_arg", handle, true, (), (), |h| {
+        let key = name_key(h, unsafe { cstr_bytes(name) });
         let Some(w) = h.ctfs.as_mut() else {
             return;
         };
-        let id = AbstractTraceWriter::ensure_variable_id(w, &unsafe { cstr_string(name) });
+        let id = AbstractTraceWriter::ensure_variable_id(w, &key);
         h.call_args.push((id.0 as u64, unsafe { bytes(cbor_data, cbor_len) }.to_vec()));
     })
 }
@@ -1444,7 +1507,10 @@ pub unsafe extern "C" fn trace_writer_register_return(handle: *mut TraceWriterHa
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_register_return_int(handle: *mut TraceWriterHandle, value: i64, type_kind: i32, type_name: *const c_char) {
     with_handle("trace_writer_register_return_int", handle, true, (), (), |h| {
-        let type_id = ensure_type_id(h, type_kind, unsafe { cstr_string(type_name) });
+        let type_id = {
+            let t = name_key(h, unsafe { cstr_bytes(type_name) });
+            ensure_type_id(h, type_kind, t)
+        };
         return_int(h, value, type_id);
     })
 }
@@ -1476,7 +1542,10 @@ pub unsafe extern "C" fn trace_writer_register_return_raw(
     type_name: *const c_char,
 ) {
     with_handle("trace_writer_register_return_raw", handle, true, (), (), |h| {
-        let type_id = ensure_type_id(h, type_kind, unsafe { cstr_string(type_name) });
+        let type_id = {
+            let t = name_key(h, unsafe { cstr_bytes(type_name) });
+            ensure_type_id(h, type_kind, t)
+        };
         let repr = unsafe { cstr_bytes(value_repr) };
         register_return_bytes(h, raw_value(repr, type_id as u64));
     })
@@ -1518,8 +1587,12 @@ pub unsafe extern "C" fn trace_writer_register_variable_int(
     type_name: *const c_char,
 ) {
     with_handle("trace_writer_register_variable_int", handle, true, (), (), |h| {
-        let type_id = ensure_type_id(h, type_kind, unsafe { cstr_string(type_name) });
-        variable_int(h, &unsafe { cstr_string(name) }, value, type_id);
+        let type_id = {
+            let t = name_key(h, unsafe { cstr_bytes(type_name) });
+            ensure_type_id(h, type_kind, t)
+        };
+        let key = name_key(h, unsafe { cstr_bytes(name) });
+        variable_int(h, &key, value, type_id);
     })
 }
 
@@ -1540,7 +1613,8 @@ pub unsafe extern "C" fn trace_writer_register_variable_int_by_type_id(
         if dangling(h, type_id, "trace_writer_register_variable_int_by_type_id") {
             return;
         }
-        variable_int(h, &unsafe { cstr_string(name) }, value, type_id);
+        let key = name_key(h, unsafe { cstr_bytes(name) });
+        variable_int(h, &key, value, type_id);
     })
 }
 
@@ -1559,8 +1633,12 @@ pub unsafe extern "C" fn trace_writer_register_variable_raw(
     type_name: *const c_char,
 ) {
     with_handle("trace_writer_register_variable_raw", handle, true, (), (), |h| {
-        let type_id = ensure_type_id(h, type_kind, unsafe { cstr_string(type_name) });
-        variable_raw(h, &unsafe { cstr_string(name) }, unsafe { cstr_bytes(value_repr) }, type_id);
+        let type_id = {
+            let t = name_key(h, unsafe { cstr_bytes(type_name) });
+            ensure_type_id(h, type_kind, t)
+        };
+        let key = name_key(h, unsafe { cstr_bytes(name) });
+        variable_raw(h, &key, unsafe { cstr_bytes(value_repr) }, type_id);
     })
 }
 
@@ -1577,7 +1655,8 @@ pub unsafe extern "C" fn trace_writer_register_variable_raw_by_type_id(
         if dangling(h, type_id, "trace_writer_register_variable_raw_by_type_id") {
             return;
         }
-        variable_raw(h, &unsafe { cstr_string(name) }, unsafe { cstr_bytes(value_repr) }, type_id);
+        let key = name_key(h, unsafe { cstr_bytes(name) });
+        variable_raw(h, &key, unsafe { cstr_bytes(value_repr) }, type_id);
     })
 }
 
@@ -1594,7 +1673,7 @@ pub unsafe extern "C" fn trace_writer_register_variable_cbor(
     cbor_len: usize,
 ) {
     with_handle("trace_writer_register_variable_cbor", handle, true, (), (), |h| {
-        let name = unsafe { cstr_string(name) };
+        let name = name_key(h, unsafe { cstr_bytes(name) });
         let data = unsafe { bytes(cbor_data, cbor_len) }.to_vec();
         hold_value(h, &name, data);
     })
@@ -1634,7 +1713,7 @@ pub unsafe extern "C" fn trace_writer_register_assignment(
     rvalue_cbor_len: usize,
 ) -> i32 {
     with_handle("trace_writer_register_assignment", handle, true, 1, 1, |h| {
-        let name = unsafe { cstr_string(target_name) };
+        let name = name_key(h, unsafe { cstr_bytes(target_name) });
         let rvalue = unsafe { bytes(rvalue_cbor, rvalue_cbor_len) }.to_vec();
         if pass_by > 1 {
             set_error(&format!(
@@ -1667,7 +1746,7 @@ pub unsafe extern "C" fn trace_writer_register_drop_variables(handle: *mut Trace
             set_error(&format!("trace_writer_register_drop_variables: names is NULL but count is {count}"));
             return 1;
         }
-        let list: Vec<String> = (0..count).map(|i| unsafe { cstr_string(*names.add(i)) }).collect();
+        let list: Vec<String> = (0..count).map(|i| name_key(h, unsafe { cstr_bytes(*names.add(i)) })).collect();
         hold_event(h, "trace_writer_register_drop_variables", |w| {
             let ids = list.iter().map(|n| AbstractTraceWriter::ensure_variable_id(w, n)).collect();
             (TraceLowLevelEvent::DropVariables(ids), None)
@@ -1680,7 +1759,7 @@ pub unsafe extern "C" fn trace_writer_register_drop_variables(handle: *mut Trace
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_register_drop_variable(handle: *mut TraceWriterHandle, name: *const c_char) -> i32 {
     with_handle("trace_writer_register_drop_variable", handle, true, 1, 1, |h| {
-        let name = unsafe { cstr_string(name) };
+        let name = name_key(h, unsafe { cstr_bytes(name) });
         hold_event(h, "trace_writer_register_drop_variable", |w| {
             (TraceLowLevelEvent::DropVariable(AbstractTraceWriter::ensure_variable_id(w, &name)), None)
         })
@@ -1699,7 +1778,7 @@ pub unsafe extern "C" fn trace_writer_bind_variable(handle: *mut TraceWriterHand
         1,
         "trace_writer_bind_variable: NULL handle",
         |h| {
-            let name = unsafe { cstr_string(variable_name) };
+            let name = name_key(h, unsafe { cstr_bytes(variable_name) });
             hold_event(h, "trace_writer_bind_variable", |w| {
                 let variable_id = AbstractTraceWriter::ensure_variable_id(w, &name);
                 (
@@ -1726,7 +1805,7 @@ pub unsafe extern "C" fn trace_writer_register_variable_cell(handle: *mut TraceW
         1,
         "trace_writer_register_variable_cell: NULL handle",
         |h| {
-            let name = unsafe { cstr_string(variable_name) };
+            let name = name_key(h, unsafe { cstr_bytes(variable_name) });
             hold_event(h, "trace_writer_register_variable_cell", |w| {
                 let variable_id = AbstractTraceWriter::ensure_variable_id(w, &name);
                 (
@@ -1867,7 +1946,7 @@ pub unsafe extern "C" fn trace_writer_assign_compound_item(handle: *mut TraceWri
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ct_bind_variable(handle: *mut TraceWriterHandle, variable_name: *const c_char, place: i64) {
     with_handle("ct_bind_variable", handle, true, (), (), |h| {
-        let name = unsafe { cstr_string(variable_name) };
+        let name = name_key(h, unsafe { cstr_bytes(variable_name) });
         if h.ctfs.is_none() {
             set_error("ct_bind_variable: writer is not ready");
             return;
@@ -1917,9 +1996,12 @@ pub unsafe extern "C" fn ct_assignment(
                     .collect()
             }),
             2 => RValue::Literal,
+            // The field name is carried as its bytes: encoded with a stand-in
+            // of the same length, which a CBOR text string's header depends on
+            // alone, whose bytes are then the name's.
             3 => RValue::FieldAccess {
                 receiver: VariableId(simple_variable_id),
-                field: unsafe { cstr_string(field_name) },
+                field: "\u{1}".repeat(unsafe { cstr_bytes(field_name) }.len()),
             },
             4 => RValue::IndexAccess {
                 receiver: VariableId(simple_variable_id),
@@ -1931,11 +2013,33 @@ pub unsafe extern "C" fn ct_assignment(
                 return;
             }
         };
-        let pass = if pass_by == 0 { PassBy::Value } else { PassBy::Reference };
-        let name = unsafe { cstr_string(target_name) };
+        let pass = match pass_by {
+            0 => PassBy::Value,
+            1 => PassBy::Reference,
+            other => {
+                set_error(&format!("ct_assignment: {other} is not a PassBy mode"));
+                return;
+            }
+        };
+        let name = name_key(h, unsafe { cstr_bytes(target_name) });
         if h.ctfs.is_none() {
             set_error("ct_assignment: writer is not ready");
             return;
+        }
+        let mut from = match cbor4ii::serde::to_vec(Vec::new(), &rvalue) {
+            Ok(b) => b,
+            Err(e) => {
+                set_error(&format!("ct_assignment: encoding the RValue: {e}"));
+                return;
+            }
+        };
+        if let RValue::FieldAccess { field, .. } = &rvalue {
+            let field_bytes = unsafe { cstr_bytes(field_name) };
+            if !field_bytes.is_empty()
+                && let Some(at) = from.windows(field.len()).rposition(|w| w == field.as_bytes())
+            {
+                from[at..at + field.len()].copy_from_slice(field_bytes);
+            }
         }
         let _ = hold_event(h, "ct_assignment", |w| {
             let to = AbstractTraceWriter::ensure_variable_id(w, &name);
@@ -1945,7 +2049,7 @@ pub unsafe extern "C" fn ct_assignment(
                     pass_by: pass,
                     from: rvalue,
                 }),
-                None,
+                Some(from),
             )
         });
     })
@@ -2149,6 +2253,20 @@ pub unsafe extern "C" fn trace_writer_register_span(
                 return 1;
             }
             let is_external = flags & SPAN_FLAG_EXTERNAL != 0;
+            // Span text is UTF-8 (`internal-files.md` §"Span stream"): a
+            // string that is not refuses the record as its encoding would.
+            let mut invalid: Option<&str> = None;
+            let mut text = |p: *const c_char, what: &'static str| -> String {
+                match std::str::from_utf8(unsafe { cstr_bytes(p) }) {
+                    Ok(t) => t.to_string(),
+                    Err(_) => {
+                        invalid.get_or_insert(what);
+                        String::new()
+                    }
+                }
+            };
+            let span_type_text = text(span_type, "span_type");
+            let label_text = text(label, "label");
             let mut span = SpanRecord {
                 span_id,
                 parent_span_id,
@@ -2161,16 +2279,16 @@ pub unsafe extern "C" fn trace_writer_register_span(
                 thread_id,
                 start_step,
                 end_step,
-                span_type: unsafe { cstr_string(span_type) },
-                label: unsafe { cstr_string(label) },
+                span_type: span_type_text,
+                label: label_text,
                 contiguous_on_one_thread: structural & 0x01 != 0,
                 shares_timeline: structural & 0x02 != 0,
                 concurrent_with_siblings: structural & 0x04 != 0,
                 ..Default::default()
             };
             if is_external {
-                span.external_recording = unsafe { cstr_string(external_recording) };
-                span.external_path = unsafe { cstr_string(external_path) };
+                span.external_recording = text(external_recording, "external_recording");
+                span.external_path = text(external_path, "external_path");
             }
             if metadata_count > 0 {
                 if metadata_keys.is_null() || metadata_values.is_null() {
@@ -2180,11 +2298,15 @@ pub unsafe extern "C" fn trace_writer_register_span(
                     return 1;
                 }
                 for i in 0..metadata_count {
-                    span.metadata
-                        .push(unsafe { (cstr_string(*metadata_keys.add(i)), cstr_string(*metadata_values.add(i))) });
+                    let (k, v) = unsafe { (*metadata_keys.add(i), *metadata_values.add(i)) };
+                    span.metadata.push((text(k, "a metadata key"), text(v, "a metadata value")));
                 }
             }
-            match w.register_span(&span) {
+            let result = match invalid {
+                Some(what) => w.refuse_span_text(what),
+                None => w.register_span(&span),
+            };
+            match result {
                 Ok(()) => 0,
                 Err(e) => {
                     set_error(&e);
@@ -2244,7 +2366,7 @@ pub unsafe extern "C" fn trace_writer_begin_crossing(handle: *mut TraceWriterHan
                 .ctfs
                 .as_mut()
                 .expect("checked by ready")
-                .begin_crossing(&unsafe { cstr_string(span_type) })
+                .begin_crossing_bytes(unsafe { cstr_bytes(span_type) })
             {
                 Ok(id) => id,
                 Err(_) => {
@@ -2295,10 +2417,6 @@ fn enclosing_step(h: &TraceWriterHandle) -> u64 {
     if h.pending_step.is_some() { count } else { count.saturating_sub(1) }
 }
 
-fn text(p: *const u8, n: usize) -> String {
-    String::from_utf8_lossy(unsafe { bytes(p, n) }).into_owned()
-}
-
 /// Intern a marker label and write its id to `*out_id`. 0 on success; a
 /// refusal returns 1 without a message.
 ///
@@ -2314,7 +2432,7 @@ pub unsafe extern "C" fn trace_writer_ensure_marker_id(handle: *mut TraceWriterH
         let Some(w) = h.ctfs.as_mut() else {
             return 1;
         };
-        match w.ensure_marker_id(&text(label, label_len)) {
+        match w.ensure_marker_id_bytes(unsafe { bytes(label, label_len) }) {
             Ok(id) => {
                 unsafe { *out_id = id };
                 0
@@ -2355,15 +2473,15 @@ pub unsafe extern "C" fn trace_writer_mark_correlation_by_id(
         let Some(w) = h.ctfs.as_mut() else {
             return 1;
         };
-        let r = w.register_correlation_marker_by_id(
-            &text(direction, direction_len),
+        let r = w.register_correlation_marker_by_id_bytes(
+            unsafe { bytes(direction, direction_len) },
             marker_id,
-            &text(boundary_label, boundary_label_len),
-            &text(key_value, key_value_len),
-            &text(show_value, show_value_len),
-            &text(description, description_len),
-            &text(key_text, key_text_len),
-            &text(show_text, show_text_len),
+            unsafe { bytes(boundary_label, boundary_label_len) },
+            unsafe { bytes(key_value, key_value_len) },
+            unsafe { bytes(show_value, show_value_len) },
+            unsafe { bytes(description, description_len) },
+            unsafe { bytes(key_text, key_text_len) },
+            unsafe { bytes(show_text, show_text_len) },
             Some(step),
         );
         i32::from(r.is_err())
@@ -2398,14 +2516,14 @@ pub unsafe extern "C" fn trace_writer_mark_correlation(
         let Some(w) = h.ctfs.as_mut() else {
             return 1;
         };
-        let r = w.register_correlation_marker(
-            &text(direction, direction_len),
-            &text(boundary_id, boundary_id_len),
-            &text(key_value, key_value_len),
-            &text(show_value, show_value_len),
-            &text(description, description_len),
-            &text(key_text, key_text_len),
-            &text(show_text, show_text_len),
+        let r = w.register_correlation_marker_bytes(
+            unsafe { bytes(direction, direction_len) },
+            unsafe { bytes(boundary_id, boundary_id_len) },
+            unsafe { bytes(key_value, key_value_len) },
+            unsafe { bytes(show_value, show_value_len) },
+            unsafe { bytes(description, description_len) },
+            unsafe { bytes(key_text, key_text_len) },
+            unsafe { bytes(show_text, show_text_len) },
             Some(step),
         );
         i32::from(r.is_err())
@@ -2457,6 +2575,13 @@ pub unsafe extern "C" fn trace_writer_mark_span_coverage(
     })
 }
 
+/// A hex id's characters. Bytes that are not UTF-8 are not hex digits, and
+/// stand in as a character that is not one either, so the id is refused.
+fn hex_text(p: *const u8, n: usize) -> String {
+    let b = unsafe { bytes(p, n) };
+    std::str::from_utf8(b).map_or_else(|_| "\u{fffd}".repeat(b.len()), str::to_string)
+}
+
 /// [`trace_writer_mark_span_coverage`] with the ids in hex: 32 and 16 hex
 /// characters, either case.
 ///
@@ -2480,8 +2605,8 @@ pub unsafe extern "C" fn trace_writer_mark_span_coverage_hex(
         }
         let step = enclosing_step(h);
         let r = h.ctfs.as_mut().expect("checked above").register_span_coverage_hex(
-            &text(trace_id_hex, trace_id_hex_len),
-            &text(span_id_hex, span_id_hex_len),
+            &hex_text(trace_id_hex, trace_id_hex_len),
+            &hex_text(span_id_hex, span_id_hex_len),
             wall_time_unix_ns,
             monotonic_time_ns,
             0,

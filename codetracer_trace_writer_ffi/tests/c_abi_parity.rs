@@ -139,6 +139,7 @@ const WRITER_SCENARIOS: &[&str] = &[
     "reader_nulls",
     "craft",
     "annotations",
+    "non_utf8",
 ];
 
 /// Run `host` in `dir` and return its transcript; a host that crashes or

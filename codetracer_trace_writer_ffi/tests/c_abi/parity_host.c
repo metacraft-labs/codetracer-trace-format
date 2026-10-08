@@ -38,6 +38,9 @@ int trace_writer_add_filter_provenance(trace_writer_t handle, const uint8_t* pat
 int trace_writer_record_empty_filter_provenance(trace_writer_t handle);
 int ct_value_begin_sequence_with_slice(value_encoder_t h, uint64_t type_id, int element_count, int is_slice);
 int ct_meta_dat_has_filter_provenance(meta_dat_reader_t h);
+void ct_assignment(trace_writer_t handle, const char* target_name, int pass_by, int rvalue_kind, size_t simple_variable_id,
+                   const size_t* compound_ids, size_t compound_len, const char* field_name, int64_t index, int64_t call_key);
+void ct_bind_variable(trace_writer_t handle, const char* variable_name, int64_t place);
 size_t ct_meta_dat_filter_provenance_count(meta_dat_reader_t h);
 const uint8_t* ct_meta_dat_filter_provenance_path(meta_dat_reader_t h, size_t idx, size_t* out_len);
 int ct_meta_dat_filter_provenance_sha256(meta_dat_reader_t h, size_t idx, uint8_t* out);
@@ -835,6 +838,106 @@ static int scenario_annotations(void) {
     return 0;
 }
 
+
+/* ------------------------------------------------------------------------ */
+/* Bytes that are not UTF-8, in every input whose bytes reach a container:
+ * both libraries store the same bytes, or both refuse. */
+
+#define BAD "b\xff\xfe" "d"
+
+static int scenario_non_utf8(void) {
+    trace_writer_t w;
+    const char* keys[] = { "k" BAD };
+    const char* vals[] = { "v" BAD };
+    const char* strategies[] = { "s" BAD };
+    const uint8_t* args[] = { (const uint8_t*)("a" BAD) };
+    size_t arg_lens[] = { 5 };
+    static const uint32_t lens[] = { 10, 10 };
+    uint64_t id = 99;
+    uint8_t* buf = NULL;
+    size_t len = 0;
+
+    CLR();
+    w = trace_writer_new("/src/" BAD ".py", FFI_TRACE_FORMAT_BINARY);
+    printf("new(non-UTF-8 program) -> %s err=%d\n", w ? "handle" : "NULL", err_set());
+    if (w) trace_writer_free(w);
+    w = open_writer("/src/names_nu.py");
+    CALL_V("set_workdir", trace_writer_set_workdir(w, "/w" BAD));
+    CALL_V("set_args", trace_writer_set_args(w, args, arg_lens, 1));
+    CALL_V("start", trace_writer_start(w, "/src/" BAD ".py", 1));
+    CALL_V("register_step", trace_writer_register_step(w, "/src/two" BAD ".py", 2));
+    CALL_U("ensure_function_id", trace_writer_ensure_function_id(w, "f" BAD, "/src/" BAD ".py", 3));
+    CALL_U("ensure_type_id", trace_writer_ensure_type_id(w, FFI_TYPE_INT, "int" BAD));
+    CALL_V("variable_int", trace_writer_register_variable_int(w, "x" BAD, 1, FFI_TYPE_INT, "int" BAD));
+    CALL_V("variable_raw", trace_writer_register_variable_raw(w, "y" BAD, "r" BAD, FFI_TYPE_RAW, "raw" BAD));
+    CALL_U("register_variable_name", trace_writer_register_variable_name(w, "n" BAD));
+    CALL_I("drop_variable", trace_writer_register_drop_variable(w, "x" BAD));
+    CALL_I("bind_variable", trace_writer_bind_variable(w, "z" BAD, 1));
+    CALL_V("special_event", trace_writer_register_special_event(w, FFI_EVENT_WRITE, "m" BAD, "c" BAD));
+    CALL_V("call_arg", trace_writer_register_call_arg(w, "arg" BAD, (const uint8_t*)"\xf6", 1));
+    CALL_V("register_call", trace_writer_register_call(w, 1));
+    CALL_V("register_step", trace_writer_register_step(w, "/src/" BAD ".py", 4));
+    CALL_V("return_raw", trace_writer_register_return_raw(w, "ret" BAD, FFI_TYPE_RAW, "raw" BAD));
+    CALL_I("span type", trace_writer_register_span(w, 1, 0, 0, 1, 1, 2, 0, 0, 0, 1, NULL, NULL, "t" BAD, "", 0, NULL, NULL, 0));
+    CALL_I("span label", trace_writer_register_span(w, 1, 0, 0, 1, 1, 2, 0, 0, 0, 1, NULL, NULL, "t", "l" BAD, 0, NULL, NULL, 0));
+    CALL_I("span metadata", trace_writer_register_span(w, 1, 0, 0, 1, 1, 2, 0, 0, 0, 1, NULL, NULL, "t", "l", 0, keys, vals, 1));
+    CALL_I("span external", trace_writer_register_span(w, 1, 0, SPAN_FLAG_EXTERNAL, 1, 1, 2, 0, 0, 0, 1, RID, "p" BAD, "t", "l", 0, NULL, NULL, 0));
+    CALL_I("span valid", trace_writer_register_span(w, 2, 0, 0, 1, 1, 2, 0, 0, 0, 1, NULL, NULL, "t", "l", 0, NULL, NULL, 0));
+    CALL_U("begin_crossing", trace_writer_begin_crossing(w, "frame" BAD));
+    CALL_I("ensure_marker_id", trace_writer_ensure_marker_id(w, (const uint8_t*)("lbl" BAD), 7, &id));
+    printf("  id %llu\n", (unsigned long long)id);
+    CALL_I("mark_correlation_by_id", trace_writer_mark_correlation_by_id(w, id, (const uint8_t*)("lbl" BAD), 7,
+                                         (const uint8_t*)"send", 4, (const uint8_t*)("kv" BAD), 6, (const uint8_t*)("sv" BAD), 6,
+                                         (const uint8_t*)("d" BAD), 5, (const uint8_t*)("kt" BAD), 6, (const uint8_t*)("st" BAD), 6));
+    {
+        size_t ids[] = { 0, 1 };
+        CALL_V("ct_assignment simple", ct_assignment(w, "t" BAD, 0, 0, 1, NULL, 0, NULL, 0, 0));
+        CALL_V("ct_assignment compound", ct_assignment(w, "t", 1, 1, 0, ids, 2, NULL, 0, 0));
+        CALL_V("ct_assignment literal", ct_assignment(w, "t", 0, 2, 0, NULL, 0, NULL, 0, 0));
+        CALL_V("ct_assignment field", ct_assignment(w, "t", 0, 3, 1, NULL, 0, "fld", 0, 0));
+        CALL_V("ct_assignment field non-UTF-8", ct_assignment(w, "t", 0, 3, 1, NULL, 0, "f" BAD, 0, 0));
+        CALL_V("ct_assignment field empty", ct_assignment(w, "t", 0, 3, 1, NULL, 0, "", 0, 0));
+        CALL_V("ct_assignment index", ct_assignment(w, "t", 0, 4, 1, NULL, 0, NULL, -7, 0));
+        CALL_V("ct_assignment return", ct_assignment(w, "t", 1, 5, 0, NULL, 0, NULL, 0, 42));
+        CALL_V("ct_assignment bad kind", ct_assignment(w, "t", 0, 9, 0, NULL, 0, NULL, 0, 0));
+        CALL_V("ct_assignment bad pass_by", ct_assignment(w, "t", 5, 2, 0, NULL, 0, NULL, 0, 0));
+        CALL_V("ct_bind_variable", ct_bind_variable(w, "cb" BAD, 3));
+        CALL_V("register_step", trace_writer_register_step(w, "/src/" BAD ".py", 5));
+    }
+    CALL_I("mark_correlation", trace_writer_mark_correlation(w, (const uint8_t*)("dir" BAD), 7, (const uint8_t*)("b2" BAD), 6,
+                                   (const uint8_t*)("kv2" BAD), 7, NULL, 0, NULL, 0, NULL, 0, NULL, 0));
+    CALL_I("mark_span_coverage_hex", trace_writer_mark_span_coverage_hex(w, (const uint8_t*)("4bf92f3577b34da6a3ce929d0e0e47" BAD), 32,
+                                    (const uint8_t*)"00f067aa0ba902b7", 16, 5, 6));
+    close_writer(w);
+
+    w = open_writer("/src/meta_nu.c");
+    CALL_I("set_mcr_fields", trace_writer_set_mcr_fields(w, 0, 1, 0, 1, 1, 1, "p" BAD, "g" BAD, "ts" BAD, "am" BAD, "st" BAD,
+                                                         "hp" BAD, strategies, 1));
+    CALL_I("add_filter_provenance", trace_writer_add_filter_provenance(w, (const uint8_t*)("f" BAD), 5,
+                                                                       (const uint8_t*)"0123456789abcdef0123456789abcdef", 32));
+    CALL_V("start", trace_writer_start(w, "/src/meta_nu.c", 1));
+    close_writer(w);
+
+    w = open_writer("/src/lines_nu.js");
+    CALL_V("enable_column_aware_steps", trace_writer_enable_column_aware_steps(w));
+    CALL_I("path_with_line_lengths", trace_writer_register_path_with_line_lengths(w, "/src/l" BAD ".js", 2, lens));
+    CALL_V("start", trace_writer_start(w, "/src/l" BAD ".js", 1));
+    close_writer(w);
+
+    w = open_writer("/src/count_nu.gd");
+    CALL_I("enable_line_count_table", trace_writer_enable_line_count_table(w));
+    CALL_I("path_with_line_count", trace_writer_register_path_with_line_count(w, "/src/c" BAD ".gd", 5));
+    CALL_U("path_version", trace_writer_register_path_version(w, "/src/c" BAD ".gd", 6));
+    CALL_V("start", trace_writer_start(w, "/src/c" BAD ".gd", 1));
+    close_writer(w);
+
+    CALL_I("meta_to_buffer", ct_write_meta_dat_to_buffer((const uint8_t*)("p" BAD), 5, (const uint8_t*)("w" BAD), 5, args, arg_lens, 1,
+                                                         (const uint8_t*)("r" BAD), 5, (const uint8_t*)RID, strlen(RID), &buf, &len));
+    print_bytes("meta.dat", buf, len);
+    if (buf) ct_free_buffer(buf);
+    return 0;
+}
+
 /* ------------------------------------------------------------------------ */
 /* Containers with one member malformed, built with the container calls so
  * that both readers see the same bytes: what each refuses, and where. */
@@ -1323,6 +1426,7 @@ int main(int argc, char** argv) {
     if (strcmp(s, "reader_nulls") == 0) return scenario_reader_nulls();
     if (strcmp(s, "craft") == 0) return scenario_craft();
     if (strcmp(s, "annotations") == 0) return scenario_annotations();
+    if (strcmp(s, "non_utf8") == 0) return scenario_non_utf8();
     if (strcmp(s, "read") == 0) {
         for (int i = 3; i < argc; i++) read_file(argv[i]);
         return 0;

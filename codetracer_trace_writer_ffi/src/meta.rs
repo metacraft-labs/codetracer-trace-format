@@ -61,13 +61,17 @@ pub unsafe extern "C" fn ct_write_meta_dat_to_buffer(
         }
         let text = |p: *const u8, n: usize| String::from_utf8_lossy(unsafe { bytes(p, n) }).into_owned();
         let mut arg_list = Vec::with_capacity(args_count);
+        let mut arg_bad = false;
         for i in 0..args_count {
             let (p, n) = if args.is_null() || arg_lens.is_null() {
                 (std::ptr::null(), 0)
             } else {
                 unsafe { (*args.add(i), *arg_lens.add(i)) }
             };
-            arg_list.push(text(p, n));
+            match std::str::from_utf8(unsafe { bytes(p, n) }) {
+                Ok(t) => arg_list.push(t.to_string()),
+                Err(_) => arg_bad = true,
+            }
         }
         let id = if recording_id.is_null() || recording_id_len == 0 {
             codetracer_trace_types::TraceMetadata::new("", vec![], Default::default()).recording_id
@@ -79,14 +83,27 @@ pub unsafe extern "C" fn ct_write_meta_dat_to_buffer(
             }
             id
         };
-        let encoded = encode_meta_dat(
-            &id,
-            &text(program, program_len),
-            &arg_list,
-            &text(workdir, workdir_len),
-            &text(recorder_id, recorder_id_len),
-            0,
-        );
+        // meta.dat's text is UTF-8: bytes that are not are refused, naming
+        // the field, not converted.
+        if arg_bad {
+            set_error("meta.dat: an argument is not UTF-8");
+            return 1;
+        }
+        let mut fields = Vec::new();
+        for (p, n, what) in [
+            (program, program_len, "program"),
+            (workdir, workdir_len, "workdir"),
+            (recorder_id, recorder_id_len, "recorder_id"),
+        ] {
+            match std::str::from_utf8(unsafe { bytes(p, n) }) {
+                Ok(t) => fields.push(t.to_string()),
+                Err(_) => {
+                    set_error(&format!("meta.dat: {what} is not UTF-8"));
+                    return 1;
+                }
+            }
+        }
+        let encoded = encode_meta_dat(&id, &fields[0], &arg_list, &fields[1], &fields[2], 0);
         let buf = alloc_buffer(&encoded);
         if buf.is_null() {
             set_error("allocation failed");
@@ -304,14 +321,6 @@ pub unsafe extern "C" fn ct_container_create(path: *const c_char, block_size: u3
             return 1;
         }
         let bs = if block_size == 0 { 4096 } else { block_size };
-        // A full container's block size is 1024, 2048 or 4096
-        // (`ctfs-container.md` §1); nothing is created for any other.
-        if !matches!(bs, 1024 | 2048 | 4096) {
-            set_error(&format!(
-                "ct_container_create: block size {bs} is not one a CTFS container may declare (1024, 2048 or 4096)"
-            ));
-            return 1;
-        }
         let p = path_from_bytes(unsafe { cstr_bytes(path) });
         // The default root-directory size of every container writer.
         let max_entries = 31;

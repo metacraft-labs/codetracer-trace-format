@@ -38,6 +38,12 @@ pub mod line_position;
 /// writer. See the module docs for the port table.
 pub mod column_aware;
 
+/// `corrmark.ns`, the correlation index.
+pub mod corrmark;
+
+/// `linehits.tc`, the per-position list of the steps that executed it.
+pub mod linehits;
+
 pub mod value_stream;
 
 pub mod event_stream;

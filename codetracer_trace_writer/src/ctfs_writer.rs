@@ -404,6 +404,17 @@ pub struct CtfsTraceWriter {
     last_crossing_id: u64,
     /// Open crossings, innermost last: span id, span type, start step.
     open_crossings: Vec<(u64, String, u64)>,
+
+    // --- Line hits and correlation markers ----------------------------------
+    /// Whether the recording keeps a `linehits.tc` index. See
+    /// [`CtfsTraceWriter::enable_line_hits`].
+    line_hits_requested: bool,
+    /// The correlation-marker label table, `markers.dat` / `markers.off`,
+    /// created by the first [`CtfsTraceWriter::ensure_marker_id`].
+    marker_labels: Option<MarkerLabels>,
+    /// The correlation markers declared, each with its index key, written to
+    /// `corrmark.ns` at close. None declared: no `corrmark.ns`.
+    correlation_markers: Vec<(u64, crate::corrmark::CorrelationMarker)>,
 }
 
 /// The span stream of a container being written.
@@ -411,6 +422,14 @@ struct SpanStream {
     builder: crate::span_stream::SpanStreamBuilder,
     dat: codetracer_ctfs::FileHandle,
     idx: codetracer_ctfs::FileHandle,
+}
+
+/// The correlation-marker label table being written.
+struct MarkerLabels {
+    ids: std::collections::HashMap<Vec<u8>, u64>,
+    dat: codetracer_ctfs::FileHandle,
+    off: codetracer_ctfs::FileHandle,
+    dat_len: u64,
 }
 
 /// The members of a container being written, by role.
@@ -435,6 +454,25 @@ fn is_record(event: &TraceLowLevelEvent) -> bool {
             | TraceLowLevelEvent::Type(_)
             | TraceLowLevelEvent::Function(_)
     )
+}
+
+/// JSON string escaping for a `MarkerPayload` field: `"` and `\` escaped,
+/// newline, carriage return and tab by their short escapes, every other byte
+/// below 0x20 as `\u00XX` (lowercase hex), everything else as is.
+fn marker_json_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len() + 8);
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => out.push_str(&format!("\\u00{:02x}", c as u32)),
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 /// The id handed back for a path the writer refused to register. Never a real
@@ -554,6 +592,9 @@ impl CtfsTraceWriter {
             spans: None,
             last_crossing_id: 0,
             open_crossings: Vec::new(),
+            line_hits_requested: false,
+            marker_labels: None,
+            correlation_markers: Vec::new(),
         }
     }
 
@@ -954,6 +995,214 @@ impl CtfsTraceWriter {
     /// The number of exec records written: the id the next one takes.
     pub fn exec_record_count(&self) -> u64 {
         self.call_stream_builder.as_ref().map_or(0, |b| b.exec_records())
+    }
+
+    /// Keep a `linehits.tc` index: from this call on, every step records its
+    /// position and exec-record index, and the index is written when the
+    /// trace finishes. Steps recorded before the call are not in it.
+    pub fn enable_line_hits(&mut self) {
+        self.line_hits_requested = true;
+        if let Some(encoder) = self.exec_encoder.as_mut() {
+            encoder.enable_line_hits();
+        }
+    }
+
+    /// The step a marker declared now belongs to: the last exec record, or 0
+    /// before the first.
+    fn enclosing_step(&self) -> u64 {
+        match (&self.io_event_stream_builder, &self.exec_encoder) {
+            (Some(builder), _) => builder.current_step(),
+            (None, Some(encoder)) => encoder.total_events().saturating_sub(1),
+            (None, None) => 0,
+        }
+    }
+
+    /// Intern a correlation-marker label and return its id, creating
+    /// `markers.dat` / `markers.off` on the first call. A recording that
+    /// declares no marker has neither.
+    pub fn ensure_marker_id(&mut self, label: &str) -> Result<u64, String> {
+        if self.ctfs_writer.is_none() {
+            return Err("ensure_marker_id called before begin_writing_trace_events".to_string());
+        }
+        if let Some(e) = &self.write_error {
+            return Err(e.clone());
+        }
+        if self.marker_labels.is_none() {
+            self.create_members();
+            let w = self.ctfs_writer.as_mut().expect("checked above");
+            let created = (|| -> Result<MarkerLabels, codetracer_ctfs::CtfsError> {
+                let dat = w.add_file("markers.dat")?;
+                let off = w.add_file("markers.off")?;
+                w.write(off, &0u64.to_le_bytes())?;
+                w.sync_entry(off)?;
+                Ok(MarkerLabels {
+                    ids: std::collections::HashMap::new(),
+                    dat,
+                    off,
+                    dat_len: 0,
+                })
+            })()
+            .map_err(|e| format!("creating markers.dat: {e}"))?;
+            self.marker_labels = Some(created);
+        }
+        let labels = self.marker_labels.as_mut().expect("created above");
+        if let Some(&id) = labels.ids.get(label.as_bytes()) {
+            return Ok(id);
+        }
+        let id = labels.ids.len() as u64;
+        let w = self.ctfs_writer.as_mut().expect("checked above");
+        let result = (|| -> Result<(), codetracer_ctfs::CtfsError> {
+            if !label.is_empty() {
+                w.write(labels.dat, label.as_bytes())?;
+                w.sync_entry(labels.dat)?;
+            }
+            w.write(labels.off, &(labels.dat_len + label.len() as u64).to_le_bytes())?;
+            w.sync_entry(labels.off)
+        })();
+        result.map_err(|e| format!("writing markers.dat: {e}"))?;
+        labels.dat_len += label.len() as u64;
+        labels.ids.insert(label.as_bytes().to_vec(), id);
+        Ok(id)
+    }
+
+    /// Declare a boundary crossing against an interned label id: an I/O
+    /// event carrying the `MarkerPayload` document in its metadata, and a
+    /// kind-1 `corrmark.ns` entry, both at `step_id` (default: the last exec
+    /// record). `direction` `"recv"` or `"receive"` is the receiving side,
+    /// anything else the sending side; an empty `key_text` is `"key"`; the
+    /// show fields are written when either is given, an empty `show_text`
+    /// being `"show"`; `description` when given.
+    #[allow(clippy::too_many_arguments)]
+    pub fn register_correlation_marker_by_id(
+        &mut self,
+        direction: &str,
+        marker_id: u64,
+        boundary_label: &str,
+        key_value: &str,
+        show_value: &str,
+        description: &str,
+        key_text: &str,
+        show_text: &str,
+        step_id: Option<u64>,
+    ) -> Result<(), String> {
+        if self.ctfs_writer.is_none() {
+            return Err("register_correlation_marker called before begin_writing_trace_events".to_string());
+        }
+        self.commit_meta();
+        let recv = direction == "recv" || direction == "receive";
+        let mut payload = format!("{{\"marker_id\":{marker_id}");
+        payload.push_str(&format!(",\"boundary_id\":\"{}\"", marker_json_escape(boundary_label)));
+        payload.push_str(&format!(",\"direction\":\"{}\"", if recv { "recv" } else { "send" }));
+        payload.push_str(&format!(
+            ",\"key_text\":\"{}\"",
+            marker_json_escape(if key_text.is_empty() { "key" } else { key_text })
+        ));
+        payload.push_str(&format!(",\"key_value\":\"{}\"", marker_json_escape(key_value)));
+        if !show_value.is_empty() || !show_text.is_empty() {
+            payload.push_str(&format!(
+                ",\"show_text\":\"{}\"",
+                marker_json_escape(if show_text.is_empty() { "show" } else { show_text })
+            ));
+            payload.push_str(&format!(",\"show_value\":\"{}\"", marker_json_escape(show_value)));
+        }
+        if !description.is_empty() {
+            payload.push_str(&format!(",\"description\":\"{}\"", marker_json_escape(description)));
+        }
+        payload.push('}');
+        let step = step_id.unwrap_or_else(|| self.enclosing_step());
+        if let Some(builder) = self.io_event_stream_builder.as_mut() {
+            builder.push_record(crate::event_stream::IoEventRecord {
+                kind: 0,
+                step_id: step,
+                metadata: payload.into_bytes(),
+                content: Vec::new(),
+            });
+        }
+        self.correlation_markers.push((
+            crate::corrmark::boundary_key(marker_id, key_value.as_bytes()),
+            crate::corrmark::CorrelationMarker::boundary(marker_id, key_value.as_bytes(), recv, step, 0),
+        ));
+        self.after_record();
+        self.write_error.clone().map_or(Ok(()), Err)
+    }
+
+    /// [`Self::register_correlation_marker_by_id`] with the label interned
+    /// here.
+    #[allow(clippy::too_many_arguments)]
+    pub fn register_correlation_marker(
+        &mut self,
+        direction: &str,
+        boundary_id: &str,
+        key_value: &str,
+        show_value: &str,
+        description: &str,
+        key_text: &str,
+        show_text: &str,
+        step_id: Option<u64>,
+    ) -> Result<(), String> {
+        let id = self.ensure_marker_id(boundary_id)?;
+        self.register_correlation_marker_by_id(
+            direction,
+            id,
+            boundary_id,
+            key_value,
+            show_value,
+            description,
+            key_text,
+            show_text,
+            step_id,
+        )
+    }
+
+    /// Declare that the recording covers the distributed-trace span
+    /// `(trace_id, span_id)`, given as wire bytes (16 and 8): a kind-0
+    /// `corrmark.ns` entry at `step_id` (default: the last exec record). No
+    /// I/O event is written.
+    #[allow(clippy::too_many_arguments)]
+    pub fn register_span_coverage(
+        &mut self,
+        trace_id: &[u8],
+        span_id: &[u8],
+        wall_time_unix_ns: u64,
+        monotonic_time_ns: u64,
+        thread_id: u64,
+        is_exit: bool,
+        step_id: Option<u64>,
+    ) -> Result<(), String> {
+        if self.ctfs_writer.is_none() {
+            return Err("register_span_coverage called before begin_writing_trace_events".to_string());
+        }
+        self.commit_meta();
+        let trace: &[u8; 16] = trace_id
+            .try_into()
+            .map_err(|_| format!("correlation trace_id must be 16 bytes (wire order), got {}", trace_id.len()))?;
+        let span: &[u8; 8] = span_id
+            .try_into()
+            .map_err(|_| format!("correlation span_id must be 8 bytes (wire order), got {}", span_id.len()))?;
+        let step = step_id.unwrap_or_else(|| self.enclosing_step());
+        self.correlation_markers.push((
+            crate::corrmark::span_key(trace, span),
+            crate::corrmark::CorrelationMarker::span(trace, span, wall_time_unix_ns, monotonic_time_ns, step, thread_id, is_exit),
+        ));
+        Ok(())
+    }
+
+    /// [`Self::register_span_coverage`] with the ids as hex (32 and 16
+    /// characters, either case).
+    #[allow(clippy::too_many_arguments)]
+    pub fn register_span_coverage_hex(
+        &mut self,
+        trace_id_hex: &str,
+        span_id_hex: &str,
+        wall_time_unix_ns: u64,
+        monotonic_time_ns: u64,
+        thread_id: u64,
+        is_exit: bool,
+        step_id: Option<u64>,
+    ) -> Result<(), String> {
+        let trace = crate::corrmark::decode_hex_id(trace_id_hex, 16)?;
+        let span = crate::corrmark::decode_hex_id(span_id_hex, 8)?;
+        self.register_span_coverage(&trace, &span, wall_time_unix_ns, monotonic_time_ns, thread_id, is_exit, step_id)
     }
 
     /// Declare that this recording may contain source reload markers
@@ -1503,12 +1752,13 @@ impl CtfsTraceWriter {
     /// recorded into. Done by the first record, or at finish for a trace with
     /// none (`ctfs-container.md` §6, "Durability", rule 1); every field and
     /// flag is fixed from then on.
-    fn commit_meta(&mut self) {
-        if self.meta_committed || self.ctfs_writer.is_none() {
+    /// Create the members the trace is recorded into, once. Done when
+    /// `meta.dat` is committed, or earlier by a member that must follow them
+    /// in the container's member order (the marker label table).
+    fn create_members(&mut self) {
+        if self.members.is_some() || self.ctfs_writer.is_none() || self.write_error.is_some() {
             return;
         }
-        self.meta_committed = true;
-        let meta = self.meta_dat_bytes();
         let result = (|| -> Result<Members, codetracer_ctfs::CtfsError> {
             let w = self.ctfs_writer.as_mut().expect("checked above");
             let mut pair = |dat: &str, idx: &str| -> Result<_, codetracer_ctfs::CtfsError> { Ok((w.add_file(dat)?, w.add_file(idx)?)) };
@@ -1516,7 +1766,7 @@ impl CtfsTraceWriter {
             // is the compact container's (`ctfs-container.md` §1d, §1f), so
             // the two writers' compact containers agree only if it agrees.
             // Fields are evaluated in the order written.
-            let members = Members {
+            Ok(Members {
                 interning: [
                     pair("paths.dat", "paths.off")?,
                     pair("funcs.dat", "funcs.off")?,
@@ -1527,7 +1777,26 @@ impl CtfsTraceWriter {
                 values: pair("values.dat", "values.idx")?,
                 calls: pair("calls.dat", "calls.idx")?,
                 events: pair("events.dat", "events.idx")?,
-            };
+            })
+        })();
+        match result {
+            Ok(members) => self.members = Some(members),
+            Err(e) => self.latch(Err::<(), _>(format!("creating the trace's members: {e}"))),
+        }
+    }
+
+    fn commit_meta(&mut self) {
+        if self.meta_committed || self.ctfs_writer.is_none() {
+            return;
+        }
+        self.meta_committed = true;
+        let meta = self.meta_dat_bytes();
+        self.create_members();
+        let Some(members) = self.members.take() else {
+            return;
+        };
+        let result = (|| -> Result<Members, codetracer_ctfs::CtfsError> {
+            let w = self.ctfs_writer.as_mut().expect("checked above");
             let meta_handle = w.add_file("meta.dat")?;
             w.write(meta_handle, &meta)?;
             // Every offset table starts with record 0's offset, `0`.
@@ -2161,11 +2430,17 @@ impl TraceWriter for CtfsTraceWriter {
         self.step_encoder = StepEncoder::new();
         // The one `steps.dat` chunk encoder. The column-aware path writes into
         // it directly; the line-only path through `StepStreamBuilder`.
-        self.exec_encoder = Some(ExecStreamEncoder::new(self.steps_chunk_size, EXEC_COMPRESSION_LEVEL));
+        let mut exec_encoder = ExecStreamEncoder::new(self.steps_chunk_size, EXEC_COMPRESSION_LEVEL);
+        if self.line_hits_requested {
+            exec_encoder.enable_line_hits();
+        }
+        self.exec_encoder = Some(exec_encoder);
         self.calls_sink = Some(ChunkSink::new("calls.dat", self.calls_chunk_size, DEFAULT_CALLS_ZSTD_LEVEL));
         self.values_sink = Some(ChunkSink::new("values.dat", self.values_chunk_size, DEFAULT_CALLS_ZSTD_LEVEL));
         self.events_sink = Some(ChunkSink::new("events.dat", self.events_chunk_size, DEFAULT_CALLS_ZSTD_LEVEL));
         self.members = None;
+        self.marker_labels = None;
+        self.correlation_markers.clear();
         self.meta_committed = false;
         self.interning_published = [(0, 0); 4];
         self.write_error = None;
@@ -2313,6 +2588,29 @@ impl TraceWriter for CtfsTraceWriter {
                 Ok(())
             });
             self.latch(r);
+        }
+
+        // `linehits.tc`, when kept, then `corrmark.ns`, when any marker was
+        // declared: an absent index says "not indexed", an empty one "indexed,
+        // covers nothing", so none is written for a recording with no marker.
+        let line_hits = self.exec_encoder.as_ref().and_then(|e| e.line_hits()).map(|h| h.serialize());
+        let corrmark = (!self.correlation_markers.is_empty()).then(|| crate::corrmark::serialize_corrmark(&self.correlation_markers));
+        for (name, image) in [
+            (crate::linehits::LINEHITS_FILE_NAME, line_hits),
+            (crate::corrmark::CORRMARK_FILE_NAME, corrmark),
+        ] {
+            let (Some(image), Some(writer)) = (image, self.ctfs_writer.as_mut()) else {
+                continue;
+            };
+            if self.write_error.is_some() {
+                break;
+            }
+            let r = image.and_then(|bytes| {
+                let h = writer.add_file(name).map_err(|e| e.to_string())?;
+                writer.write(h, &bytes).map_err(|e| e.to_string())?;
+                Ok(())
+            });
+            self.latch(r.map_err(|e| format!("writing {name}: {e}")));
         }
 
         if let Some(err) = self.write_error.take() {

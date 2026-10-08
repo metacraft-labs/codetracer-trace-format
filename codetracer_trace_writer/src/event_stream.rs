@@ -248,6 +248,17 @@ impl IoEventStreamBuilder {
         }
     }
 
+    /// The step an I/O event declared now is attributed to: the last exec
+    /// record, or 0 before the first.
+    pub fn current_step(&self) -> u64 {
+        self.current_step.unwrap_or(0)
+    }
+
+    /// Append a record built by the caller, with its own step id.
+    pub fn push_record(&mut self, record: IoEventRecord) {
+        self.records.push(record);
+    }
+
     /// Number of I/O event records built so far and not yet taken.
     pub fn len(&self) -> usize {
         self.records.len()

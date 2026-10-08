@@ -301,6 +301,32 @@ extern "C" {
     fn ct_spans_json(path: *const std::os::raw::c_char, settled: i32, out_len: *mut usize) -> *mut u8;
     fn ct_span_types_json(path: *const std::os::raw::c_char, out_len: *mut usize) -> *mut u8;
 
+    // Line hits and the correlation index: the writer's opt-in, and the read
+    // side over a finished container. Each reader returns 0 with a JSON
+    // document (freed with ct_free_buffer), 1 when the member is absent, -1
+    // on failure.
+    fn trace_writer_enable_linehits(handle: *mut std::ffi::c_void) -> i32;
+    fn ct_linehits_json(path: *const std::os::raw::c_char, out_buf: *mut *mut u8, out_len: *mut usize) -> i32;
+    fn ct_correlation_index_json(path: *const std::os::raw::c_char, out_buf: *mut *mut u8, out_len: *mut usize) -> i32;
+    fn ct_correlation_lookup_span(
+        path: *const std::os::raw::c_char,
+        trace_id: *const u8,
+        trace_id_len: usize,
+        span_id: *const u8,
+        span_id_len: usize,
+        out_buf: *mut *mut u8,
+        out_len: *mut usize,
+    ) -> i32;
+    fn ct_correlation_lookup_boundary(
+        path: *const std::os::raw::c_char,
+        marker_id: u64,
+        key_value: *const u8,
+        key_value_len: usize,
+        out_buf: *mut *mut u8,
+        out_len: *mut usize,
+    ) -> i32;
+    fn ct_marker_labels_json(path: *const std::os::raw::c_char, out_buf: *mut *mut u8, out_len: *mut usize) -> i32;
+
     // ----- Column-aware step mode (P6.3 / P6.4) -----
     //
     // Mirrors the Nim multi-stream writer's column-aware API.  Recorders
@@ -1211,6 +1237,68 @@ pub fn read_span_types_json(path: &Path) -> Result<String, Box<dyn Error>> {
     let bytes = unsafe { std::slice::from_raw_parts(buf, out_len) }.to_vec();
     unsafe { ct_free_buffer(buf) };
     Ok(String::from_utf8(bytes)?)
+}
+
+/// What a Nim read-side call over a container member answered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MemberAnswer {
+    /// The member is present and was read: its JSON document.
+    Document(String),
+    /// The container has no such member.
+    Absent,
+    /// The member is present and could not be read: the reason.
+    Refused(String),
+}
+
+fn member_answer(what: &str, call: impl FnOnce(*mut *mut u8, *mut usize) -> i32) -> MemberAnswer {
+    ensure_nim_initialized();
+    let mut buf: *mut u8 = std::ptr::null_mut();
+    let mut len: usize = 0;
+    match call(&mut buf, &mut len) {
+        0 => {
+            let bytes = unsafe { std::slice::from_raw_parts(buf, len) }.to_vec();
+            unsafe { ct_free_buffer(buf) };
+            MemberAnswer::Document(String::from_utf8_lossy(&bytes).into_owned())
+        }
+        1 => MemberAnswer::Absent,
+        _ => MemberAnswer::Refused(format!("{what}: {}", last_error())),
+    }
+}
+
+/// The Nim reader's `linehits.tc`: `[{"position":P,"steps":[...]},...]`.
+pub fn read_line_hits_json(path: &Path) -> MemberAnswer {
+    let c_path = path_to_cstring(path);
+    member_answer("ct_linehits_json", |b, l| unsafe { ct_linehits_json(c_path.as_ptr(), b, l) })
+}
+
+/// The Nim reader's `corrmark.ns`, every entry in key and bucket order.
+pub fn read_correlation_index_json(path: &Path) -> MemberAnswer {
+    let c_path = path_to_cstring(path);
+    member_answer("ct_correlation_index_json", |b, l| unsafe {
+        ct_correlation_index_json(c_path.as_ptr(), b, l)
+    })
+}
+
+/// The Nim reader's confirmed kind-0 entries for a span.
+pub fn lookup_correlation_span_json(path: &Path, trace_id: &[u8; 16], span_id: &[u8; 8]) -> MemberAnswer {
+    let c_path = path_to_cstring(path);
+    member_answer("ct_correlation_lookup_span", |b, l| unsafe {
+        ct_correlation_lookup_span(c_path.as_ptr(), trace_id.as_ptr(), 16, span_id.as_ptr(), 8, b, l)
+    })
+}
+
+/// The Nim reader's confirmed kind-1 entries for a boundary crossing.
+pub fn lookup_correlation_boundary_json(path: &Path, marker_id: u64, key_value: &[u8]) -> MemberAnswer {
+    let c_path = path_to_cstring(path);
+    member_answer("ct_correlation_lookup_boundary", |b, l| unsafe {
+        ct_correlation_lookup_boundary(c_path.as_ptr(), marker_id, key_value.as_ptr(), key_value.len(), b, l)
+    })
+}
+
+/// The Nim reader's marker labels, each as lowercase hex.
+pub fn read_marker_labels_json(path: &Path) -> MemberAnswer {
+    let c_path = path_to_cstring(path);
+    member_answer("ct_marker_labels_json", |b, l| unsafe { ct_marker_labels_json(c_path.as_ptr(), b, l) })
 }
 
 // ---------------------------------------------------------------------------
@@ -2523,6 +2611,16 @@ impl NimTraceWriter {
             return Err(last_error().into());
         }
         Ok(PathId(0))
+    }
+
+    /// Keep a `linehits.tc` index from this call on. Call after
+    /// `begin_writing_trace_events`.
+    pub fn enable_line_hits(&mut self) -> Result<(), Box<dyn Error>> {
+        let rc = unsafe { trace_writer_enable_linehits(self.handle) };
+        if rc != 0 {
+            return Err(last_error().into());
+        }
+        Ok(())
     }
 
     /// Opt this writer into recording a per-file line count in every

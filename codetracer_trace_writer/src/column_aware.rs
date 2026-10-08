@@ -677,6 +677,9 @@ pub struct ExecStreamEncoder {
     last_position: u64,
     /// The encoding rule's cursor, reset at every chunk boundary.
     cursor: ChunkCursor,
+    /// The `linehits.tc` index, when the recording keeps one: every position
+    /// record adds its position and exec-record index.
+    line_hits: Option<crate::linehits::LineHitsBuilder>,
 }
 
 /// Compress one chunk payload the way the Nim writer does.
@@ -709,7 +712,18 @@ impl ExecStreamEncoder {
             data_offset: 0,
             last_position: 0,
             cursor: ChunkCursor::new(),
+            line_hits: None,
         }
+    }
+
+    /// Record a line hit for every position record from now on.
+    pub fn enable_line_hits(&mut self) {
+        self.line_hits.get_or_insert_with(crate::linehits::LineHitsBuilder::new);
+    }
+
+    /// The line hits recorded, when they are being recorded.
+    pub fn line_hits(&self) -> Option<&crate::linehits::LineHitsBuilder> {
+        self.line_hits.as_ref()
     }
 
     /// Events written so far.
@@ -727,6 +741,9 @@ impl ExecStreamEncoder {
     pub fn write_position(&mut self, position: u64, column_step: bool) -> Result<(), String> {
         self.cursor.encode_position(position, column_step, &mut self.buffer);
         self.last_position = position;
+        if let Some(hits) = self.line_hits.as_mut() {
+            hits.record_hit(position, self.total_events);
+        }
         self.count_record()
     }
 

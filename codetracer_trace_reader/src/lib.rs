@@ -38,6 +38,9 @@ pub mod span_stream_reader;
 
 pub mod interning_tables_reader;
 
+/// `linehits.tc`, `corrmark.ns` and the marker labels.
+pub mod correlation_reader;
+
 /// Assembles a linear event sequence from the split streams, for containers
 /// that carry no `events.log`.
 pub mod split_stream_reader;

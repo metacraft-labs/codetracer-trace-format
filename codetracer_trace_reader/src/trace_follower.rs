@@ -15,6 +15,7 @@ use codetracer_ctfs::CtfsReader;
 use crate::call_stream_reader::CallStreamReader;
 use crate::interning_tables_reader::InterningTablesReader;
 use crate::io_event_stream_reader::IoEventStreamReader;
+use crate::span_stream_reader::SpanStreamReader;
 use crate::step_map_reader::StepMapReader;
 use crate::step_stream_reader::StepStreamReader;
 use crate::value_stream_reader::ValueStreamReader;
@@ -26,6 +27,7 @@ pub struct TraceFollower {
     values: Option<ValueStreamReader>,
     calls: Option<CallStreamReader>,
     events: Option<IoEventStreamReader>,
+    spans: Option<SpanStreamReader>,
 }
 
 impl TraceFollower {
@@ -38,6 +40,7 @@ impl TraceFollower {
             values: ValueStreamReader::open(&mut ctfs)?,
             calls: CallStreamReader::open(&mut ctfs)?,
             events: IoEventStreamReader::open(&mut ctfs)?,
+            spans: SpanStreamReader::open(&mut ctfs)?,
             ctfs,
         })
     }
@@ -66,6 +69,10 @@ impl TraceFollower {
             Some(r) => r.refresh(ctfs)?,
             None => self.events = IoEventStreamReader::open(ctfs)?,
         }
+        match &mut self.spans {
+            Some(r) => r.refresh(ctfs)?,
+            None => self.spans = SpanStreamReader::open(ctfs)?,
+        }
         Ok(())
     }
 
@@ -92,6 +99,12 @@ impl TraceFollower {
     /// The I/O event stream, once the container has one.
     pub fn events(&mut self) -> Option<&mut IoEventStreamReader> {
         self.events.as_mut()
+    }
+
+    /// The span stream, once the container has one (a writer creates it with
+    /// its first span).
+    pub fn spans(&mut self) -> Option<&mut SpanStreamReader> {
+        self.spans.as_mut()
     }
 
     /// The interning tables as published now. They are small and read whole.

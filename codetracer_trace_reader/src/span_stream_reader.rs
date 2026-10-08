@@ -57,6 +57,8 @@ pub struct SpanStreamReader {
     /// `cumulative[i]`: records in chunks `0..=i`.
     cumulative: Vec<u64>,
     cached: Option<(usize, Vec<Vec<u8>>)>,
+    /// Chunks decoded so far; see [`SpanStreamReader::decodes`].
+    decodes: std::cell::Cell<u64>,
 }
 
 impl SpanStreamReader {
@@ -77,7 +79,9 @@ impl SpanStreamReader {
 
     /// A reader of `spans.dat` (`data`) and `spans.idx` (`idx`) whose chunks
     /// are stored in `form`.
-    pub fn from_members(data: Vec<u8>, idx: &[u8], form: ChunkForm) -> Result<SpanStreamReader, String> {
+    /// Parse `spans.idx` against a `spans.dat` of `data_len` bytes:
+    /// `(chunk_size, offsets, cumulative)`.
+    fn parse_index(idx: &[u8], data_len: usize) -> Result<(u32, Vec<u64>, Vec<u64>), String> {
         if idx.len() < SPANS_INDEX_HEADER_SIZE {
             return Err(format!("{SPANS_INDEX_FILE_NAME} too small for its header"));
         }
@@ -106,7 +110,7 @@ impl SpanStreamReader {
                 u64_at(entries, i * SPANS_INDEX_ENTRY_SIZE),
                 u64_at(entries, i * SPANS_INDEX_ENTRY_SIZE + 8),
             );
-            if o > data.len() as u64 {
+            if o > data_len as u64 {
                 return Err(format!(
                     "{SPANS_INDEX_FILE_NAME}: chunk {i} offset is past the end of {SPANS_DATA_FILE_NAME}"
                 ));
@@ -124,6 +128,11 @@ impl SpanStreamReader {
             offsets.push(o);
             cumulative.push(c);
         }
+        Ok((chunk_size, offsets, cumulative))
+    }
+
+    pub fn from_members(data: Vec<u8>, idx: &[u8], form: ChunkForm) -> Result<SpanStreamReader, String> {
+        let (chunk_size, offsets, cumulative) = Self::parse_index(idx, data.len())?;
         Ok(SpanStreamReader {
             data,
             form,
@@ -131,7 +140,64 @@ impl SpanStreamReader {
             offsets,
             cumulative,
             cached: None,
+            decodes: std::cell::Cell::new(0),
         })
+    }
+
+    /// Follow a container that is being written (`ctfs-container.md` §6):
+    /// extend this reader by the chunks `reader`'s container has published
+    /// since it was opened or last refreshed. Nothing is decoded: the record
+    /// count and each chunk's records come from the index's cumulative column,
+    /// and a chunk may be short anywhere. The chunk held stays held. A re-read
+    /// index that does not extend the one already read -- a changed
+    /// `chunk_size`, a published entry that changed or disappeared -- is
+    /// refused, naming `spans.idx`.
+    pub fn refresh(&mut self, reader: &mut CtfsReader) -> Result<(), String> {
+        let mut retried = false;
+        let (data, idx) = loop {
+            let idx = reader
+                .read_file(SPANS_INDEX_FILE_NAME)
+                .map_err(|e| format!("failed to read {SPANS_INDEX_FILE_NAME}: {e:?}"))?;
+            let data = reader
+                .read_file(SPANS_DATA_FILE_NAME)
+                .map_err(|e| format!("failed to read {SPANS_DATA_FILE_NAME}: {e:?}"))?;
+            // An index entry read before its chunk's root entry was published
+            // is read again once the root directory is.
+            let n = idx.len().saturating_sub(SPANS_INDEX_HEADER_SIZE) / SPANS_INDEX_ENTRY_SIZE;
+            let last = (n > 0).then(|| u64_at(&idx[SPANS_INDEX_HEADER_SIZE..], (n - 1) * SPANS_INDEX_ENTRY_SIZE));
+            if retried || last.is_none_or(|o| o as usize <= data.len()) {
+                break (data, idx);
+            }
+            reader.refresh().map_err(|e| e.to_string())?;
+            retried = true;
+        };
+        let (chunk_size, offsets, cumulative) = Self::parse_index(&idx, data.len())?;
+        if chunk_size != self.chunk_size {
+            return Err(format!(
+                "{SPANS_INDEX_FILE_NAME}: chunk_size changed from {} to {chunk_size} while the container was followed",
+                self.chunk_size
+            ));
+        }
+        if offsets.len() < self.offsets.len() {
+            return Err(format!(
+                "{SPANS_INDEX_FILE_NAME}: {} published chunk(s) disappeared while the container was followed",
+                self.offsets.len() - offsets.len()
+            ));
+        }
+        if let Some(k) = (0..self.offsets.len()).find(|&k| offsets[k] != self.offsets[k] || cumulative[k] != self.cumulative[k]) {
+            return Err(format!(
+                "{SPANS_INDEX_FILE_NAME}: published chunk {k} changed while the container was followed"
+            ));
+        }
+        self.data = data;
+        self.offsets = offsets;
+        self.cumulative = cumulative;
+        Ok(())
+    }
+
+    /// How many chunks this reader has decoded.
+    pub fn decodes(&self) -> u64 {
+        self.decodes.get()
     }
 
     /// Records in sealed chunks; an open record and its settled one count as
@@ -194,6 +260,7 @@ impl SpanStreamReader {
 
     fn decode_chunk(&self, chunk: usize) -> Result<Vec<Vec<u8>>, String> {
         let (start, end) = self.chunk_range(chunk)?;
+        self.decodes.set(self.decodes.get() + 1);
         if start == end {
             return Ok(Vec::new());
         }

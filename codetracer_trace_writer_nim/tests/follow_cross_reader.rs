@@ -79,6 +79,8 @@ macro_rules! each {
 struct Recording {
     w: AnyWriter,
     ct: PathBuf,
+    /// The crossing [`Recording::spans`] has open.
+    crossing: Option<u64>,
 }
 
 impl Recording {
@@ -101,6 +103,7 @@ impl Recording {
         Recording {
             w,
             ct: dir.join(format!("{PROGRAM}.ct")),
+            crossing: None,
         }
     }
 
@@ -124,7 +127,71 @@ impl Recording {
                     w.register_return(ValueRecord::None { type_id: int });
                 }
             }
-        })
+        });
+    }
+
+    /// Mid-stage span traffic: a request span opened and published, a
+    /// crossing opened and closed (each published at once), and the request
+    /// settled but left buffered, to be sealed by a later stage or at close.
+    fn spans(&mut self, stage: usize, at: usize) {
+        let id = 1000 + stage as u64;
+        let open = (id, true, 0u8, 0u64, "web-request", format!("GET /{stage}"));
+        let settled = (id, false, 1u8, 1u64, "web-request", format!("GET /{stage}"));
+        match at {
+            0 => {
+                self.register_span(open);
+                self.flush_spans();
+            }
+            1 => {
+                let crossing = match &mut self.w {
+                    AnyWriter::Nim(w) => w.begin_crossing("vm").expect("nim begin_crossing"),
+                    AnyWriter::Rust(w) => w.begin_crossing("vm").expect("rust begin_crossing"),
+                };
+                self.crossing = Some(crossing);
+            }
+            2 => {
+                let crossing = self.crossing.take().expect("an open crossing");
+                match &mut self.w {
+                    AnyWriter::Nim(w) => w.end_crossing(crossing).expect("nim end_crossing"),
+                    AnyWriter::Rust(w) => w.end_crossing(crossing).expect("rust end_crossing"),
+                }
+            }
+            _ => self.register_span(settled),
+        }
+    }
+
+    fn register_span(&mut self, (span_id, is_open, status, end_step, span_type, label): (u64, bool, u8, u64, &str, String)) {
+        match &mut self.w {
+            AnyWriter::Nim(w) => w
+                .register_span(&codetracer_trace_writer_nim::SpanRecord {
+                    span_id,
+                    is_open,
+                    status,
+                    end_step,
+                    span_type: span_type.to_string(),
+                    label,
+                    ..Default::default()
+                })
+                .expect("nim register_span"),
+            AnyWriter::Rust(w) => w
+                .register_span(&codetracer_trace_writer::span_stream::SpanRecord {
+                    span_id,
+                    is_open,
+                    status,
+                    end_step,
+                    span_type: span_type.to_string(),
+                    label,
+                    ..Default::default()
+                })
+                .expect("rust register_span"),
+        }
+    }
+
+    fn flush_spans(&mut self) {
+        match &mut self.w {
+            AnyWriter::Nim(w) => w.flush_spans().expect("nim flush_spans"),
+            AnyWriter::Rust(w) => w.flush_spans().expect("rust flush_spans"),
+        }
     }
 
     fn finish(mut self) -> PathBuf {
@@ -144,6 +211,9 @@ struct View {
     calls: u64,
     events: u64,
     positions: Vec<u64>,
+    /// Every sealed span record in append order:
+    /// `(span_id, is_open, status, start_step, end_step, span_type, label)`.
+    spans: Vec<(u64, bool, u64, u64, u64, String, String)>,
 }
 
 fn rust_view(f: &mut TraceFollower) -> View {
@@ -156,12 +226,44 @@ fn rust_view(f: &mut TraceFollower) -> View {
             })
             .collect(),
     };
+    let spans = f.spans().map_or(Vec::new(), |s| {
+        s.read_all_span_records()
+            .expect("rust span read")
+            .into_iter()
+            .map(|r| (r.span_id, r.is_open, u64::from(r.status), r.start_step, r.end_step, r.span_type, r.label))
+            .collect()
+    });
     View {
         steps: positions.len() as u64,
         calls: f.calls().map_or(0, |c| c.count()),
         events: f.events().map_or(0, |e| e.count()),
         positions,
+        spans,
     }
+}
+
+/// The span records the Nim reader decodes from the container at `ct`, as
+/// [`View::spans`]; empty when it has no span stream.
+fn nim_spans(ct: &Path) -> Vec<(u64, bool, u64, u64, u64, String, String)> {
+    let Ok(json) = codetracer_trace_writer_nim::read_span_stream_json(ct, false) else {
+        return Vec::new();
+    };
+    let doc: serde_json::Value = serde_json::from_str(&json).expect("span JSON");
+    doc.as_array()
+        .expect("an array")
+        .iter()
+        .map(|r| {
+            (
+                r["span_id"].as_u64().unwrap(),
+                r["is_open"].as_bool().unwrap(),
+                r["status"].as_u64().unwrap(),
+                r["start_step"].as_u64().unwrap(),
+                r["end_step"].as_u64().unwrap(),
+                r["span_type"].as_str().unwrap().to_string(),
+                r["label"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect()
 }
 
 fn nim_view(h: &NimTraceReaderHandle) -> View {
@@ -176,6 +278,7 @@ fn nim_view(h: &NimTraceReaderHandle) -> View {
         calls: h.call_count(),
         events: h.event_count(),
         positions,
+        spans: Vec::new(),
     }
 }
 
@@ -191,8 +294,12 @@ fn agree(writer: Writer, when: &str, ct: &Path, rust: &mut TraceFollower, nim: &
     let followed = rust_view(rust);
     let fresh = rust_view(&mut TraceFollower::open(ct).expect("rust fresh open"));
     assert_eq!(followed, fresh, "{writer:?} {when}: the refreshed Rust reader differs from a fresh one");
-    let nim_followed = nim_view(nim);
-    let nim_fresh = nim_view(&NimTraceReaderHandle::open(path_str(ct)).expect("nim fresh open"));
+    // The Nim reader handle exposes no span stream; its spans are read with
+    // `ct_spans_json`, which opens the container at this moment.
+    let mut nim_followed = nim_view(nim);
+    nim_followed.spans = nim_spans(ct);
+    let mut nim_fresh = nim_view(&NimTraceReaderHandle::open(path_str(ct)).expect("nim fresh open"));
+    nim_fresh.spans = nim_followed.spans.clone();
     assert_eq!(
         nim_followed, nim_fresh,
         "{writer:?} {when}: the refreshed Nim reader differs from a fresh one"
@@ -220,6 +327,64 @@ fn follow_alike(writer: Writer) {
     rec.finish();
     let view = agree(writer, "after close", &ct, &mut rust, &mut nim);
     assert!(view.steps > seen, "{writer:?}: the steps sealed at close were not followed");
+}
+
+/// Follow a recording that registers request spans and crossings mid-run,
+/// checking at every point where span traffic happened.
+fn follow_spans_alike(writer: Writer) {
+    let dir = tempfile::tempdir().unwrap();
+    let mut rec = Recording::begin(writer, dir.path());
+    rec.stage(0);
+    let ct = rec.ct.clone();
+    let mut rust = TraceFollower::open(&ct).expect("rust follower open");
+    let mut nim = NimTraceReaderHandle::open(path_str(&ct)).expect("nim open");
+    assert!(agree(writer, "before any span", &ct, &mut rust, &mut nim).spans.is_empty());
+    let mut seen = 0;
+    for stage in 1..STAGES {
+        for at in 0..4 {
+            if at == 1 || at == 2 {
+                rec.stage(stage);
+            }
+            rec.spans(stage, at);
+            let view = agree(writer, &format!("stage {stage}, span step {at}"), &ct, &mut rust, &mut nim);
+            assert!(view.spans.len() >= seen, "{writer:?}: sealed span records went backwards");
+            if at < 3 {
+                assert!(
+                    view.spans.len() > seen,
+                    "{writer:?} stage {stage} step {at}: a published span record was not followed"
+                );
+            } else {
+                assert_eq!(view.spans.len(), seen, "{writer:?} stage {stage}: a buffered span record was exposed");
+            }
+            seen = view.spans.len();
+        }
+    }
+    // Nothing new: the span reader decodes nothing at the refresh.
+    let decodes = rust.spans().expect("spans").decodes();
+    rust.refresh().expect("refresh");
+    assert_eq!(rust.spans().unwrap().decodes(), decodes, "a refresh decoded span chunks");
+    rec.finish();
+    let view = agree(writer, "after close", &ct, &mut rust, &mut nim);
+    assert!(view.spans.len() > seen, "{writer:?}: the span records sealed at close were not followed");
+    let settled: Vec<_> = view.spans.iter().filter(|s| !s.1).collect();
+    assert_eq!(
+        settled.len(),
+        2 * (STAGES - 1),
+        "{writer:?}: a request and a crossing settle per stage: {:?}",
+        view.spans
+    );
+}
+
+#[test]
+fn both_readers_follow_spans_and_crossings_of_a_nim_written_container_alike() {
+    let _g = nim_lock();
+    follow_spans_alike(Writer::Nim);
+}
+
+#[test]
+fn both_readers_follow_spans_and_crossings_of_a_rust_written_container_alike() {
+    let _g = nim_lock();
+    follow_spans_alike(Writer::Rust);
 }
 
 #[test]
@@ -380,4 +545,31 @@ fn a_published_chunk_that_moved_is_refused_by_both() {
             ct[block * 4096 + 4] = 1;
         });
     }
+}
+
+#[test]
+fn a_changed_span_index_is_refused_by_the_rust_follower() {
+    // The Nim reader handle exposes no span stream to follow; `ct_spans_json`
+    // decodes the container as it is now, so only the Rust follower holds a
+    // span index to compare against.
+    let _g = nim_lock();
+    let dir = tempfile::tempdir().unwrap();
+    let mut rec = Recording::begin(Writer::Rust, dir.path());
+    rec.stage(0);
+    rec.spans(1, 0);
+    rec.spans(1, 1);
+    let copy = dir.path().join("followed.ct");
+    std::fs::copy(&rec.ct, &copy).unwrap();
+    let mut rust = TraceFollower::open(&copy).expect("open");
+    assert_eq!(rust.spans().expect("spans").count(), 2);
+    let mut ct = std::fs::read(&copy).unwrap();
+    let at = root_entry(&ct, "spans.idx");
+    let map = u64::from_le_bytes(ct[at + 8..at + 16].try_into().unwrap());
+    let block = (map & !(1 << 63)) as usize;
+    // Entry 0's cumulative record count, 1, becomes 2.
+    ct[block * 4096 + 8 + 8] = 2;
+    std::fs::write(&copy, &ct).unwrap();
+    let e = rust.refresh().expect_err("a changed span index was followed");
+    assert!(e.contains("spans.idx"), "the refusal does not name spans.idx: {e}");
+    drop(rec);
 }

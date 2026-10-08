@@ -672,6 +672,25 @@ impl CtfsTraceWriter {
     /// first span creates. A span may be appended open and again settled
     /// under the same id; readers keep the last record. Refused for a record
     /// the stream cannot carry (`span_stream::encode_span_record`).
+    /// [`register_return_exception`](Self::register_return_exception) for an
+    /// exception already encoded as CBOR, stored verbatim.
+    pub fn register_return_exception_cbor(&mut self, exception: Vec<u8>) -> Result<(), String> {
+        let Some(builder) = self.call_stream_builder.as_mut() else {
+            return Err("register_return_exception called before begin_writing_trace_events".to_string());
+        };
+        if builder.open_calls() == 0 {
+            return Err("register_return_exception: call stack underflow: return without matching call".to_string());
+        }
+        builder.stage_exception(exception);
+        AbstractTraceWriter::register_return(
+            self,
+            codetracer_trace_types::ValueRecord::None {
+                type_id: codetracer_trace_types::TypeId(0),
+            },
+        );
+        Ok(())
+    }
+
     pub fn register_span(&mut self, span: &crate::span_stream::SpanRecord) -> Result<(), String> {
         if self.ctfs_writer.is_none() {
             return Err("register_span called before begin_writing_trace_events".to_string());

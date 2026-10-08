@@ -70,6 +70,87 @@ const char *trace_writer_build_config(void);
 void codetracer_trace_writer_init(void);
 
 /**
+ * The span records of the container at `path`, as a JSON array: settled
+ * (last record wins, by span id) when `settled != 0`, else every record in
+ * append order. NULL on failure, a container with no span stream included.
+ *
+ * # Safety
+ * `path` is NULL or NUL-terminated; `out_len` is NULL or writable.
+ */
+uint8_t *ct_spans_json(const char *path, int32_t settled, uintptr_t *out_len);
+
+/**
+ * The span-type index of the container at `path`, as a JSON array of
+ * `{"type_id","name","span_ids"}`. NULL on failure, a container with no
+ * span-type index included.
+ *
+ * # Safety
+ * `path` is NULL or NUL-terminated; `out_len` is NULL or writable.
+ */
+uint8_t *ct_span_types_json(const char *path, uintptr_t *out_len);
+
+/**
+ * `[{"position":P,"steps":[s,...]},...]` in position order; 1 when the
+ * container keeps no line-hit index.
+ *
+ * # Safety
+ * `path` is NULL or NUL-terminated; `out_buf` and `out_len` are NULL or
+ * writable.
+ */
+int32_t ct_linehits_json(const char *path, uint8_t **out_buf, uintptr_t *out_len);
+
+/**
+ * Every correlation-index entry, in key order and bucket order; 1 when the
+ * container is not indexed.
+ *
+ * # Safety
+ * `path` is NULL or NUL-terminated; `out_buf` and `out_len` are NULL or
+ * writable.
+ */
+int32_t ct_correlation_index_json(const char *path, uint8_t **out_buf, uintptr_t *out_len);
+
+/**
+ * The confirmed kind-0 entries for `(trace_id, span_id)`, wire bytes; 1
+ * when the container is not indexed.
+ *
+ * # Safety
+ * `path` is NULL or NUL-terminated; both `(pointer, length)` pairs are
+ * readable or NULL/0; `out_buf` and `out_len` are NULL or writable.
+ */
+int32_t ct_correlation_lookup_span(const char *path,
+                                   const uint8_t *trace_id,
+                                   uintptr_t trace_id_len,
+                                   const uint8_t *span_id,
+                                   uintptr_t span_id_len,
+                                   uint8_t **out_buf,
+                                   uintptr_t *out_len);
+
+/**
+ * The confirmed kind-1 entries for `(marker_id, key_value)`; 1 when the
+ * container is not indexed.
+ *
+ * # Safety
+ * `path` is NULL or NUL-terminated; `(key_value, key_value_len)` is readable
+ * or NULL/0; `out_buf` and `out_len` are NULL or writable.
+ */
+int32_t ct_correlation_lookup_boundary(const char *path,
+                                       uint64_t marker_id,
+                                       const uint8_t *key_value,
+                                       uintptr_t key_value_len,
+                                       uint8_t **out_buf,
+                                       uintptr_t *out_len);
+
+/**
+ * The marker labels in id order, each as the lowercase hex of its bytes; 1
+ * when the container declares no marker.
+ *
+ * # Safety
+ * `path` is NULL or NUL-terminated; `out_buf` and `out_len` are NULL or
+ * writable.
+ */
+int32_t ct_marker_labels_json(const char *path, uint8_t **out_buf, uintptr_t *out_len);
+
+/**
  * Encode a version 6 `meta.dat` into a buffer the caller releases with
  * [`ct_free_buffer`]. A NULL or empty `recording_id` mints one.
  *
@@ -632,8 +713,8 @@ int32_t ct_value_write_bigint(struct ValueEncoder *h,
 const uint8_t *ct_value_get_bytes(struct ValueEncoder *h, uintptr_t *out_len);
 
 /**
- * Create a writer. `format` 2 (`FFI_TRACE_FORMAT_BINARY`) is the split-stream
- * container; 0 and 1 the non-container JSON and binary-v0 files.
+ * Create a writer. `format` must be 2 (`FFI_TRACE_FORMAT_BINARY`), the
+ * split-stream container; any other is refused, naming it.
  *
  * # Safety
  * `program` is NULL or NUL-terminated.
@@ -659,10 +740,13 @@ void trace_writer_free(struct TraceWriterHandle *handle);
 int32_t trace_writer_close(struct TraceWriterHandle *handle);
 
 /**
+ * The metadata and paths are written into the container; these succeed on
+ * any handle and exist so a host written for separate files links.
+ *
  * # Safety
- * `handle` is NULL or a live writer; `path` is NULL or NUL-terminated.
+ * `handle` is NULL or a live writer.
  */
-int32_t trace_writer_begin_metadata(struct TraceWriterHandle *handle, const char *path);
+int32_t trace_writer_begin_metadata(struct TraceWriterHandle *handle, const char *_path);
 
 /**
  * # Safety
@@ -672,9 +756,9 @@ int32_t trace_writer_finish_metadata(struct TraceWriterHandle *handle);
 
 /**
  * # Safety
- * `handle` is NULL or a live writer; `path` is NULL or NUL-terminated.
+ * `handle` is NULL or a live writer.
  */
-int32_t trace_writer_begin_paths(struct TraceWriterHandle *handle, const char *path);
+int32_t trace_writer_begin_paths(struct TraceWriterHandle *handle, const char *_path);
 
 /**
  * # Safety
@@ -973,7 +1057,7 @@ void trace_writer_register_step(struct TraceWriterHandle *handle, const char *pa
 void ct_assignment_with_column(struct TraceWriterHandle *handle,
                                const char *path,
                                int64_t line,
-                               int64_t column,
+                               int64_t _column,
                                int32_t has_column);
 
 /**
@@ -1271,5 +1355,170 @@ void trace_writer_register_raise(struct TraceWriterHandle *handle,
  * `handle` is NULL or a live writer.
  */
 void trace_writer_register_catch(struct TraceWriterHandle *handle, uint64_t exception_type_id);
+
+/**
+ * The innermost call exits by an exception: `exception_len` (> 0) bytes of
+ * CBOR, recorded verbatim as its call record's `exception`.
+ *
+ * # Safety
+ * `handle` is NULL or a live writer; `(exception_cbor, exception_len)` is
+ * readable or NULL/0.
+ */
+void trace_writer_register_return_exception(struct TraceWriterHandle *handle,
+                                            const uint8_t *exception_cbor,
+                                            uintptr_t exception_len);
+
+/**
+ * Append a span record. 0 on success.
+ *
+ * # Safety
+ * `handle` is NULL or a live writer; the strings are NULL or NUL-terminated;
+ * `metadata_keys` and `metadata_values` hold `metadata_count` strings each.
+ */
+int32_t trace_writer_register_span(struct TraceWriterHandle *handle,
+                                   uint64_t span_id,
+                                   uint64_t parent_span_id,
+                                   uint8_t flags,
+                                   uint8_t status,
+                                   uint64_t start_wall_ns,
+                                   uint64_t end_wall_ns,
+                                   uint64_t process_ord,
+                                   uint64_t thread_id,
+                                   uint64_t start_step,
+                                   uint64_t end_step,
+                                   const char *external_recording,
+                                   const char *external_path,
+                                   const char *span_type,
+                                   const char *label,
+                                   uint8_t structural,
+                                   const char *const *metadata_keys,
+                                   const char *const *metadata_values,
+                                   uintptr_t metadata_count);
+
+/**
+ * Seal the current partial span chunk. 0 on success, and on a writer that
+ * has not begun.
+ *
+ * # Safety
+ * `handle` is NULL or a live writer.
+ */
+int32_t trace_writer_flush_spans(struct TraceWriterHandle *handle);
+
+/**
+ * Open a crossing span and return its span id; 0 on failure.
+ *
+ * # Safety
+ * `handle` is NULL or a live writer; `span_type` is NULL or NUL-terminated.
+ */
+uint64_t trace_writer_begin_crossing(struct TraceWriterHandle *handle, const char *span_type);
+
+/**
+ * Settle the innermost open crossing, `span_id`. 0 on success.
+ *
+ * # Safety
+ * `handle` is NULL or a live writer.
+ */
+int32_t trace_writer_end_crossing(struct TraceWriterHandle *handle, uint64_t span_id);
+
+/**
+ * Intern a marker label and write its id to `*out_id`. 0 on success; a
+ * refusal returns 1 without a message.
+ *
+ * # Safety
+ * `handle` is NULL or a live writer; `(label, label_len)` is readable or
+ * NULL/0; `out_id` is NULL or writable.
+ */
+int32_t trace_writer_ensure_marker_id(struct TraceWriterHandle *handle,
+                                      const uint8_t *label,
+                                      uintptr_t label_len,
+                                      uint64_t *out_id);
+
+/**
+ * Declare a boundary crossing against an interned label id. 0 on success; a
+ * refusal returns 1 without a message.
+ *
+ * # Safety
+ * `handle` is NULL or a live writer; each `(pointer, length)` pair is
+ * readable or NULL/0.
+ */
+int32_t trace_writer_mark_correlation_by_id(struct TraceWriterHandle *handle,
+                                            uint64_t marker_id,
+                                            const uint8_t *boundary_label,
+                                            uintptr_t boundary_label_len,
+                                            const uint8_t *direction,
+                                            uintptr_t direction_len,
+                                            const uint8_t *key_value,
+                                            uintptr_t key_value_len,
+                                            const uint8_t *show_value,
+                                            uintptr_t show_value_len,
+                                            const uint8_t *description,
+                                            uintptr_t description_len,
+                                            const uint8_t *key_text,
+                                            uintptr_t key_text_len,
+                                            const uint8_t *show_text,
+                                            uintptr_t show_text_len);
+
+/**
+ * Intern `boundary_id` and declare a boundary crossing against it.
+ *
+ * # Safety
+ * As [`trace_writer_mark_correlation_by_id`].
+ */
+int32_t trace_writer_mark_correlation(struct TraceWriterHandle *handle,
+                                      const uint8_t *direction,
+                                      uintptr_t direction_len,
+                                      const uint8_t *boundary_id,
+                                      uintptr_t boundary_id_len,
+                                      const uint8_t *key_value,
+                                      uintptr_t key_value_len,
+                                      const uint8_t *show_value,
+                                      uintptr_t show_value_len,
+                                      const uint8_t *description,
+                                      uintptr_t description_len,
+                                      const uint8_t *key_text,
+                                      uintptr_t key_text_len,
+                                      const uint8_t *show_text,
+                                      uintptr_t show_text_len);
+
+/**
+ * Declare that the recording covers `(trace_id, span_id)`, given as wire
+ * bytes. 0 on success.
+ *
+ * # Safety
+ * `handle` is NULL or a live writer; both `(pointer, length)` pairs are
+ * readable.
+ */
+int32_t trace_writer_mark_span_coverage(struct TraceWriterHandle *handle,
+                                        const uint8_t *trace_id,
+                                        uintptr_t trace_id_len,
+                                        const uint8_t *span_id,
+                                        uintptr_t span_id_len,
+                                        uint64_t wall_time_unix_ns,
+                                        uint64_t monotonic_time_ns);
+
+/**
+ * [`trace_writer_mark_span_coverage`] with the ids in hex: 32 and 16 hex
+ * characters, either case.
+ *
+ * # Safety
+ * `handle` is NULL or a live writer; both `(pointer, length)` pairs are
+ * readable or NULL/0.
+ */
+int32_t trace_writer_mark_span_coverage_hex(struct TraceWriterHandle *handle,
+                                            const uint8_t *trace_id_hex,
+                                            uintptr_t trace_id_hex_len,
+                                            const uint8_t *span_id_hex,
+                                            uintptr_t span_id_hex_len,
+                                            uint64_t wall_time_unix_ns,
+                                            uint64_t monotonic_time_ns);
+
+/**
+ * Keep a `linehits.tc` index from now on, the buffered step included. 0 on
+ * success.
+ *
+ * # Safety
+ * `handle` is NULL or a live writer.
+ */
+int32_t trace_writer_enable_linehits(struct TraceWriterHandle *handle);
 
 #endif  /* CODETRACER_TRACE_WRITER_H */

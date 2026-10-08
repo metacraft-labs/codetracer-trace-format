@@ -3,9 +3,7 @@
 //! `FFI_TRACE_FORMAT_BINARY` writes a split-stream CTFS container — the one
 //! the Nim library writes, byte for byte — to `<dir>/<program stem>.ct`, `dir`
 //! being the directory of the path `trace_writer_begin_events` is given, or in
-//! memory after `trace_writer_begin_in_memory`. The other two formats write
-//! the JSON and binary-v0 files of this repository's non-container writer;
-//! the calls that need a container refuse on them.
+//! memory after `trace_writer_begin_in_memory`. It is the only format.
 //!
 //! # The step being buffered
 //!
@@ -22,16 +20,15 @@ use std::os::raw::c_char;
 use std::path::{Path, PathBuf};
 
 use codetracer_trace_types::{
-    AssignCellRecord, AssignCompoundItemRecord, AssignmentRecord, BindVariableRecord, CallKey, CellValueRecord, CompoundValueRecord, EventLogKind,
-    FullValueRecord, FunctionId, Line, PassBy, PathId, Place, RValue, ThreadId, TraceLowLevelEvent, TypeKind, ValueRecord, VariableCellRecord,
-    VariableId,
+    AssignCellRecord, AssignCompoundItemRecord, AssignmentRecord, BindVariableRecord, CallKey, CellValueRecord, CompoundValueRecord, FullValueRecord,
+    FunctionId, Line, PassBy, PathId, Place, RValue, ThreadId, TraceLowLevelEvent, TypeKind, VariableCellRecord, VariableId,
 };
 use codetracer_trace_writer::abstract_trace_writer::AbstractTraceWriter;
 use codetracer_trace_writer::ctfs_writer::{CtfsTraceWriter, INVALID_PATH_ID};
 use codetracer_trace_writer::meta_dat::{AtomicMode, FilterProvenance, LayoutSnapshot, McrFields, MetaDatBlocks, ReplayLaunchFields, TickSource};
+use codetracer_trace_writer::span_stream::{SPAN_FLAG_EXTERNAL, SPAN_FLAG_OPEN, SPAN_STATUS_ERROR, SpanRecord};
 use codetracer_trace_writer::step_stream::SourceReloadChange;
 use codetracer_trace_writer::trace_writer::TraceWriter;
-use codetracer_trace_writer::{TraceEventsFileFormat, create_trace_writer};
 use num_traits::FromPrimitive;
 
 use crate::meta::validate_recording_id;
@@ -41,8 +38,7 @@ use crate::{bytes, cstr_bytes, cstr_string, guarded, path_from_bytes, set_error,
 /// The failure return of the path-id calls.
 pub const CT_TW_INVALID_PATH_ID: u64 = u64::MAX;
 
-const FORMAT_JSON: i32 = 0;
-const FORMAT_BINARY_V0: i32 = 1;
+/// `FFI_TRACE_FORMAT_BINARY`, the only format: the split-stream container.
 const FORMAT_BINARY: i32 = 2;
 
 /// A value or value-stream event waiting for the step it belongs to.
@@ -58,7 +54,6 @@ pub struct TraceWriterHandle {
     /// The first failure of a call that could not report it; the close
     /// reports it.
     failure: Option<String>,
-    format: i32,
     program: String,
     workdir: String,
     args: Vec<String>,
@@ -69,8 +64,6 @@ pub struct TraceWriterHandle {
     in_memory: bool,
     /// The container writer, once begun.
     ctfs: Option<CtfsTraceWriter>,
-    /// The non-container writer, for the JSON and binary-v0 formats.
-    legacy: Option<Box<dyn TraceWriter + Send>>,
     closed: bool,
     container: Vec<u8>,
     container_ready: bool,
@@ -89,10 +82,6 @@ pub struct TraceWriterHandle {
 impl TraceWriterHandle {
     pub(crate) fn latch(&mut self, msg: String) {
         self.failure.get_or_insert(msg);
-    }
-
-    fn multi(&self) -> bool {
-        self.format == FORMAT_BINARY
     }
 }
 
@@ -271,8 +260,8 @@ fn close_container(h: &mut TraceWriterHandle, who: &str) -> i32 {
 // Lifecycle
 // ---------------------------------------------------------------------------
 
-/// Create a writer. `format` 2 (`FFI_TRACE_FORMAT_BINARY`) is the split-stream
-/// container; 0 and 1 the non-container JSON and binary-v0 files.
+/// Create a writer. `format` must be 2 (`FFI_TRACE_FORMAT_BINARY`), the
+/// split-stream container; any other is refused, naming it.
 ///
 /// # Safety
 /// `program` is NULL or NUL-terminated.
@@ -280,18 +269,15 @@ fn close_container(h: &mut TraceWriterHandle, who: &str) -> i32 {
 pub unsafe extern "C" fn trace_writer_new(program: *const c_char, format: i32) -> *mut TraceWriterHandle {
     guarded("trace_writer_new", None, std::ptr::null_mut(), || {
         let program = unsafe { cstr_string(program) };
-        let legacy = match format {
-            FORMAT_BINARY => None,
-            FORMAT_JSON => Some(create_trace_writer(&program, &[], TraceEventsFileFormat::Json)),
-            FORMAT_BINARY_V0 => Some(create_trace_writer(&program, &[], TraceEventsFileFormat::BinaryV0)),
-            other => {
-                set_error(&format!("trace_writer_new: unknown format {other}"));
-                return std::ptr::null_mut();
-            }
-        };
+        if format != FORMAT_BINARY {
+            set_error(&format!(
+                "trace_writer_new: format {format} selects the combined `events.log` stream, which is not part of the trace \
+                 format; use FFI_TRACE_FORMAT_BINARY"
+            ));
+            return std::ptr::null_mut();
+        }
         Box::into_raw(Box::new(TraceWriterHandle {
             failure: None,
-            format,
             program,
             workdir: String::new(),
             args: Vec::new(),
@@ -301,7 +287,6 @@ pub unsafe extern "C" fn trace_writer_new(program: *const c_char, format: i32) -
             meta_blocks: MetaDatBlocks::default(),
             in_memory: false,
             ctfs: None,
-            legacy,
             closed: false,
             container: Vec::new(),
             container_ready: false,
@@ -327,7 +312,7 @@ pub unsafe extern "C" fn trace_writer_free(handle: *mut TraceWriterHandle) {
             return;
         }
         let mut h = unsafe { Box::from_raw(handle) };
-        if h.multi() && h.ctfs.is_some() && !h.closed {
+        if h.ctfs.is_some() && !h.closed {
             if flush_pending_step(&mut h).is_err() {
                 set_error("trace_writer_free: failed to flush the pending step");
             }
@@ -354,14 +339,10 @@ pub unsafe extern "C" fn trace_writer_free(handle: *mut TraceWriterHandle) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_close(handle: *mut TraceWriterHandle) -> i32 {
     with_handle_or("trace_writer_close", handle, false, 1, "NULL handle", |h| {
-        let rc = if h.multi() {
-            if h.ctfs.is_none() || h.closed {
-                0
-            } else {
-                close_container(h, "trace_writer_close")
-            }
-        } else {
+        let rc = if h.ctfs.is_none() || h.closed {
             0
+        } else {
+            close_container(h, "trace_writer_close")
         };
         if rc == 0
             && let Some(failure) = &h.failure
@@ -375,66 +356,35 @@ pub unsafe extern "C" fn trace_writer_close(handle: *mut TraceWriterHandle) -> i
     })
 }
 
+/// The metadata and paths are written into the container; these succeed on
+/// any handle and exist so a host written for separate files links.
+///
 /// # Safety
-/// `handle` is NULL or a live writer; `path` is NULL or NUL-terminated.
+/// `handle` is NULL or a live writer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn trace_writer_begin_metadata(handle: *mut TraceWriterHandle, path: *const c_char) -> i32 {
-    with_handle_or("trace_writer_begin_metadata", handle, false, 1, "NULL handle", |h| {
-        match h.legacy.as_mut() {
-            Some(w) => legacy_result(TraceWriter::begin_writing_trace_metadata(
-                &mut **w,
-                &path_from_bytes(unsafe { cstr_bytes(path) }),
-            )),
-            None => 0,
-        }
-    })
+pub unsafe extern "C" fn trace_writer_begin_metadata(handle: *mut TraceWriterHandle, _path: *const c_char) -> i32 {
+    with_handle_or("trace_writer_begin_metadata", handle, false, 1, "NULL handle", |_| 0)
 }
 
 /// # Safety
 /// `handle` is NULL or a live writer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_finish_metadata(handle: *mut TraceWriterHandle) -> i32 {
-    with_handle_or("trace_writer_finish_metadata", handle, false, 1, "NULL handle", |h| {
-        match h.legacy.as_mut() {
-            Some(w) => legacy_result(TraceWriter::finish_writing_trace_metadata(&mut **w)),
-            None => 0,
-        }
-    })
+    with_handle_or("trace_writer_finish_metadata", handle, false, 1, "NULL handle", |_| 0)
 }
 
 /// # Safety
-/// `handle` is NULL or a live writer; `path` is NULL or NUL-terminated.
+/// `handle` is NULL or a live writer.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn trace_writer_begin_paths(handle: *mut TraceWriterHandle, path: *const c_char) -> i32 {
-    with_handle_or("trace_writer_begin_paths", handle, false, 1, "NULL handle", |h| match h.legacy.as_mut() {
-        Some(w) => legacy_result(TraceWriter::begin_writing_trace_paths(
-            &mut **w,
-            &path_from_bytes(unsafe { cstr_bytes(path) }),
-        )),
-        None => 0,
-    })
+pub unsafe extern "C" fn trace_writer_begin_paths(handle: *mut TraceWriterHandle, _path: *const c_char) -> i32 {
+    with_handle_or("trace_writer_begin_paths", handle, false, 1, "NULL handle", |_| 0)
 }
 
 /// # Safety
 /// `handle` is NULL or a live writer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_finish_paths(handle: *mut TraceWriterHandle) -> i32 {
-    with_handle_or("trace_writer_finish_paths", handle, false, 1, "NULL handle", |h| {
-        match h.legacy.as_mut() {
-            Some(w) => legacy_result(TraceWriter::finish_writing_trace_paths(&mut **w)),
-            None => 0,
-        }
-    })
-}
-
-fn legacy_result(r: Result<(), Box<dyn std::error::Error>>) -> i32 {
-    match r {
-        Ok(()) => 0,
-        Err(e) => {
-            set_error(&e.to_string());
-            1
-        }
-    }
+    with_handle_or("trace_writer_finish_paths", handle, false, 1, "NULL handle", |_| 0)
 }
 
 /// A container writer for the handle's program, identity and settings.
@@ -465,9 +415,6 @@ pub unsafe extern "C" fn trace_writer_begin_events(handle: *mut TraceWriterHandl
             return 1;
         }
         let events_path = path_from_bytes(unsafe { cstr_bytes(path) });
-        if let Some(w) = h.legacy.as_mut() {
-            return legacy_result(TraceWriter::begin_writing_trace_events(&mut **w, &events_path));
-        }
         if h.ctfs.is_some() {
             return 0;
         }
@@ -494,10 +441,6 @@ pub unsafe extern "C" fn trace_writer_begin_events(handle: *mut TraceWriterHandl
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_begin_in_memory(handle: *mut TraceWriterHandle) -> i32 {
     with_handle_or("trace_writer_begin_in_memory", handle, false, 1, "NULL handle", |h| {
-        if !h.multi() {
-            set_error("trace_writer_begin_in_memory: only the binary (split-stream) format writes a container in memory");
-            return 1;
-        }
         if h.ctfs.is_some() {
             if !h.in_memory {
                 set_error("this writer is already open on a file; in-memory mode must be chosen before the first begin");
@@ -520,12 +463,7 @@ pub unsafe extern "C" fn trace_writer_begin_in_memory(handle: *mut TraceWriterHa
 /// `handle` is NULL or a live writer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_finish_events(handle: *mut TraceWriterHandle) -> i32 {
-    with_handle_or("trace_writer_finish_events", handle, false, 1, "NULL handle", |h| {
-        match h.legacy.as_mut() {
-            Some(w) => legacy_result(TraceWriter::finish_writing_trace_events(&mut **w)),
-            None => 0,
-        }
-    })
+    with_handle_or("trace_writer_finish_events", handle, false, 1, "NULL handle", |_| 0)
 }
 
 /// # Safety
@@ -567,10 +505,6 @@ pub unsafe extern "C" fn trace_writer_container_ptr(handle: *mut TraceWriterHand
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_set_compact_threshold(handle: *mut TraceWriterHandle, raw_bytes: u64) -> i32 {
     with_handle_or("trace_writer_set_compact_threshold", handle, false, 1, "NULL handle", |h| {
-        if !h.multi() {
-            set_error("the container profile is chosen only in CTFS multi-stream mode");
-            return 1;
-        }
         h.compact_threshold = raw_bytes;
         if let Some(w) = h.ctfs.as_mut() {
             w.set_compact_threshold(raw_bytes);
@@ -613,9 +547,6 @@ pub unsafe extern "C" fn trace_writer_set_recording_id(handle: *mut TraceWriterH
 pub unsafe extern "C" fn trace_writer_set_workdir(handle: *mut TraceWriterHandle, workdir: *const c_char) {
     with_handle("trace_writer_set_workdir", handle, true, (), (), |h| {
         let wd = unsafe { cstr_string(workdir) };
-        if let Some(w) = h.legacy.as_mut() {
-            TraceWriter::set_workdir(&mut **w, Path::new(&wd));
-        }
         if let Some(w) = h.ctfs.as_mut() {
             if w.recording_started() {
                 set_error("trace_writer_set_workdir: setWorkdir after the first record: meta.dat is already written");
@@ -662,7 +593,7 @@ pub unsafe extern "C" fn trace_writer_set_args(handle: *mut TraceWriterHandle, a
 pub unsafe extern "C" fn trace_writer_set_interning_qualifier(handle: *mut TraceWriterHandle, qualifier: *const c_char) {
     with_handle("trace_writer_set_interning_qualifier", handle, true, (), (), |h| {
         h.qualifier = unsafe { cstr_string(qualifier) };
-        if h.multi() && h.ctfs.is_some() && !h.qualifier.is_empty() {
+        if h.ctfs.is_some() && !h.qualifier.is_empty() {
             set_error(
                 "trace_writer_set_interning_qualifier: a qualified interning namespace is written only by a writer that shares \
                  a container with the multi-core recorder; a standalone container's interned strings are bare",
@@ -671,11 +602,7 @@ pub unsafe extern "C" fn trace_writer_set_interning_qualifier(handle: *mut Trace
     })
 }
 
-fn meta_block_writer(h: &mut TraceWriterHandle, what: &str) -> Option<()> {
-    if !h.multi() {
-        set_error(&format!("{what} only supported in CTFS multi-stream mode"));
-        return None;
-    }
+fn meta_block_writer(h: &mut TraceWriterHandle) -> Option<()> {
     if h.ctfs.is_none() {
         set_error("writer not ready (call begin_events first)");
         return None;
@@ -722,7 +649,7 @@ pub unsafe extern "C" fn trace_writer_set_mcr_fields(
     hook_strategies_count: usize,
 ) -> i32 {
     with_handle_or("trace_writer_set_mcr_fields", handle, false, 1, "NULL handle", |h| {
-        if meta_block_writer(h, "MCR fields").is_none() {
+        if meta_block_writer(h).is_none() {
             return 1;
         }
         let tick = match tick_source {
@@ -775,7 +702,7 @@ pub unsafe extern "C" fn trace_writer_set_mcr_fields(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_set_replay_launch_fields(handle: *mut TraceWriterHandle, aslr_disabled: i32) -> i32 {
     with_handle_or("trace_writer_set_replay_launch_fields", handle, false, 1, "NULL handle", |h| {
-        if meta_block_writer(h, "replay-launch fields").is_none() {
+        if meta_block_writer(h).is_none() {
             return 1;
         }
         apply_meta_blocks(h, |b| {
@@ -797,7 +724,7 @@ pub unsafe extern "C" fn trace_writer_set_layout_snapshot(
     fingerprint_len: usize,
 ) -> i32 {
     with_handle_or("trace_writer_set_layout_snapshot", handle, false, 1, "NULL handle", |h| {
-        if meta_block_writer(h, "layout snapshot").is_none() {
+        if meta_block_writer(h).is_none() {
             return 1;
         }
         if fingerprint.is_null() && fingerprint_len > 0 {
@@ -828,10 +755,6 @@ pub unsafe extern "C" fn trace_writer_add_filter_provenance(
     sha256_len: usize,
 ) -> i32 {
     with_handle_or("trace_writer_add_filter_provenance", handle, false, 1, "NULL handle", |h| {
-        if !h.multi() {
-            set_error("filter provenance only supported in CTFS multi-stream mode");
-            return 1;
-        }
         if h.ctfs.is_none() {
             set_error("writer not ready (call begin_events first)");
             return 1;
@@ -859,10 +782,6 @@ pub unsafe extern "C" fn trace_writer_add_filter_provenance(
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_record_empty_filter_provenance(handle: *mut TraceWriterHandle) -> i32 {
     with_handle_or("trace_writer_record_empty_filter_provenance", handle, false, 1, "NULL handle", |h| {
-        if !h.multi() {
-            set_error("filter provenance only supported in CTFS multi-stream mode");
-            return 1;
-        }
         if h.ctfs.is_none() {
             set_error("writer not ready (call begin_events first)");
             return 1;
@@ -894,10 +813,6 @@ pub unsafe extern "C" fn ct_write_meta_dat(handle: *mut TraceWriterHandle, _reco
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_declare_source_reload(handle: *mut TraceWriterHandle) -> i32 {
     with_handle_or("trace_writer_declare_source_reload", handle, false, 1, "NULL handle", |h| {
-        if !h.multi() {
-            set_error("trace_writer_declare_source_reload: source reloads are recorded by the multi-stream writer only");
-            return 1;
-        }
         let Some(w) = h.ctfs.as_mut() else {
             set_error("trace_writer_declare_source_reload: writer not ready (call trace_writer_begin_events first)");
             return 1;
@@ -966,11 +881,7 @@ pub unsafe extern "C" fn trace_writer_enable_column_motions_support(handle: *mut
 
 /// The container writer of a multi-stream handle that has begun, or the
 /// failure to report: `prefix` names the entry point.
-fn ready<'a>(h: &'a mut TraceWriterHandle, prefix: &str, legacy_reason: &str) -> Result<&'a mut CtfsTraceWriter, ()> {
-    if !h.multi() {
-        set_error(&format!("{prefix}: the legacy single-stream backend {legacy_reason}"));
-        return Err(());
-    }
+fn ready<'a>(h: &'a mut TraceWriterHandle, prefix: &str) -> Result<&'a mut CtfsTraceWriter, ()> {
     match h.ctfs.as_mut() {
         Some(w) => Ok(w),
         None => {
@@ -991,7 +902,7 @@ pub unsafe extern "C" fn trace_writer_enable_line_count_table(handle: *mut Trace
         1,
         "trace_writer_enable_line_count_table: NULL handle",
         |h| {
-            let Ok(w) = ready(h, "trace_writer_enable_line_count_table", "has no paths.dat to record line counts in") else {
+            let Ok(w) = ready(h, "trace_writer_enable_line_count_table") else {
                 return 1;
             };
             match w.enable_line_count_table() {
@@ -1016,11 +927,7 @@ pub unsafe extern "C" fn trace_writer_register_path_with_line_count(handle: *mut
         1,
         "trace_writer_register_path_with_line_count: NULL handle",
         |h| {
-            let Ok(w) = ready(
-                h,
-                "trace_writer_register_path_with_line_count",
-                "has no paths.dat to record line counts in",
-            ) else {
+            let Ok(w) = ready(h, "trace_writer_register_path_with_line_count") else {
                 return 1;
             };
             match w.register_path_with_line_count(&path_from_bytes(unsafe { cstr_bytes(path) }), line_count) {
@@ -1052,10 +959,6 @@ pub unsafe extern "C" fn trace_writer_register_path_with_line_lengths(
         "trace_writer_register_path_with_line_lengths: NULL handle",
         |h| {
             let p = path_from_bytes(unsafe { cstr_bytes(path) });
-            if let Some(w) = h.legacy.as_mut() {
-                TraceWriter::register_path(&mut **w, &p);
-                return 0;
-            }
             let Some(w) = h.ctfs.as_mut() else {
                 set_error("trace_writer_register_path_with_line_lengths: writer not ready (call trace_writer_begin_events first)");
                 return 1;
@@ -1088,7 +991,7 @@ pub unsafe extern "C" fn trace_writer_register_path_version(handle: *mut TraceWr
         CT_TW_INVALID_PATH_ID,
         "trace_writer_register_path_version: NULL handle",
         |h| {
-            let Ok(w) = ready(h, "trace_writer_register_path_version", "has no paths.dat to version") else {
+            let Ok(w) = ready(h, "trace_writer_register_path_version") else {
                 return CT_TW_INVALID_PATH_ID;
             };
             match w.register_path_version(&path_from_bytes(unsafe { cstr_bytes(path) }), line_count) {
@@ -1114,7 +1017,7 @@ pub unsafe extern "C" fn trace_writer_current_path_id(handle: *mut TraceWriterHa
         CT_TW_INVALID_PATH_ID,
         "trace_writer_current_path_id: NULL handle",
         |h| {
-            let Ok(w) = ready(h, "trace_writer_current_path_id", "has no paths.dat ids to answer with") else {
+            let Ok(w) = ready(h, "trace_writer_current_path_id") else {
                 return CT_TW_INVALID_PATH_ID;
             };
             let p = path_from_bytes(unsafe { cstr_bytes(path) });
@@ -1144,7 +1047,7 @@ pub unsafe extern "C" fn trace_writer_register_path(handle: *mut TraceWriterHand
         CT_TW_INVALID_PATH_ID,
         "trace_writer_register_path: NULL handle",
         |h| {
-            let Ok(w) = ready(h, "trace_writer_register_path", "has no paths.dat to intern into") else {
+            let Ok(w) = ready(h, "trace_writer_register_path") else {
                 return CT_TW_INVALID_PATH_ID;
             };
             let p = path_from_bytes(unsafe { cstr_bytes(path) });
@@ -1179,7 +1082,7 @@ pub unsafe extern "C" fn trace_writer_register_variable_name(handle: *mut TraceW
         u64::MAX,
         "trace_writer_register_variable_name: NULL handle",
         |h| {
-            let Ok(w) = ready(h, "trace_writer_register_variable_name", "has no varnames.dat to intern into") else {
+            let Ok(w) = ready(h, "trace_writer_register_variable_name") else {
                 return u64::MAX;
             };
             AbstractTraceWriter::ensure_variable_id(w, &unsafe { cstr_string(name) }).0 as u64
@@ -1214,7 +1117,7 @@ pub unsafe extern "C" fn trace_writer_register_source_reload(
         0,
         "trace_writer_register_source_reload: NULL handle",
         |h| {
-            if ready(h, "trace_writer_register_source_reload", "has no execution stream to annotate").is_err() {
+            if ready(h, "trace_writer_register_source_reload").is_err() {
                 return 0;
             }
             if changed.is_null() || changed_count == 0 {
@@ -1273,10 +1176,6 @@ pub unsafe extern "C" fn trace_writer_register_source_view(
         -1,
         "trace_writer_register_source_view: NULL handle",
         |h| {
-            if !h.multi() {
-                set_error("trace_writer_register_source_view: only the multi-stream backend supports alternate source views");
-                return -1;
-            }
             let Some(w) = h.ctfs.as_mut() else {
                 set_error("trace_writer_register_source_view: writer not ready (call trace_writer_begin_events first)");
                 return -1;
@@ -1326,10 +1225,6 @@ pub unsafe extern "C" fn trace_writer_next_step_index(handle: *mut TraceWriterHa
 pub unsafe extern "C" fn trace_writer_start(handle: *mut TraceWriterHandle, path: *const c_char, line: i64) {
     with_handle("trace_writer_start", handle, true, (), (), |h| {
         let p = path_from_bytes(unsafe { cstr_bytes(path) });
-        if let Some(w) = h.legacy.as_mut() {
-            TraceWriter::start(&mut **w, &p, Line(line));
-            return;
-        }
         let Some(w) = h.ctfs.as_mut() else {
             return;
         };
@@ -1349,10 +1244,6 @@ pub unsafe extern "C" fn trace_writer_start(handle: *mut TraceWriterHandle, path
 pub unsafe extern "C" fn trace_writer_register_step(handle: *mut TraceWriterHandle, path: *const c_char, line: i64) {
     with_handle("trace_writer_register_step", handle, true, (), (), |h| {
         let p = path_from_bytes(unsafe { cstr_bytes(path) });
-        if let Some(w) = h.legacy.as_mut() {
-            TraceWriter::register_step(&mut **w, &p, Line(line));
-            return;
-        }
         if h.ctfs.is_none() {
             return;
         }
@@ -1371,13 +1262,9 @@ pub unsafe extern "C" fn trace_writer_register_step(handle: *mut TraceWriterHand
 /// # Safety
 /// `handle` is NULL or a live writer; `path` is NULL or NUL-terminated.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn ct_assignment_with_column(handle: *mut TraceWriterHandle, path: *const c_char, line: i64, column: i64, has_column: i32) {
+pub unsafe extern "C" fn ct_assignment_with_column(handle: *mut TraceWriterHandle, path: *const c_char, line: i64, _column: i64, has_column: i32) {
     with_handle("ct_assignment_with_column", handle, true, (), (), |h| {
         let p = path_from_bytes(unsafe { cstr_bytes(path) });
-        if let Some(w) = h.legacy.as_mut() {
-            TraceWriter::register_step_with_column(&mut **w, &p, Line(line), (has_column != 0).then_some(Line(column)));
-            return;
-        }
         if h.ctfs.is_none() {
             return;
         }
@@ -1401,10 +1288,6 @@ pub unsafe extern "C" fn ct_assignment_with_column(handle: *mut TraceWriterHandl
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_register_delta_column(handle: *mut TraceWriterHandle, column_delta: i64) {
     with_handle("trace_writer_register_delta_column", handle, true, (), (), |h| {
-        if !h.multi() {
-            set_error("trace_writer_register_delta_column: only the multi-stream backend supports column-aware events");
-            return;
-        }
         if h.ctfs.is_none() {
             return;
         }
@@ -1444,9 +1327,7 @@ pub unsafe extern "C" fn trace_writer_ensure_function_id(
             return id;
         }
         let p = path_from_bytes(unsafe { cstr_bytes(path) });
-        let id = if let Some(w) = h.legacy.as_mut() {
-            TraceWriter::ensure_function_id(&mut **w, &n, &p, Line(line)).0
-        } else {
+        let id = {
             let Some(w) = h.ctfs.as_mut() else {
                 set_error("trace_writer_ensure_function_id: writer is not ready");
                 return usize::MAX;
@@ -1476,9 +1357,7 @@ fn ensure_type_id(h: &mut TraceWriterHandle, kind: i32, lang_type: String) -> us
         set_error(&format!("trace_writer_ensure_type_id: {kind} is not a TypeKind ordinal"));
         return usize::MAX;
     };
-    let id = if let Some(w) = h.legacy.as_mut() {
-        TraceWriter::ensure_type_id(&mut **w, tk, &key.1).0
-    } else {
+    let id = {
         let Some(w) = h.ctfs.as_mut() else {
             set_error("trace_writer_ensure_type_id: writer is not ready");
             return usize::MAX;
@@ -1524,10 +1403,6 @@ pub unsafe extern "C" fn trace_writer_register_call_arg(handle: *mut TraceWriter
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_register_call(handle: *mut TraceWriterHandle, function_id: usize) {
     with_handle("trace_writer_register_call", handle, true, (), (), |h| {
-        if let Some(w) = h.legacy.as_mut() {
-            TraceWriter::register_call(&mut **w, FunctionId(function_id), vec![]);
-            return;
-        }
         if h.ctfs.is_none() {
             set_error("trace_writer_register_call: writer is not ready");
             return;
@@ -1560,10 +1435,6 @@ fn register_return_bytes(h: &mut TraceWriterHandle, value: Vec<u8>) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_register_return(handle: *mut TraceWriterHandle) {
     with_handle("trace_writer_register_return", handle, true, (), (), |h| {
-        if let Some(w) = h.legacy.as_mut() {
-            TraceWriter::register_return(&mut **w, codetracer_trace_types::NONE_VALUE);
-            return;
-        }
         register_return_bytes(h, vec![]);
     })
 }
@@ -1579,16 +1450,6 @@ pub unsafe extern "C" fn trace_writer_register_return_int(handle: *mut TraceWrit
 }
 
 fn return_int(h: &mut TraceWriterHandle, value: i64, type_id: usize) {
-    if let Some(w) = h.legacy.as_mut() {
-        TraceWriter::register_return(
-            &mut **w,
-            ValueRecord::Int {
-                i: value,
-                type_id: codetracer_trace_types::TypeId(type_id),
-            },
-        );
-        return;
-    }
     register_return_bytes(h, int_value(value, type_id as u64));
 }
 
@@ -1617,16 +1478,6 @@ pub unsafe extern "C" fn trace_writer_register_return_raw(
     with_handle("trace_writer_register_return_raw", handle, true, (), (), |h| {
         let type_id = ensure_type_id(h, type_kind, unsafe { cstr_string(type_name) });
         let repr = unsafe { cstr_bytes(value_repr) };
-        if let Some(w) = h.legacy.as_mut() {
-            TraceWriter::register_return(
-                &mut **w,
-                ValueRecord::Raw {
-                    r: String::from_utf8_lossy(repr).into_owned(),
-                    type_id: codetracer_trace_types::TypeId(type_id),
-                },
-            );
-            return;
-        }
         register_return_bytes(h, raw_value(repr, type_id as u64));
     })
 }
@@ -1640,10 +1491,6 @@ pub unsafe extern "C" fn trace_writer_register_return_raw(
 pub unsafe extern "C" fn trace_writer_register_return_cbor(handle: *mut TraceWriterHandle, cbor_data: *const u8, cbor_len: usize) {
     with_handle("trace_writer_register_return_cbor", handle, true, (), (), |h| {
         let data = unsafe { bytes(cbor_data, cbor_len) }.to_vec();
-        if let Some(w) = h.legacy.as_mut() {
-            TraceWriter::register_return_cbor(&mut **w, &data);
-            return;
-        }
         register_return_bytes(h, data);
     })
 }
@@ -1677,17 +1524,6 @@ pub unsafe extern "C" fn trace_writer_register_variable_int(
 }
 
 fn variable_int(h: &mut TraceWriterHandle, name: &str, value: i64, type_id: usize) {
-    if let Some(w) = h.legacy.as_mut() {
-        TraceWriter::register_variable_with_full_value(
-            &mut **w,
-            name,
-            ValueRecord::Int {
-                i: value,
-                type_id: codetracer_trace_types::TypeId(type_id),
-            },
-        );
-        return;
-    }
     hold_value(h, name, int_value(value, type_id as u64));
 }
 
@@ -1709,17 +1545,6 @@ pub unsafe extern "C" fn trace_writer_register_variable_int_by_type_id(
 }
 
 fn variable_raw(h: &mut TraceWriterHandle, name: &str, repr: &[u8], type_id: usize) {
-    if let Some(w) = h.legacy.as_mut() {
-        TraceWriter::register_variable_with_full_value(
-            &mut **w,
-            name,
-            ValueRecord::Raw {
-                r: String::from_utf8_lossy(repr).into_owned(),
-                type_id: codetracer_trace_types::TypeId(type_id),
-            },
-        );
-        return;
-    }
     hold_value(h, name, raw_value(repr, type_id as u64));
 }
 
@@ -1771,10 +1596,6 @@ pub unsafe extern "C" fn trace_writer_register_variable_cbor(
     with_handle("trace_writer_register_variable_cbor", handle, true, (), (), |h| {
         let name = unsafe { cstr_string(name) };
         let data = unsafe { bytes(cbor_data, cbor_len) }.to_vec();
-        if let Some(w) = h.legacy.as_mut() {
-            TraceWriter::register_variable_cbor(&mut **w, &name, &data);
-            return;
-        }
         hold_value(h, &name, data);
     })
 }
@@ -1782,12 +1603,6 @@ pub unsafe extern "C" fn trace_writer_register_variable_cbor(
 /// The checks every value-stream entry point makes: a container writer that
 /// has begun.
 fn value_stream_writer<'a>(h: &'a mut TraceWriterHandle, entry: &str) -> Option<&'a mut CtfsTraceWriter> {
-    if !h.multi() {
-        set_error(&format!(
-            "{entry}: the single-stream writer does not record the place model; open the writer in the binary (multi-stream) format"
-        ));
-        return None;
-    }
     match h.ctfs.as_mut() {
         Some(w) => Some(w),
         None => {
@@ -2053,10 +1868,6 @@ pub unsafe extern "C" fn trace_writer_assign_compound_item(handle: *mut TraceWri
 pub unsafe extern "C" fn ct_bind_variable(handle: *mut TraceWriterHandle, variable_name: *const c_char, place: i64) {
     with_handle("ct_bind_variable", handle, true, (), (), |h| {
         let name = unsafe { cstr_string(variable_name) };
-        if let Some(w) = h.legacy.as_mut() {
-            TraceWriter::bind_variable(&mut **w, &name, Place(place));
-            return;
-        }
         if h.ctfs.is_none() {
             set_error("ct_bind_variable: writer is not ready");
             return;
@@ -2122,10 +1933,6 @@ pub unsafe extern "C" fn ct_assignment(
         };
         let pass = if pass_by == 0 { PassBy::Value } else { PassBy::Reference };
         let name = unsafe { cstr_string(target_name) };
-        if let Some(w) = h.legacy.as_mut() {
-            TraceWriter::assign(&mut **w, &name, rvalue, pass);
-            return;
-        }
         if h.ctfs.is_none() {
             set_error("ct_assignment: writer is not ready");
             return;
@@ -2163,14 +1970,6 @@ pub unsafe extern "C" fn trace_writer_register_special_event(
 ) {
     with_handle("trace_writer_register_special_event", handle, true, (), (), |h| {
         let ordinal = u8::try_from(kind).ok().filter(|k| *k <= 13);
-        if let Some(w) = h.legacy.as_mut() {
-            let Some(kind) = ordinal.and_then(EventLogKind::from_u8) else {
-                set_error(&format!("trace_writer_register_special_event: {kind} is not an EventLogKind ordinal"));
-                return;
-            };
-            TraceWriter::register_special_event(&mut **w, kind, &unsafe { cstr_string(metadata) }, &unsafe { cstr_string(content) });
-            return;
-        }
         let pending = h.pending_step.is_some();
         let Some(w) = h.ctfs.as_mut() else {
             return;
@@ -2189,10 +1988,6 @@ pub unsafe extern "C" fn trace_writer_register_special_event(
 
 fn thread_event(name: &str, handle: *mut TraceWriterHandle, event: TraceLowLevelEvent) {
     with_handle(name, handle, true, (), (), |h| {
-        if let Some(w) = h.legacy.as_mut() {
-            TraceWriter::add_event(&mut **w, event);
-            return;
-        }
         if h.ctfs.is_none() {
             return;
         }
@@ -2244,10 +2039,6 @@ pub unsafe extern "C" fn trace_writer_register_raise(handle: *mut TraceWriterHan
             set_error(&format!("trace_writer_register_raise: NULL message with length {message_len}"));
             return;
         }
-        if !h.multi() {
-            set_error("trace_writer_register_raise: the legacy writer records no Raise events; use the split-stream writer");
-            return;
-        }
         if h.ctfs.is_none() {
             return;
         }
@@ -2264,10 +2055,6 @@ pub unsafe extern "C" fn trace_writer_register_raise(handle: *mut TraceWriterHan
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_register_catch(handle: *mut TraceWriterHandle, exception_type_id: u64) {
     with_handle("trace_writer_register_catch", handle, true, (), (), |h| {
-        if !h.multi() {
-            set_error("trace_writer_register_catch: the legacy writer records no Catch events; use the split-stream writer");
-            return;
-        }
         if h.ctfs.is_none() {
             return;
         }
@@ -2278,35 +2065,483 @@ pub unsafe extern "C" fn trace_writer_register_catch(handle: *mut TraceWriterHan
     })
 }
 
+// ---------------------------------------------------------------------------
+// Call exceptions
+// ---------------------------------------------------------------------------
+
+/// The innermost call exits by an exception: `exception_len` (> 0) bytes of
+/// CBOR, recorded verbatim as its call record's `exception`.
+///
+/// # Safety
+/// `handle` is NULL or a live writer; `(exception_cbor, exception_len)` is
+/// readable or NULL/0.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trace_writer_register_return_exception(handle: *mut TraceWriterHandle, exception_cbor: *const u8, exception_len: usize) {
+    with_handle("trace_writer_register_return_exception", handle, true, (), (), |h| {
+        if exception_cbor.is_null() || exception_len == 0 {
+            set_error(
+                "trace_writer_register_return_exception: an exception is required; a call that returned is registered with \
+                 trace_writer_register_return",
+            );
+            return;
+        }
+        if h.ctfs.is_none() {
+            set_error("trace_writer_register_return_exception: writer is not ready");
+            return;
+        }
+        let exception = unsafe { bytes(exception_cbor, exception_len) }.to_vec();
+        let _ = flush_pending_step(h);
+        if h.open_calls == 0 {
+            set_notice("register_return: call stack underflow: a return with no call open");
+            return;
+        }
+        h.open_calls -= 1;
+        if let Err(e) = h.ctfs.as_mut().expect("checked above").register_return_exception_cbor(exception) {
+            set_error(&e);
+        }
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Spans and crossings
+// ---------------------------------------------------------------------------
+
+/// Append a span record. 0 on success.
+///
+/// # Safety
+/// `handle` is NULL or a live writer; the strings are NULL or NUL-terminated;
+/// `metadata_keys` and `metadata_values` hold `metadata_count` strings each.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn trace_writer_register_span(
+    handle: *mut TraceWriterHandle,
+    span_id: u64,
+    parent_span_id: u64,
+    flags: u8,
+    status: u8,
+    start_wall_ns: u64,
+    end_wall_ns: u64,
+    process_ord: u64,
+    thread_id: u64,
+    start_step: u64,
+    end_step: u64,
+    external_recording: *const c_char,
+    external_path: *const c_char,
+    span_type: *const c_char,
+    label: *const c_char,
+    structural: u8,
+    metadata_keys: *const *const c_char,
+    metadata_values: *const *const c_char,
+    metadata_count: usize,
+) -> i32 {
+    with_handle_or(
+        "trace_writer_register_span",
+        handle,
+        false,
+        1,
+        "trace_writer_register_span: NULL handle",
+        |h| {
+            let Ok(w) = ready(h, "trace_writer_register_span") else {
+                return 1;
+            };
+            if status > SPAN_STATUS_ERROR {
+                set_error(&format!("trace_writer_register_span: invalid status {status}"));
+                return 1;
+            }
+            let is_external = flags & SPAN_FLAG_EXTERNAL != 0;
+            let mut span = SpanRecord {
+                span_id,
+                parent_span_id,
+                is_open: flags & SPAN_FLAG_OPEN != 0,
+                is_external,
+                status,
+                start_wall_ns,
+                end_wall_ns,
+                process_ord,
+                thread_id,
+                start_step,
+                end_step,
+                span_type: unsafe { cstr_string(span_type) },
+                label: unsafe { cstr_string(label) },
+                contiguous_on_one_thread: structural & 0x01 != 0,
+                shares_timeline: structural & 0x02 != 0,
+                concurrent_with_siblings: structural & 0x04 != 0,
+                ..Default::default()
+            };
+            if is_external {
+                span.external_recording = unsafe { cstr_string(external_recording) };
+                span.external_path = unsafe { cstr_string(external_path) };
+            }
+            if metadata_count > 0 {
+                if metadata_keys.is_null() || metadata_values.is_null() {
+                    set_error(&format!(
+                        "trace_writer_register_span: metadata_count is {metadata_count} but a metadata array is NULL"
+                    ));
+                    return 1;
+                }
+                for i in 0..metadata_count {
+                    span.metadata
+                        .push(unsafe { (cstr_string(*metadata_keys.add(i)), cstr_string(*metadata_values.add(i))) });
+                }
+            }
+            match w.register_span(&span) {
+                Ok(()) => 0,
+                Err(e) => {
+                    set_error(&e);
+                    1
+                }
+            }
+        },
+    )
+}
+
+/// Seal the current partial span chunk. 0 on success, and on a writer that
+/// has not begun.
+///
+/// # Safety
+/// `handle` is NULL or a live writer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trace_writer_flush_spans(handle: *mut TraceWriterHandle) -> i32 {
+    with_handle_or(
+        "trace_writer_flush_spans",
+        handle,
+        false,
+        1,
+        "trace_writer_flush_spans: NULL handle",
+        |h| {
+            let Some(w) = h.ctfs.as_mut() else {
+                return 0;
+            };
+            match w.flush_spans() {
+                Ok(()) => 0,
+                Err(e) => {
+                    set_error(&e);
+                    1
+                }
+            }
+        },
+    )
+}
+
+/// Open a crossing span and return its span id; 0 on failure.
+///
+/// # Safety
+/// `handle` is NULL or a live writer; `span_type` is NULL or NUL-terminated.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trace_writer_begin_crossing(handle: *mut TraceWriterHandle, span_type: *const c_char) -> u64 {
+    with_handle_or(
+        "trace_writer_begin_crossing",
+        handle,
+        true,
+        0,
+        "trace_writer_begin_crossing: NULL handle",
+        |h| {
+            if ready(h, "trace_writer_begin_crossing").is_err() {
+                return 0;
+            }
+            let _ = flush_pending_step(h);
+            match h
+                .ctfs
+                .as_mut()
+                .expect("checked by ready")
+                .begin_crossing(&unsafe { cstr_string(span_type) })
+            {
+                Ok(id) => id,
+                Err(_) => {
+                    set_error("trace_writer_begin_crossing: writer is closed or the open span record could not be written");
+                    0
+                }
+            }
+        },
+    )
+}
+
+/// Settle the innermost open crossing, `span_id`. 0 on success.
+///
+/// # Safety
+/// `handle` is NULL or a live writer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trace_writer_end_crossing(handle: *mut TraceWriterHandle, span_id: u64) -> i32 {
+    with_handle_or(
+        "trace_writer_end_crossing",
+        handle,
+        true,
+        1,
+        "trace_writer_end_crossing: NULL handle",
+        |h| {
+            if ready(h, "trace_writer_end_crossing").is_err() {
+                return 1;
+            }
+            let _ = flush_pending_step(h);
+            match h.ctfs.as_mut().expect("checked by ready").end_crossing(span_id) {
+                Ok(()) => 0,
+                Err(e) => {
+                    set_error(&e);
+                    1
+                }
+            }
+        },
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Correlation markers and line hits
+// ---------------------------------------------------------------------------
+
+/// The step a marker declared now belongs to: the buffered step, or the last
+/// one written.
+fn enclosing_step(h: &TraceWriterHandle) -> u64 {
+    let count = h.ctfs.as_ref().map_or(0, CtfsTraceWriter::exec_record_count);
+    if h.pending_step.is_some() { count } else { count.saturating_sub(1) }
+}
+
+fn text(p: *const u8, n: usize) -> String {
+    String::from_utf8_lossy(unsafe { bytes(p, n) }).into_owned()
+}
+
+/// Intern a marker label and write its id to `*out_id`. 0 on success; a
+/// refusal returns 1 without a message.
+///
+/// # Safety
+/// `handle` is NULL or a live writer; `(label, label_len)` is readable or
+/// NULL/0; `out_id` is NULL or writable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trace_writer_ensure_marker_id(handle: *mut TraceWriterHandle, label: *const u8, label_len: usize, out_id: *mut u64) -> i32 {
+    with_handle("trace_writer_ensure_marker_id", handle, false, 1, 1, |h| {
+        if out_id.is_null() {
+            return 1;
+        }
+        let Some(w) = h.ctfs.as_mut() else {
+            return 1;
+        };
+        match w.ensure_marker_id(&text(label, label_len)) {
+            Ok(id) => {
+                unsafe { *out_id = id };
+                0
+            }
+            Err(_) => 1,
+        }
+    })
+}
+
+/// Declare a boundary crossing against an interned label id. 0 on success; a
+/// refusal returns 1 without a message.
+///
+/// # Safety
+/// `handle` is NULL or a live writer; each `(pointer, length)` pair is
+/// readable or NULL/0.
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn trace_writer_mark_correlation_by_id(
+    handle: *mut TraceWriterHandle,
+    marker_id: u64,
+    boundary_label: *const u8,
+    boundary_label_len: usize,
+    direction: *const u8,
+    direction_len: usize,
+    key_value: *const u8,
+    key_value_len: usize,
+    show_value: *const u8,
+    show_value_len: usize,
+    description: *const u8,
+    description_len: usize,
+    key_text: *const u8,
+    key_text_len: usize,
+    show_text: *const u8,
+    show_text_len: usize,
+) -> i32 {
+    with_handle("trace_writer_mark_correlation_by_id", handle, false, 1, 1, |h| {
+        let step = enclosing_step(h);
+        let Some(w) = h.ctfs.as_mut() else {
+            return 1;
+        };
+        let r = w.register_correlation_marker_by_id(
+            &text(direction, direction_len),
+            marker_id,
+            &text(boundary_label, boundary_label_len),
+            &text(key_value, key_value_len),
+            &text(show_value, show_value_len),
+            &text(description, description_len),
+            &text(key_text, key_text_len),
+            &text(show_text, show_text_len),
+            Some(step),
+        );
+        i32::from(r.is_err())
+    })
+}
+
+/// Intern `boundary_id` and declare a boundary crossing against it.
+///
+/// # Safety
+/// As [`trace_writer_mark_correlation_by_id`].
+#[unsafe(no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "C" fn trace_writer_mark_correlation(
+    handle: *mut TraceWriterHandle,
+    direction: *const u8,
+    direction_len: usize,
+    boundary_id: *const u8,
+    boundary_id_len: usize,
+    key_value: *const u8,
+    key_value_len: usize,
+    show_value: *const u8,
+    show_value_len: usize,
+    description: *const u8,
+    description_len: usize,
+    key_text: *const u8,
+    key_text_len: usize,
+    show_text: *const u8,
+    show_text_len: usize,
+) -> i32 {
+    with_handle("trace_writer_mark_correlation", handle, false, 1, 1, |h| {
+        let step = enclosing_step(h);
+        let Some(w) = h.ctfs.as_mut() else {
+            return 1;
+        };
+        let r = w.register_correlation_marker(
+            &text(direction, direction_len),
+            &text(boundary_id, boundary_id_len),
+            &text(key_value, key_value_len),
+            &text(show_value, show_value_len),
+            &text(description, description_len),
+            &text(key_text, key_text_len),
+            &text(show_text, show_text_len),
+            Some(step),
+        );
+        i32::from(r.is_err())
+    })
+}
+
+/// Declare that the recording covers `(trace_id, span_id)`, given as wire
+/// bytes. 0 on success.
+///
+/// # Safety
+/// `handle` is NULL or a live writer; both `(pointer, length)` pairs are
+/// readable.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trace_writer_mark_span_coverage(
+    handle: *mut TraceWriterHandle,
+    trace_id: *const u8,
+    trace_id_len: usize,
+    span_id: *const u8,
+    span_id_len: usize,
+    wall_time_unix_ns: u64,
+    monotonic_time_ns: u64,
+) -> i32 {
+    with_handle_or("trace_writer_mark_span_coverage", handle, false, 1, "NULL handle", |h| {
+        if h.ctfs.is_none() {
+            set_error("no active CTFS recording");
+            return 1;
+        }
+        if trace_id.is_null() || span_id.is_null() {
+            set_error("NULL trace_id or span_id");
+            return 1;
+        }
+        let step = enclosing_step(h);
+        let r = h.ctfs.as_mut().expect("checked above").register_span_coverage(
+            unsafe { bytes(trace_id, trace_id_len) },
+            unsafe { bytes(span_id, span_id_len) },
+            wall_time_unix_ns,
+            monotonic_time_ns,
+            0,
+            false,
+            Some(step),
+        );
+        match r {
+            Ok(()) => 0,
+            Err(e) => {
+                set_error(&e);
+                1
+            }
+        }
+    })
+}
+
+/// [`trace_writer_mark_span_coverage`] with the ids in hex: 32 and 16 hex
+/// characters, either case.
+///
+/// # Safety
+/// `handle` is NULL or a live writer; both `(pointer, length)` pairs are
+/// readable or NULL/0.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trace_writer_mark_span_coverage_hex(
+    handle: *mut TraceWriterHandle,
+    trace_id_hex: *const u8,
+    trace_id_hex_len: usize,
+    span_id_hex: *const u8,
+    span_id_hex_len: usize,
+    wall_time_unix_ns: u64,
+    monotonic_time_ns: u64,
+) -> i32 {
+    with_handle_or("trace_writer_mark_span_coverage_hex", handle, false, 1, "NULL handle", |h| {
+        if h.ctfs.is_none() {
+            set_error("no active CTFS recording");
+            return 1;
+        }
+        let step = enclosing_step(h);
+        let r = h.ctfs.as_mut().expect("checked above").register_span_coverage_hex(
+            &text(trace_id_hex, trace_id_hex_len),
+            &text(span_id_hex, span_id_hex_len),
+            wall_time_unix_ns,
+            monotonic_time_ns,
+            0,
+            false,
+            Some(step),
+        );
+        match r {
+            Ok(()) => 0,
+            Err(e) => {
+                set_error(&e);
+                1
+            }
+        }
+    })
+}
+
+/// Keep a `linehits.tc` index from now on, the buffered step included. 0 on
+/// success.
+///
+/// # Safety
+/// `handle` is NULL or a live writer.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn trace_writer_enable_linehits(handle: *mut TraceWriterHandle) -> i32 {
+    with_handle_or(
+        "trace_writer_enable_linehits",
+        handle,
+        false,
+        1,
+        "trace_writer_enable_linehits: NULL handle",
+        |h| {
+            let Ok(w) = ready(h, "trace_writer_enable_linehits") else {
+                return 1;
+            };
+            w.enable_line_hits();
+            0
+        },
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// The JSON writer still writes its three files through the handle.
+    /// Formats 0 and 1 named the combined `events.log` stream, which is not
+    /// part of the trace format: both are refused by name, and the binary
+    /// format is not.
     #[test]
-    fn the_json_format_writes_its_files() {
-        let dir = tempfile::tempdir().unwrap();
-        let c = |name: &str| std::ffi::CString::new(dir.path().join(name).to_str().unwrap()).unwrap();
-        let program = std::ffi::CString::new("test_program").unwrap();
-        let handle = unsafe { trace_writer_new(program.as_ptr(), FORMAT_JSON) };
-        assert!(!handle.is_null());
-        assert_eq!(unsafe { trace_writer_begin_metadata(handle, c("trace_metadata.json").as_ptr()) }, 0);
-        assert_eq!(unsafe { trace_writer_begin_events(handle, c("trace.json").as_ptr()) }, 0);
-        assert_eq!(unsafe { trace_writer_begin_paths(handle, c("trace_paths.json").as_ptr()) }, 0);
-        let source = std::ffi::CString::new("/test/main.rs").unwrap();
-        unsafe { trace_writer_start(handle, source.as_ptr(), 1) };
-        unsafe { trace_writer_register_step(handle, source.as_ptr(), 2) };
-        let var = std::ffi::CString::new("x").unwrap();
-        let ty = std::ffi::CString::new("i32").unwrap();
-        unsafe { trace_writer_register_variable_int(handle, var.as_ptr(), 42, 7, ty.as_ptr()) };
-        assert_eq!(unsafe { trace_writer_finish_events(handle) }, 0);
-        assert_eq!(unsafe { trace_writer_finish_metadata(handle) }, 0);
-        assert_eq!(unsafe { trace_writer_finish_paths(handle) }, 0);
-        assert_eq!(unsafe { trace_writer_close(handle) }, 0);
-        unsafe { trace_writer_free(handle) };
-        let trace: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(dir.path().join("trace.json")).unwrap()).unwrap();
-        assert!(trace.as_array().is_some_and(|a| !a.is_empty()));
-        assert!(dir.path().join("trace_metadata.json").exists());
-        assert!(dir.path().join("trace_paths.json").exists());
+    fn only_the_binary_format_opens_a_writer() {
+        let program = std::ffi::CString::new("p").unwrap();
+        for format in [0, 1, 3, -1] {
+            crate::trace_writer_clear_last_error();
+            let h = unsafe { trace_writer_new(program.as_ptr(), format) };
+            assert!(h.is_null(), "format {format} must be refused");
+            let err = unsafe { std::ffi::CStr::from_ptr(crate::trace_writer_last_error()) }
+                .to_string_lossy()
+                .into_owned();
+            assert!(err.contains("events.log") && err.contains(&format.to_string()), "{err}");
+        }
+        let h = unsafe { trace_writer_new(program.as_ptr(), FORMAT_BINARY) };
+        assert!(!h.is_null());
+        unsafe { trace_writer_free(h) };
     }
 }

@@ -304,11 +304,12 @@ pub unsafe extern "C" fn ct_container_create(path: *const c_char, block_size: u3
             return 1;
         }
         let bs = if block_size == 0 { 4096 } else { block_size };
-        if bs % 8 != 0
-            || (bs as usize)
-                < codetracer_ctfs::header::HEADER_SIZE + codetracer_ctfs::header::EXTENDED_HEADER_SIZE + codetracer_ctfs::file_entry::FILE_ENTRY_SIZE
-        {
-            set_error(&format!("ct_container_create: unusable block size {bs}"));
+        // A full container's block size is 1024, 2048 or 4096
+        // (`ctfs-container.md` §1); nothing is created for any other.
+        if !matches!(bs, 1024 | 2048 | 4096) {
+            set_error(&format!(
+                "ct_container_create: block size {bs} is not one a CTFS container may declare (1024, 2048 or 4096)"
+            ));
             return 1;
         }
         let p = path_from_bytes(unsafe { cstr_bytes(path) });

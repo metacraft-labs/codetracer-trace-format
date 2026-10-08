@@ -138,6 +138,7 @@ const WRITER_SCENARIOS: &[&str] = &[
     "container",
     "reader_nulls",
     "craft",
+    "annotations",
 ];
 
 /// Run `host` in `dir` and return its transcript; a host that crashes or

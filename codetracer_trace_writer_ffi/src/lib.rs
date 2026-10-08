@@ -46,6 +46,7 @@ use std::cell::{Cell, RefCell};
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 
+pub mod annotations;
 pub mod meta;
 pub mod reader;
 pub mod value_encoder;

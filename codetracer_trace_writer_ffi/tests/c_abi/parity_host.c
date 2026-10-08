@@ -52,9 +52,13 @@ static const char* in_dir(const char* name) {
 
 /* Clear the error buffer, so whatever is in it after the call is the call's. */
 #define CLR() trace_writer_clear_last_error()
+/* CT_PARITY_SHOW_ERRORS=1 prints each error's text to stderr, for a person
+ * reading a difference; the transcript itself never carries it. */
 static int err_set(void) {
     const char* e = trace_writer_last_error();
-    return e != NULL && e[0] != '\0';
+    int set = e != NULL && e[0] != '\0';
+    if (set && getenv("CT_PARITY_SHOW_ERRORS")) fprintf(stderr, "  error: %s\n", e);
+    return set;
 }
 #define CALL_V(label, expr) do { CLR(); expr; printf("%s -> err=%d\n", label, err_set()); } while (0)
 #define CALL_I(label, expr) do { CLR(); long long _r = (long long)(expr); \
@@ -612,6 +616,20 @@ static int scenario_nulls(void) {
     CALL_V("special_event NULL", trace_writer_register_special_event(NULL, 0, "", ""));
     CALL_U("next_step_index NULL", trace_writer_next_step_index(NULL));
     CALL_I("source_view NULL", trace_writer_register_source_view(NULL, 0, 0, NULL, 0, NULL, 0, NULL, 0));
+    CALL_I("new format 0", trace_writer_new("p", 0) != NULL);
+    CALL_I("new format 1", trace_writer_new("p", 1) != NULL);
+    CALL_I("new format 3", trace_writer_new("p", 3) != NULL);
+    CALL_I("register_span NULL", trace_writer_register_span(NULL, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, NULL, NULL, "", "", 0, NULL, NULL, 0));
+    CALL_I("flush_spans NULL", trace_writer_flush_spans(NULL));
+    CALL_U("begin_crossing NULL", trace_writer_begin_crossing(NULL, "x"));
+    CALL_I("end_crossing NULL", trace_writer_end_crossing(NULL, 1));
+    CALL_V("return_exception NULL", trace_writer_register_return_exception(NULL, (const uint8_t*)"x", 1));
+    CALL_I("ensure_marker_id NULL", trace_writer_ensure_marker_id(NULL, (const uint8_t*)"x", 1, &u));
+    CALL_I("mark_correlation NULL", trace_writer_mark_correlation(NULL, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0));
+    CALL_I("mark_correlation_by_id NULL", trace_writer_mark_correlation_by_id(NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0));
+    CALL_I("mark_span_coverage NULL", trace_writer_mark_span_coverage(NULL, NULL, 0, NULL, 0, 0, 0));
+    CALL_I("mark_span_coverage_hex NULL", trace_writer_mark_span_coverage_hex(NULL, NULL, 0, NULL, 0, 0, 0));
+    CALL_I("enable_linehits NULL", trace_writer_enable_linehits(NULL));
     CALL_V("thread_start NULL", trace_writer_register_thread_start(NULL, 1));
     CALL_V("thread_exit NULL", trace_writer_register_thread_exit(NULL, 1));
     CALL_V("thread_switch NULL", trace_writer_register_thread_switch(NULL, 1));
@@ -649,6 +667,20 @@ static int scenario_not_ready(void) {
     CALL_I("ct_write_meta_dat", ct_write_meta_dat(w, NULL, 0));
     CALL_U("next_step_index", trace_writer_next_step_index(w));
     CALL_I("source_view", trace_writer_register_source_view(w, 0, 0, NULL, 0, NULL, 0, NULL, 0));
+    {
+        uint64_t mid = 7;
+        CALL_I("register_span", trace_writer_register_span(w, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, NULL, NULL, "", "", 0, NULL, NULL, 0));
+        CALL_I("flush_spans", trace_writer_flush_spans(w));
+        CALL_U("begin_crossing", trace_writer_begin_crossing(w, "x"));
+        CALL_I("end_crossing", trace_writer_end_crossing(w, 1));
+        CALL_V("return_exception", trace_writer_register_return_exception(w, (const uint8_t*)"x", 1));
+        CALL_I("ensure_marker_id", trace_writer_ensure_marker_id(w, (const uint8_t*)"x", 1, &mid));
+        CALL_I("mark_correlation", trace_writer_mark_correlation(w, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0));
+        CALL_I("mark_correlation_by_id", trace_writer_mark_correlation_by_id(w, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0, NULL, 0));
+        CALL_I("mark_span_coverage", trace_writer_mark_span_coverage(w, NULL, 0, NULL, 0, 0, 0));
+        CALL_I("mark_span_coverage_hex", trace_writer_mark_span_coverage_hex(w, NULL, 0, NULL, 0, 0, 0));
+        CALL_I("enable_linehits", trace_writer_enable_linehits(w));
+    }
     CALL_V("thread_start", trace_writer_register_thread_start(w, 1));
     CALL_V("raise", trace_writer_register_raise(w, 0, NULL, 0));
     CALL_I("finish_events", trace_writer_finish_events(w));
@@ -682,9 +714,126 @@ static int scenario_container(void) {
     CALL_I("append NULL arrays", ct_container_append_files(path, NULL, NULL, NULL, 1));
     CALL_I("append missing file", ct_container_append_files(in_dir("missing.ct"), names, contents, lengths, 1));
     CALL_I("append NULL path", ct_container_append_files(NULL, names, contents, lengths, 1));
+    CALL_I("create 8192", ct_container_create(in_dir("c8k.ct"), 8192));
+    CALL_I("create 1024", ct_container_create(in_dir("c1k.ct"), 1024));
+    CALL_I("create 2048", ct_container_create(in_dir("c2k.ct"), 2048));
+    CALL_I("create 512", ct_container_create(in_dir("c512.ct"), 512));
     return 0;
 }
 
+
+
+/* ------------------------------------------------------------------------ */
+
+static int scenario_annotations(void) {
+    trace_writer_t w = open_writer("/src/annot.php");
+    const char* keys[] = { "method", "url", "status" };
+    const char* vals[] = { "GET", "/api/\"x\"\n", "200" };
+    static const uint8_t trace_id[16] = { 0x4b, 0xf9, 0x2f, 0x35, 0x77, 0xb3, 0x4d, 0xa6, 0xa3, 0xce, 0x92, 0x9d, 0x0e, 0x0e, 0x47, 0x36 };
+    static const uint8_t span_id[8] = { 0x00, 0xf0, 0x67, 0xaa, 0x0b, 0xa9, 0x02, 0xb7 };
+    static const uint8_t exc[] = { 0xa3, 0x64, 'k', 'i', 'n', 'd', 0x65, 'E', 'r', 'r', 'o', 'r', 0x63, 'm', 's', 'g',
+                                   0x62, 'n', 'o', 0x67, 't', 'y', 'p', 'e', '_', 'i', 'd', 0x00 };
+    uint64_t id = 99, id2 = 99;
+    uint64_t c1, c2, c3;
+
+    CALL_V("start", trace_writer_start(w, "/src/annot.php", 1));
+    CALL_V("register_step 2 (pending)", trace_writer_register_step(w, "/src/annot.php", 2));
+    CALL_I("enable_linehits (step pending)", trace_writer_enable_linehits(w));
+    CALL_I("enable_linehits again", trace_writer_enable_linehits(w));
+    CALL_I("span open", trace_writer_register_span(w, 1, 0, SPAN_FLAG_OPEN, SPAN_STATUS_UNKNOWN, 1000, 0, 0, 7, 1, 0,
+                                                   NULL, NULL, "web-request", "GET /api", 0x03, keys, vals, 3));
+    CALL_I("span open with an end", trace_writer_register_span(w, 2, 0, SPAN_FLAG_OPEN, 0, 1, 5, 0, 0, 0, 3,
+                                                               NULL, NULL, "web-request", "bad", 0, NULL, NULL, 0));
+    CALL_I("span invalid status", trace_writer_register_span(w, 3, 0, 0, 3, 1, 2, 0, 0, 0, 1, NULL, NULL, "x", "", 0, NULL, NULL, 0));
+    CALL_I("span NULL metadata", trace_writer_register_span(w, 3, 0, 0, 1, 1, 2, 0, 0, 0, 1, NULL, NULL, "x", "", 0, NULL, NULL, 2));
+    CALL_I("span id 0", trace_writer_register_span(w, 0, 0, 0, 1, 1, 2, 0, 0, 0, 1, NULL, NULL, "x", "", 0, NULL, NULL, 0));
+    CALL_I("span external", trace_writer_register_span(w, 4, 1, SPAN_FLAG_EXTERNAL, SPAN_STATUS_ERROR, 5, 9, 2, 3, 1, 2,
+                                                       RID, "../child.ct", "process", "/usr/bin/x", 0x07, keys, vals, 1));
+    CALL_I("span ignored external strings", trace_writer_register_span(w, 5, 0, 0, SPAN_STATUS_OK, 5, 9, 0, 0, 1, 2,
+                                                                       "ignored", "ignored", "test", "t", 0, NULL, NULL, 0));
+    CALL_I("flush_spans", trace_writer_flush_spans(w));
+    CALL_I("flush_spans (empty)", trace_writer_flush_spans(w));
+    CALL_V("register_step 3", trace_writer_register_step(w, "/src/annot.php", 3));
+    CALL_V("delta_column right after a step (line-only)", trace_writer_register_delta_column(w, 4));
+    CALL_V("register_step 4", trace_writer_register_step(w, "/src/annot.php", 4));
+    CALL_U("begin_crossing a", c1 = trace_writer_begin_crossing(w, "gdscript-frame"));
+    CALL_V("register_step 5", trace_writer_register_step(w, "/src/annot.php", 5));
+    CALL_U("begin_crossing b", c2 = trace_writer_begin_crossing(w, "lua-frame"));
+    CALL_I("end_crossing a (not innermost)", trace_writer_end_crossing(w, c1));
+    CALL_V("register_step 6", trace_writer_register_step(w, "/src/annot.php", 6));
+    CALL_I("end_crossing b", trace_writer_end_crossing(w, c2));
+    CALL_I("end_crossing a", trace_writer_end_crossing(w, c1));
+    CALL_I("end_crossing (none open)", trace_writer_end_crossing(w, c1));
+    CALL_U("begin_crossing c (empty)", c3 = trace_writer_begin_crossing(w, "gdscript-frame"));
+    CALL_I("end_crossing c", trace_writer_end_crossing(w, c3));
+    CALL_I("span settles 1", trace_writer_register_span(w, 1, 0, 0, SPAN_STATUS_OK, 1000, 2000, 0, 7, 1, 5,
+                                                         NULL, NULL, "web-request", "GET /api", 0x03, keys, vals, 3));
+    CALL_I("ensure_marker_id http", trace_writer_ensure_marker_id(w, (const uint8_t*)"http", 4, &id));
+    printf("  id %llu\n", (unsigned long long)id);
+    CALL_I("ensure_marker_id http again", trace_writer_ensure_marker_id(w, (const uint8_t*)"http", 4, &id2));
+    printf("  id %llu\n", (unsigned long long)id2);
+    CALL_I("ensure_marker_id empty", trace_writer_ensure_marker_id(w, NULL, 0, &id2));
+    printf("  id %llu\n", (unsigned long long)id2);
+    CALL_I("ensure_marker_id NULL out", trace_writer_ensure_marker_id(w, (const uint8_t*)"q", 1, NULL));
+    CALL_V("register_step 7 (pending)", trace_writer_register_step(w, "/src/annot.php", 7));
+    CALL_I("mark_correlation_by_id send", trace_writer_mark_correlation_by_id(w, id, (const uint8_t*)"http", 4,
+                                         (const uint8_t*)"send", 4, (const uint8_t*)"req-1", 5, NULL, 0, NULL, 0, NULL, 0, NULL, 0));
+    CALL_I("mark_correlation recv", trace_writer_mark_correlation(w, (const uint8_t*)"recv", 4, (const uint8_t*)"grpc", 4,
+                                   (const uint8_t*)"k\"2", 3, (const uint8_t*)"shown\n", 6, (const uint8_t*)"a desc", 6,
+                                   (const uint8_t*)"rid", 3, (const uint8_t*)"", 0));
+    CALL_I("mark_correlation show_text only", trace_writer_mark_correlation(w, (const uint8_t*)"send", 4, (const uint8_t*)"http", 4,
+                                   (const uint8_t*)"req-2", 5, NULL, 0, NULL, 0, NULL, 0, (const uint8_t*)"sh", 2));
+    CALL_I("mark_span_coverage", trace_writer_mark_span_coverage(w, trace_id, 16, span_id, 8, 111, 222));
+    CALL_I("mark_span_coverage again", trace_writer_mark_span_coverage(w, trace_id, 16, span_id, 8, 333, 444));
+    CALL_I("mark_span_coverage short trace", trace_writer_mark_span_coverage(w, trace_id, 15, span_id, 8, 1, 2));
+    CALL_I("mark_span_coverage NULL", trace_writer_mark_span_coverage(w, NULL, 16, span_id, 8, 1, 2));
+    CALL_I("mark_span_coverage_hex", trace_writer_mark_span_coverage_hex(w, (const uint8_t*)"4BF92F3577B34DA6A3CE929D0E0E4737", 32,
+                                    (const uint8_t*)"00f067aa0ba902b7", 16, 5, 6));
+    CALL_I("mark_span_coverage_hex bad", trace_writer_mark_span_coverage_hex(w, (const uint8_t*)"zz", 2,
+                                    (const uint8_t*)"00f067aa0ba902b7", 16, 5, 6));
+    CALL_V("register_call 0", trace_writer_register_call(w, 0));
+    CALL_V("register_step 8", trace_writer_register_step(w, "/src/annot.php", 8));
+    CALL_V("return_exception", trace_writer_register_return_exception(w, exc, sizeof exc));
+    CALL_V("return_exception empty", trace_writer_register_return_exception(w, exc, 0));
+    CALL_V("return_exception NULL", trace_writer_register_return_exception(w, NULL, 4));
+    CALL_V("register_call 0", trace_writer_register_call(w, 0));
+    CALL_V("return_exception (inner)", trace_writer_register_return_exception(w, exc, sizeof exc));
+    CALL_V("register_return (toplevel)", trace_writer_register_return(w));
+    CALL_V("return_exception (underflow)", trace_writer_register_return_exception(w, exc, sizeof exc));
+    CALL_U("next_step_index", trace_writer_next_step_index(w));
+    close_writer(w);
+
+    /* A recording with markers and spans begun in memory, then the compact profile. */
+    CLR();
+    w = trace_writer_new("/src/annot_mem.py", FFI_TRACE_FORMAT_BINARY);
+    CALL_I("set_recording_id", trace_writer_set_recording_id(w, RID));
+    CALL_I("set_compact_threshold", trace_writer_set_compact_threshold(w, 1u << 20));
+    CALL_I("begin_in_memory", trace_writer_begin_in_memory(w));
+    CALL_I("enable_linehits", trace_writer_enable_linehits(w));
+    CALL_V("start", trace_writer_start(w, "/src/annot_mem.py", 1));
+    CALL_V("register_step 3", trace_writer_register_step(w, "/src/annot_mem.py", 3));
+    CALL_V("register_step 1", trace_writer_register_step(w, "/src/annot_mem.py", 1));
+    CALL_U("begin_crossing", c1 = trace_writer_begin_crossing(w, "vm"));
+    CALL_V("register_step 3", trace_writer_register_step(w, "/src/annot_mem.py", 3));
+    CALL_I("end_crossing", trace_writer_end_crossing(w, c1));
+    CALL_I("mark_span_coverage", trace_writer_mark_span_coverage(w, trace_id, 16, span_id, 8, 1, 2));
+    CALL_I("close", trace_writer_close(w));
+    {
+        size_t n = trace_writer_container_len(w);
+        const uint8_t* p = trace_writer_container_ptr(w);
+        FILE* f = fopen(in_dir("annot_mem.ct"), "wb");
+        if (p) fwrite(p, 1, n, f);
+        fclose(f);
+    }
+    CALL_V("free", trace_writer_free(w));
+
+    /* A begin_crossing whose open record is refused leaves no crossing open. */
+    w = open_writer("/src/annot_idle.py");
+    CALL_I("end_crossing (never opened)", trace_writer_end_crossing(w, 1));
+    CALL_V("start", trace_writer_start(w, "/src/annot_idle.py", 1));
+    close_writer(w);
+    return 0;
+}
 
 /* ------------------------------------------------------------------------ */
 /* Containers with one member malformed, built with the container calls so
@@ -807,6 +956,29 @@ static int scenario_craft(void) {
         table_members(&m[5], &m[6], "types", &rec, ends, 2);
         m[7].name = "varnames.off"; m[7].data.n = 0; put32(&m[7].data, 0);
         craft("bad_tables.ct", m, 8);
+    }
+
+    /* 6b. A container declaring a block size of 8192: a full container's
+     * block size is 1024, 2048 or 4096. */
+    {
+        char path[4096];
+        FILE* f;
+        uint8_t block[8192];
+        uint32_t bs = 8192;
+        snprintf(path, sizeof path, "%s/block8k.ct", g_dir);
+        CLR();
+        if (ct_container_create(path, 4096) == 0 && (f = fopen(path, "rb")) != NULL) {
+            size_t n = fread(block, 1, 4096, f);
+            fclose(f);
+            memset(block + n, 0, sizeof block - n);
+            memcpy(block + 8, &bs, 4);
+            f = fopen(path, "wb");
+            fwrite(block, 1, sizeof block, f);
+            fclose(f);
+            printf("crafted block8k.ct\n");
+        } else {
+            printf("craft block8k.ct failed err=%d\n", err_set());
+        }
     }
 
     /* 7. A source view record whose content is truncated. */
@@ -987,6 +1159,32 @@ static void read_all(ct_reader_t r) {
     }
 }
 
+static void print_doc(const char* label, int rc, uint8_t* buf, size_t n) {
+    printf("%s -> %d err=%d ", label, rc, err_set());
+    if (buf) { printf("[%zu] ", n); fwrite(buf, 1, n, stdout); ct_free_buffer(buf); } else printf("NULL n=%zu", n);
+    printf("\n");
+}
+
+static void read_annotations(const char* path) {
+    static const uint8_t trace_id[16] = { 0x4b, 0xf9, 0x2f, 0x35, 0x77, 0xb3, 0x4d, 0xa6, 0xa3, 0xce, 0x92, 0x9d, 0x0e, 0x0e, 0x47, 0x36 };
+    static const uint8_t span_id[8] = { 0x00, 0xf0, 0x67, 0xaa, 0x0b, 0xa9, 0x02, 0xb7 };
+    uint8_t* buf;
+    size_t n;
+    int rc;
+    CLR(); n = 77; buf = ct_spans_json(path, 1, &n); printf("spans settled -> "); print_doc("", 0, buf, n);
+    CLR(); n = 77; buf = ct_spans_json(path, 0, &n); printf("spans raw -> "); print_doc("", 0, buf, n);
+    CLR(); n = 77; buf = ct_span_types_json(path, &n); printf("span types -> "); print_doc("", 0, buf, n);
+    CLR(); buf = (uint8_t*)1; n = 77; rc = ct_linehits_json(path, &buf, &n); print_doc("linehits", rc, buf, n);
+    CLR(); buf = (uint8_t*)1; n = 77; rc = ct_correlation_index_json(path, &buf, &n); print_doc("correlation index", rc, buf, n);
+    CLR(); buf = (uint8_t*)1; n = 77; rc = ct_correlation_lookup_span(path, trace_id, 16, span_id, 8, &buf, &n); print_doc("lookup span", rc, buf, n);
+    CLR(); buf = (uint8_t*)1; n = 77; rc = ct_correlation_lookup_span(path, span_id, 8, trace_id, 16, &buf, &n); print_doc("lookup span bad lengths", rc, buf, n);
+    CLR(); buf = (uint8_t*)1; n = 77; rc = ct_correlation_lookup_span(path, trace_id, 16, trace_id, 8, &buf, &n); print_doc("lookup span miss", rc, buf, n);
+    CLR(); buf = (uint8_t*)1; n = 77; rc = ct_correlation_lookup_boundary(path, 0, (const uint8_t*)"req-1", 5, &buf, &n); print_doc("lookup boundary", rc, buf, n);
+    CLR(); buf = (uint8_t*)1; n = 77; rc = ct_correlation_lookup_boundary(path, 2, (const uint8_t*)"k\"2", 3, &buf, &n); print_doc("lookup boundary grpc", rc, buf, n);
+    CLR(); buf = (uint8_t*)1; n = 77; rc = ct_correlation_lookup_boundary(path, 1, (const uint8_t*)"req-1", 5, &buf, &n); print_doc("lookup boundary wrong id", rc, buf, n);
+    CLR(); buf = (uint8_t*)1; n = 77; rc = ct_marker_labels_json(path, &buf, &n); print_doc("marker labels", rc, buf, n);
+}
+
 static int read_file(const char* path) {
     ct_reader_t r;
     FILE* f;
@@ -1003,6 +1201,7 @@ static int read_file(const char* path) {
         CALL_I("refresh NULL path", ct_reader_refresh(r, NULL));
         CALL_V("close", ct_reader_close(r));
     }
+    read_annotations(path);
     CLR();
     r = ct_reader_open_assume_column_aware_paths(path);
     printf("open_assume_column_aware_paths -> %s err=%d\n", r ? "handle" : "NULL", err_set());
@@ -1084,6 +1283,15 @@ static int scenario_reader_nulls(void) {
     CALL_I("call_arg NULL", ct_reader_call_arg(NULL, 0, 0, &u, &d, &n));
     CALL_I("event_fields NULL", ct_reader_event_fields(NULL, 0, &k, &u, &d, &n));
     CALL_I("event_metadata NULL", ct_reader_event_metadata(NULL, 0, &d, &n));
+    CALL_I("spans_json NULL path", ct_spans_json(NULL, 1, &n) != NULL);
+    CALL_I("spans_json NULL out", ct_spans_json("x", 1, NULL) != NULL);
+    CALL_I("span_types_json NULL path", ct_span_types_json(NULL, &n) != NULL);
+    CALL_I("linehits NULL path", ct_linehits_json(NULL, &d, &n));
+    CALL_I("linehits NULL out", ct_linehits_json("x", NULL, &n));
+    CALL_I("correlation index NULL path", ct_correlation_index_json(NULL, &d, &n));
+    CALL_I("lookup span NULL", ct_correlation_lookup_span("x", NULL, 16, NULL, 8, &d, &n));
+    CALL_I("lookup boundary NULL path", ct_correlation_lookup_boundary(NULL, 0, NULL, 0, &d, &n));
+    CALL_I("marker labels NULL out", ct_marker_labels_json("x", &d, NULL));
     return 0;
 }
 
@@ -1114,6 +1322,7 @@ int main(int argc, char** argv) {
     if (strcmp(s, "container") == 0) return scenario_container();
     if (strcmp(s, "reader_nulls") == 0) return scenario_reader_nulls();
     if (strcmp(s, "craft") == 0) return scenario_craft();
+    if (strcmp(s, "annotations") == 0) return scenario_annotations();
     if (strcmp(s, "read") == 0) {
         for (int i = 3; i < argc; i++) read_file(argv[i]);
         return 0;

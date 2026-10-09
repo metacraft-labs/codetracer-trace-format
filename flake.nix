@@ -38,6 +38,8 @@
         {
           # CI selects the same complete locked Rust constructor explicitly.
           packages.ci-rust-profile = rustWithWasm;
+          packages.ci-native-clang = pkgs.clang;
+          packages.ci-native-gcc = pkgs.stdenv.cc;
 
           devShells.default = pkgs.mkShell {
             packages = [

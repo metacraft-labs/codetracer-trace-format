@@ -56,6 +56,10 @@ jobs:
         with:
           gh-token: ${{ steps.app-token.outputs.token }}
           token-owner: metacraft-labs
+      - name: Bind the existing locked native C compiler profiles
+        shell: bash
+        run: bash ci/acquire-native-c-profile.sh
+
       - name: Bind the complete locked Rust profile
         shell: bash
         run: bash ci/acquire-rust-profile.sh
@@ -69,7 +73,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: trace-rust-profile-lint
-          path: ${{ runner.temp }}/trace-format-rust-profile-*/
+          path: |
+            ${{ runner.temp }}/trace-format-rust-profile-*/
+            ${{ runner.temp }}/trace-format-native-c-profile-*/
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7
@@ -139,6 +145,15 @@ jobs:
         with:
           nim-version: "2.2.x"
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install the declared locked Rust acquisition backend
+        uses: metacraft-labs/metacraft-github-actions/setup-nix@3fcbb26dd920adf6ccc64a87c6d24797ab0b5d94
+        with:
+          gh-token: ${{ steps.app-token.outputs.token }}
+          token-owner: metacraft-labs
+      - name: Bind the existing locked native C compiler profiles
+        shell: bash
+        run: bash ci/acquire-native-c-profile.sh
+
       - name: Build Nim trace writer static library
         working-directory: ../codetracer-trace-format-nim
         run: |
@@ -179,11 +194,6 @@ jobs:
           siblings: codetracer-native-recorder
           gh-token: ${{ steps.app-token.outputs.token }}
 
-      - name: Install the declared locked Rust acquisition backend
-        uses: metacraft-labs/metacraft-github-actions/setup-nix@3fcbb26dd920adf6ccc64a87c6d24797ab0b5d94
-        with:
-          gh-token: ${{ steps.app-token.outputs.token }}
-          token-owner: metacraft-labs
       - name: Bind the complete locked Rust profile
         shell: bash
         run: bash ci/acquire-rust-profile.sh
@@ -198,7 +208,9 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: trace-rust-profile-build-and-test
-          path: ${{ runner.temp }}/trace-format-rust-profile-*/
+          path: |
+            ${{ runner.temp }}/trace-format-rust-profile-*/
+            ${{ runner.temp }}/trace-format-native-c-profile-*/
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 7

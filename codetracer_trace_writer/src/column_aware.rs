@@ -15,10 +15,10 @@
 //! | this module | Nim original |
 //! |---|---|
 //! | [`StepEvent`] / [`encode_step_event`] / [`decode_step_event`] | `codetracer_trace_writer/step_encoding.nim` |
-//! | [`ExecStreamEncoder`] | `codetracer_trace_writer/exec_stream.nim` (`writeEvent` / `flushChunk` / `flush`) |
+//! | [`ExecStreamEncoder`] | `codetracer_trace_writer/exec_stream.nim` (`writeEvent` / `flushChunk` / `flush`); the position encoding is [`crate::step_rule`]'s |
 //! | [`PositionSpace`] | `multi_stream_writer.nim` (`rebuildGli` / `toGlobalLineIndex`) + `global_line_index.nim` |
 //! | [`encode_path_record_layout_a`] | `interning_table.nim` (`ensurePathIdColumnAware`) |
-//! | [`StepEncoder`] | `multi_stream_writer.nim` (`registerStep` / `registerStepWithColumn` / `registerColumnStep`) |
+//! | [`StepEncoder`] | `multi_stream_writer.nim` (`registerStep` / `registerStepWithColumn` / `registerColumnStep`), positions only |
 //!
 //! # The two addressing modes
 //!
@@ -294,6 +294,87 @@ pub fn decode_step_event_declared(data: &[u8], pos: &mut usize, allow_source_rel
 /// allocation falls back to it.
 pub use crate::line_position::DEFAULT_LINES_PER_FILE;
 
+/// The per-line position count of the conventional column-aware table
+/// (`internal-files.md` §"`paths.dat` Layout A"): a column-aware file first
+/// mentioned with no table is recorded as [`DEFAULT_LINES_PER_FILE`] lines of
+/// this many positions. A column above it is recorded at this column of its
+/// line; a line above [`DEFAULT_LINES_PER_FILE`] is refused. Port of Nim
+/// `global_line_index.ConventionalLineLength`.
+pub const CONVENTIONAL_LINE_LENGTH: u32 = 1024;
+
+/// The positions a file with the conventional table occupies.
+///
+/// The conventional table is written as `line_count = 0` with no line lengths,
+/// its only encoding, and is held as this rule rather than as an array: an
+/// EMPTY column-aware table means the conventional one, in the writer, in
+/// `paths.dat` and in the reader. Port of Nim
+/// `global_line_index.ConventionalFileSize`.
+pub const CONVENTIONAL_FILE_SIZE: u64 = DEFAULT_LINES_PER_FILE * CONVENTIONAL_LINE_LENGTH as u64;
+
+/// A column-aware file's per-line table, as `paths.dat` Layout A records it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileTable {
+    /// The file's addressable column count per line.
+    Lines(Vec<u32>),
+    /// The conventional table, 100000 lines of 1024 positions — a record of
+    /// `line_count = 0` (`internal-files.md` §"`paths.dat` Layout A"). Held
+    /// as that rule, never spelled out.
+    Conventional,
+}
+
+impl FileTable {
+    /// The table a Layout A record states: `line_count = 0` is the
+    /// conventional table.
+    pub fn from_record(line_lengths: Vec<u32>) -> Self {
+        if line_lengths.is_empty() {
+            FileTable::Conventional
+        } else {
+            FileTable::Lines(line_lengths)
+        }
+    }
+
+    /// The positions the file occupies.
+    pub fn size(&self) -> u64 {
+        match self {
+            FileTable::Conventional => CONVENTIONAL_FILE_SIZE,
+            FileTable::Lines(lls) => lls.iter().map(|l| u64::from(*l)).sum(),
+        }
+    }
+}
+
+/// The conventional column-aware table spelled out — for a recorder or a test
+/// that builds it; the writer and the readers never hold it.
+pub fn conventional_line_lengths() -> Vec<u32> {
+    vec![CONVENTIONAL_LINE_LENGTH; DEFAULT_LINES_PER_FILE as usize]
+}
+
+/// Whether `line_lengths` is the conventional table. Decided by content, so a
+/// file is treated alike whether the writer chose the table or the recorder
+/// built it: the two are the same record on the wire.
+pub fn is_conventional_table(line_lengths: &[u32]) -> bool {
+    line_lengths.len() as u64 == DEFAULT_LINES_PER_FILE && line_lengths.iter().all(|l| *l == CONVENTIONAL_LINE_LENGTH)
+}
+
+/// The table a column-aware writer records for a file first mentioned with
+/// `line_lengths` (`internal-files.md` §"`paths.dat` Layout A"): empty — no
+/// table given — is the conventional table; a table whose lines hold nothing
+/// gives its first line one position, keeping its line count (`[0]` → `[1]`,
+/// `[0, 0]` → `[1, 0]`); anything else is recorded as given. Port of Nim
+/// `columnTableAtFirstMention`.
+///
+/// The conventional table is returned in its held form, EMPTY — whether none
+/// was given or the 100000 × 1024 table itself was.
+pub fn column_table_at_first_mention(line_lengths: &[u32]) -> Vec<u32> {
+    if line_lengths.is_empty() || is_conventional_table(line_lengths) {
+        return Vec::new();
+    }
+    let mut table = line_lengths.to_vec();
+    if table.iter().all(|l| *l == 0) {
+        table[0] = 1;
+    }
+    table
+}
+
 /// The trace's global position space: one contiguous, gap-free range per
 /// registered file, in file-id order.
 ///
@@ -302,16 +383,21 @@ pub use crate::line_position::DEFAULT_LINES_PER_FILE;
 ///
 /// A file's slot size is:
 ///
-/// * `max(sum(line_lengths[f]), 1)` when the trace is column-aware **and** that
-///   file has a non-empty `line_lengths` table, or
-/// * [`DEFAULT_LINES_PER_FILE`] otherwise — which includes a column-aware trace
-///   whose recorder did not surface per-line counts for *that* file. The mixed
-///   case is real and the Nim writer handles it this way; reproducing the
-///   fallback is what makes a partially-populated trace match.
+/// * `max(sum(line_lengths[f]), 1)` when the trace is column-aware and that
+///   file has a non-empty `line_lengths` table;
+/// * [`CONVENTIONAL_FILE_SIZE`] when the trace is column-aware and the table
+///   is empty — the conventional table, held as its rule (a `line_count = 0`
+///   record, or the 100000 × 1024 table passed in full);
+/// * [`DEFAULT_LINES_PER_FILE`] in a line-only trace.
 #[derive(Debug, Clone, Default)]
 pub struct PositionSpace {
-    /// Per-file addressable column counts. Empty entry ⇒ no per-line data.
+    /// Per-file addressable column counts. In a column-aware space an empty
+    /// entry is the conventional table; in a line-only one every entry is
+    /// empty and unused.
     line_lengths: Vec<Vec<u32>>,
+    /// Each file's slot size, computed once when it is registered, so
+    /// registering a file does not re-sum every earlier table.
+    slots: Vec<u64>,
     /// Whether the trace is column-aware. Decides the slot sizing above.
     column_aware: bool,
     /// Exclusive prefix sum of the per-file slot sizes: the first address of
@@ -327,6 +413,7 @@ impl PositionSpace {
     pub fn new(column_aware: bool) -> Self {
         PositionSpace {
             line_lengths: Vec::new(),
+            slots: Vec::new(),
             column_aware,
             prefix_sum: Vec::new(),
             dirty: true,
@@ -343,13 +430,29 @@ impl PositionSpace {
     ///
     /// `line_lengths` is ignored (stored empty) when the space is not
     /// column-aware — the Nim writer does the same, so a line-only trace's
-    /// addresses do not move if a recorder happens to pass a table.
+    /// addresses do not move if a recorder happens to pass a table. In a
+    /// column-aware space an empty table, or the conventional table spelled
+    /// out, is held as the conventional rule.
+    /// Register the next path's table as a reader states it.
+    pub fn push_file_table(&mut self, table: &FileTable) -> u64 {
+        match table {
+            FileTable::Conventional => self.push_path(&[]),
+            FileTable::Lines(lls) => self.push_path(lls),
+        }
+    }
+
     pub fn push_path(&mut self, line_lengths: &[u32]) -> u64 {
         let id = self.line_lengths.len() as u64;
-        if self.column_aware {
-            self.line_lengths.push(line_lengths.to_vec());
-        } else {
+        if !self.column_aware {
+            self.slots.push(DEFAULT_LINES_PER_FILE);
             self.line_lengths.push(Vec::new());
+        } else if line_lengths.is_empty() || is_conventional_table(line_lengths) {
+            self.slots.push(CONVENTIONAL_FILE_SIZE);
+            self.line_lengths.push(Vec::new());
+        } else {
+            let total: u64 = line_lengths.iter().map(|l| u64::from(*l)).sum();
+            self.slots.push(total.max(1));
+            self.line_lengths.push(line_lengths.to_vec());
         }
         self.dirty = true;
         id
@@ -360,33 +463,30 @@ impl PositionSpace {
         self.line_lengths.len()
     }
 
-    /// The per-file tables, in id order — what a reader's
-    /// `GlobalPositionDecoder::from_line_lengths` needs.
+    /// The per-file tables as held, in id order: in a column-aware space an
+    /// empty table is the conventional one (what
+    /// `GlobalPositionDecoder::from_recorded_line_lengths` takes).
     pub fn line_lengths(&self) -> &[Vec<u32>] {
         &self.line_lengths
     }
 
-    /// Whether `path_id` has a column axis — i.e. a non-empty per-line table.
-    ///
-    /// A file without one is sized by the [`DEFAULT_LINES_PER_FILE`] fallback,
-    /// where one address is one line, so a column delta added to its address
-    /// names a later line instead of a column.
+    /// Whether `path_id` has a column axis: in a column-aware space every
+    /// registered file does — a real table or the conventional one.
     pub fn has_column_axis(&self, path_id: u64) -> bool {
-        self.line_lengths.get(path_id as usize).is_some_and(|lls| !lls.is_empty())
+        self.column_aware && (path_id as usize) < self.line_lengths.len()
+    }
+
+    /// Whether `path_id`'s table is the conventional one.
+    pub fn is_conventional(&self, path_id: u64) -> bool {
+        self.column_aware && self.line_lengths.get(path_id as usize).is_some_and(Vec::is_empty)
     }
 
     fn rebuild(&mut self) {
         let mut prefix = Vec::with_capacity(self.line_lengths.len());
         let mut running: u64 = 0;
-        for lls in &self.line_lengths {
+        for slot in &self.slots {
             prefix.push(running);
-            let slot = if self.column_aware && !lls.is_empty() {
-                let total: u64 = lls.iter().map(|l| u64::from(*l)).sum();
-                total.max(1)
-            } else {
-                DEFAULT_LINES_PER_FILE
-            };
-            running = running.saturating_add(slot);
+            running = running.saturating_add(*slot);
         }
         self.prefix_sum = prefix;
         self.dirty = false;
@@ -409,8 +509,12 @@ impl PositionSpace {
         let base = self.prefix_sum.get(idx).copied().unwrap_or(0);
         if self.column_aware
             && let Some(lls) = self.line_lengths.get(idx)
-            && !lls.is_empty()
         {
+            if lls.is_empty() {
+                // Every line has the same length, so the sum is a product.
+                let up_to = (line.max(1) - 1).min(DEFAULT_LINES_PER_FILE);
+                return base + up_to * u64::from(CONVENTIONAL_LINE_LENGTH);
+            }
             // `line` is 1-based, so line 1 sits at offset 0. Nim clamps
             // `upTo` to the known line count and lets the reader's
             // decoder handle a past-end address the same way.
@@ -424,10 +528,10 @@ impl PositionSpace {
     /// Recover `(path_id, line, column)` from a `global_position_index` — the
     /// inverse of [`position_of`](Self::position_of) plus a column offset.
     ///
-    /// In a file with a per-line table the column is 1-based within its line;
-    /// in a file without one (line-only, or a column-aware trace's untabled
-    /// file, sized [`DEFAULT_LINES_PER_FILE`]) one address is one line and the
-    /// column is `None`. `None` for an address past the end of the space.
+    /// In a column-aware space the column is 1-based within its line, by the
+    /// file's table or by the conventional rule; in a line-only space one
+    /// address is one line and the column is `None`. `None` for an address
+    /// past the end of the space.
     pub fn resolve(&mut self, position: u64) -> Option<(u64, u64, Option<u64>)> {
         if self.dirty {
             self.rebuild();
@@ -439,7 +543,15 @@ impl PositionSpace {
         let base = self.prefix_sum[file];
         let offset = position - base;
         let lls = &self.line_lengths[file];
-        if self.column_aware && !lls.is_empty() {
+        if self.column_aware && lls.is_empty() {
+            // The conventional table, resolved by its rule.
+            if offset >= CONVENTIONAL_FILE_SIZE {
+                return None;
+            }
+            let width = u64::from(CONVENTIONAL_LINE_LENGTH);
+            return Some((file as u64, offset / width + 1, Some(offset % width + 1)));
+        }
+        if self.column_aware {
             let mut line_base: u64 = 0;
             for (i, len) in lls.iter().enumerate() {
                 let len = u64::from(*len);
@@ -521,6 +633,8 @@ pub fn decode_path_record_layout_a(record: &[u8]) -> Result<(String, Vec<u32>), 
 
 // --- the execution-stream encoder -------------------------------------------
 
+use crate::step_rule::ChunkCursor;
+
 /// Nim `exec_stream.nim` `DefaultExecChunkSize`.
 pub const DEFAULT_EXEC_CHUNK_SIZE: usize = 4096;
 /// Nim `exec_stream.nim` `ExecCompressionLevel`.
@@ -536,26 +650,20 @@ pub struct EncodedExecStream {
     pub total_events: u64,
 }
 
-/// Streaming encoder for the execution stream, byte-compatible with the Nim
-/// writer. Port of Nim `exec_stream.nim` `ExecStreamWriter`.
+/// Streaming encoder for `steps.dat` + `steps.idx`: the one chunk encoder
+/// both of this crate's step paths use.
 ///
-/// Two behaviours here are load-bearing for byte identity and are easy to get
-/// wrong by re-deriving from the spec:
+/// It owns the chunking and the encoding rule ([`crate::step_rule`]): every
+/// position is written through a per-chunk [`ChunkCursor`], so the first
+/// position of each chunk is an `AbsoluteStep` whatever records precede it,
+/// and every other one takes the shorter of the absolute and the delta, a tie
+/// going to the absolute. `last_position` is the writer's running position,
+/// carried across chunks, against which [`StepEvent::DeltaStep`] and
+/// [`StepEvent::DeltaColumn`] inputs are resolved.
 ///
-/// 1. **Chunk-boundary promotion happens at write time, not at flush time.**
-///    A `DeltaStep` or `DeltaColumn` that lands first in a chunk is rewritten
-///    to an `AbsoluteStep` carrying `running + delta`, so every chunk decodes
-///    independently. The running cursor is *not* reset at the boundary — it
-///    carries across, which is what makes the promoted absolute correct.
-/// 2. **The chunk payload is compressed one-shot.** Nim calls `ZSTD_compress`,
-///    which pledges the frame's content size in its header.
-///    `zstd::encode_all` — the streaming call — does not, and produces
-///    different bytes for the same input (measured: 104 vs 105 bytes on a
-///    200-record chunk, `get_frame_content_size` `None` vs `Some(400)`). That
-///    is not only a byte difference: the Nim reader's
-///    `decodeSpecChunkRecordCount` and `chunkSlot` both *fail* on
-///    `ZSTD_CONTENTSIZE_UNKNOWN`, so a stream compressed the streaming way is
-///    unreadable by the reference reader. Use [`compress_chunk`].
+/// The chunk payload is compressed one-shot ([`compress_chunk`]), so that its
+/// frame declares its content size (`internal-files.md` §"Chunking and
+/// compression of the runtime streams").
 pub struct ExecStreamEncoder {
     chunk_size: usize,
     zstd_level: i32,
@@ -565,8 +673,10 @@ pub struct ExecStreamEncoder {
     dat: Vec<u8>,
     idx: Vec<u8>,
     data_offset: u64,
-    /// Running absolute position — Nim's `lastGlobalLineIndex`.
+    /// The running absolute position after the last position record.
     last_position: u64,
+    /// The encoding rule's cursor, reset at every chunk boundary.
+    cursor: ChunkCursor,
 }
 
 /// Compress one chunk payload the way the Nim writer does.
@@ -598,6 +708,7 @@ impl ExecStreamEncoder {
             idx,
             data_offset: 0,
             last_position: 0,
+            cursor: ChunkCursor::new(),
         }
     }
 
@@ -611,42 +722,44 @@ impl ExecStreamEncoder {
         self.last_position
     }
 
-    /// Write one event. Port of Nim `writeEvent`.
+    /// Write a position record for `position`; `column_step` says the
+    /// recorder registered it as a column step. Its form is the rule's.
+    pub fn write_position(&mut self, position: u64, column_step: bool) -> Result<(), String> {
+        self.cursor.encode_position(position, column_step, &mut self.buffer);
+        self.last_position = position;
+        self.count_record()
+    }
+
+    /// Write one event. A position event (`AbsoluteStep`, `DeltaStep`,
+    /// `DeltaColumn`) is resolved to its absolute position — a delta against
+    /// the running position — and written through [`Self::write_position`],
+    /// so its form on the wire is the rule's, not the caller's. Any other
+    /// event is written as it is.
     pub fn write_event(&mut self, event: StepEvent) -> Result<(), String> {
-        let mut ev = event;
-
-        // At the start of a chunk, force an absolute so the chunk stands alone.
-        if self.event_count == 0 {
-            ev = match ev {
-                StepEvent::DeltaStep { delta } => StepEvent::AbsoluteStep {
-                    global_position_index: (self.last_position as i64).wrapping_add(delta) as u64,
-                },
-                StepEvent::DeltaColumn { column_delta } => StepEvent::AbsoluteStep {
-                    global_position_index: (self.last_position as i64).wrapping_add(column_delta) as u64,
-                },
-                other => other,
-            };
+        match event {
+            StepEvent::AbsoluteStep { global_position_index } => self.write_position(global_position_index, false),
+            StepEvent::DeltaStep { delta } => self.write_position((self.last_position as i64).wrapping_add(delta) as u64, false),
+            StepEvent::DeltaColumn { column_delta } => self.write_position((self.last_position as i64).wrapping_add(column_delta) as u64, true),
+            other => {
+                encode_step_event(&other, &mut self.buffer);
+                self.count_record()
+            }
         }
+    }
 
-        match &ev {
-            StepEvent::AbsoluteStep { global_position_index } => self.last_position = *global_position_index,
-            StepEvent::DeltaStep { delta } => self.last_position = (self.last_position as i64).wrapping_add(*delta) as u64,
-            StepEvent::DeltaColumn { column_delta } => self.last_position = (self.last_position as i64).wrapping_add(*column_delta) as u64,
-            _ => {}
-        }
-
-        encode_step_event(&ev, &mut self.buffer);
+    fn count_record(&mut self) -> Result<(), String> {
         self.event_count += 1;
         self.total_events += 1;
-
         if self.event_count >= self.chunk_size {
             self.flush_chunk()?;
         }
         Ok(())
     }
 
-    /// Compress and emit the buffered chunk. Port of Nim `flushChunk`.
+    /// Compress and emit the buffered chunk, and start the next one without a
+    /// cursor.
     fn flush_chunk(&mut self) -> Result<(), String> {
+        self.cursor.reset();
         if self.event_count == 0 {
             return Ok(());
         }
@@ -659,8 +772,24 @@ impl ExecStreamEncoder {
         Ok(())
     }
 
+    /// The `steps.dat` and `steps.idx` bytes sealed since the last call — the
+    /// index's `chunk_size` header first of all. [`finish`](Self::finish)
+    /// returns what was not taken.
+    pub fn take_sealed(&mut self) -> (Vec<u8>, Vec<u8>) {
+        (std::mem::take(&mut self.dat), std::mem::take(&mut self.idx))
+    }
+
+    /// Seal the trailing partial chunk, leaving the encoder usable.
+    pub fn seal(&mut self) -> Result<(), String> {
+        self.flush_chunk()
+    }
+
+    /// Whether bytes were sealed since the last [`take_sealed`](Self::take_sealed).
+    pub fn has_sealed(&self) -> bool {
+        !self.dat.is_empty() || !self.idx.is_empty()
+    }
+
     /// Flush the trailing partial chunk and return the two files.
-    /// Port of Nim `flush`.
     pub fn finish(mut self) -> Result<EncodedExecStream, String> {
         self.flush_chunk()?;
         Ok(EncodedExecStream {
@@ -671,28 +800,12 @@ impl ExecStreamEncoder {
     }
 }
 
-// --- the step encoder (delta-vs-absolute policy) -----------------------------
+// --- the step encoder ---------------------------------------------------------
 
-/// Nim's delta window. `registerStep` emits a `DeltaStep` only when the signed
-/// position delta lies in `-64 ..= 63` — one zigzag varint byte — and an
-/// `AbsoluteStep` otherwise.
-///
-/// This is **narrower than** [`crate::step_stream::MAX_DELTA`] (±1_048_575),
-/// which the line-only Rust encoder uses. The two policies produce different
-/// bytes for the same steps, so the column-aware path uses Nim's.
-pub const NIM_DELTA_MIN: i64 = -64;
-/// Upper end of Nim's delta window. See [`NIM_DELTA_MIN`].
-pub const NIM_DELTA_MAX: i64 = 63;
-
-/// Turns `(path_id, line[, column_delta])` calls into the [`StepEvent`]
-/// sequence the Nim writer would buffer.
-///
-/// Port of Nim `multi_stream_writer.nim` `registerStep`,
-/// `registerStepWithColumn` and `registerColumnStep`. It owns the running
-/// cursor and the delta-vs-absolute decision; [`ExecStreamEncoder`] owns
-/// framing and chunk-boundary promotion. Keeping the two separate mirrors the
-/// Nim split and is why promotion cannot double-count: the encoder's promotion
-/// preserves the absolute value this type computed.
+/// Turns `(path_id, line[, column_delta])` calls into the position events the
+/// execution stream records, and keeps the running position a column step is
+/// relative to. Which form each position takes on the wire is
+/// [`ExecStreamEncoder`]'s decision, by the rule of [`crate::step_rule`].
 #[derive(Debug, Clone, Default)]
 pub struct StepEncoder {
     step_count: u64,
@@ -707,56 +820,41 @@ impl StepEncoder {
         }
     }
 
-    /// Steps emitted so far.
+    /// Exec records emitted so far.
     pub fn step_count(&self) -> u64 {
         self.step_count
+    }
+
+    /// The running position: the last step's, moved by any column steps since.
+    pub fn last_position(&self) -> u64 {
+        self.last_position
     }
 
     /// The event for a step at `position`, with `column_delta` folded in.
     ///
     /// `column_delta` is the offset from column 1 of the requested line, i.e.
-    /// `column - 1`. Passing 0 reproduces `registerStep` exactly — Nim's
-    /// `registerStepWithColumn` docs make the same guarantee.
+    /// `column - 1`; the step is still a line step, written as a `DeltaStep`
+    /// or an `AbsoluteStep`.
     pub fn step_at(&mut self, position: u64, column_delta: i64) -> StepEvent {
         let combined = (position as i64).wrapping_add(column_delta) as u64;
-        let event = if self.step_count == 0 {
-            // Rule 1: the first step in a trace is always absolute.
-            StepEvent::AbsoluteStep {
-                global_position_index: combined,
-            }
-        } else {
-            let delta = (combined as i64).wrapping_sub(self.last_position as i64);
-            if (NIM_DELTA_MIN..=NIM_DELTA_MAX).contains(&delta) {
-                StepEvent::DeltaStep { delta }
-            } else {
-                StepEvent::AbsoluteStep {
-                    global_position_index: combined,
-                }
-            }
-        };
         self.last_position = combined;
         self.step_count += 1;
-        event
+        StepEvent::AbsoluteStep {
+            global_position_index: combined,
+        }
     }
 
-    /// Account for an execution-stream record that occupies a step slot but
-    /// carries no position — `ThreadSwitch`, `ThreadStart`, `ThreadExit`.
-    ///
-    /// The Nim writer increments `stepCount` for each of these (they also each
-    /// write an empty value record, so `values.dat` stays parallel), and
-    /// `stepCount` is what decides "the first step in a trace is always
-    /// absolute". A trace that opens with a thread switch therefore encodes its
-    /// FIRST real step as a `DeltaStep` from position 0, not as an
-    /// `AbsoluteStep` — surprising, and exactly the sort of detail a
-    /// re-derivation from the spec gets wrong. The cursor itself does not move.
+    /// Account for an execution-stream record that occupies an exec slot but
+    /// carries no position — `ThreadSwitch`, `ThreadStart`, `ThreadExit`,
+    /// `SourceReload`. The running position does not move.
     pub fn note_non_step_event(&mut self) {
         self.step_count += 1;
     }
 
-    /// A column-only step. Port of `registerColumnStep`.
+    /// A column-only step: a column delta from the running position.
     ///
-    /// Refuses to be the first step: the running cursor must be defined before
-    /// a column delta can be applied, and Nim returns the same error.
+    /// Refused as the trace's first record: the running position must be
+    /// defined before a column delta can be applied to it.
     pub fn column_step(&mut self, column_delta: i64) -> Result<StepEvent, String> {
         if self.step_count == 0 {
             return Err(
@@ -861,17 +959,17 @@ mod tests {
     }
 
     #[test]
-    fn position_space_falls_back_per_file_when_a_table_is_missing() {
+    fn position_space_gives_a_file_with_no_table_the_conventional_one() {
         // The mixed case: a column-aware trace where one file has no per-line
-        // data. Nim gives that file DEFAULT_LINES_PER_FILE and addresses it the
-        // legacy way; anything else would silently shift every later file.
+        // table. It has the conventional table, 100000 lines of 1024, exactly
+        // as Nim lays it out; anything else would shift every later file.
         let mut space = PositionSpace::new(true);
         space.push_path(&[8]);
-        space.push_path(&[]); // no table
+        space.push_path(&[]); // the conventional table
         space.push_path(&[4]);
         assert_eq!(space.position_of(0, 1), 0);
-        assert_eq!(space.position_of(1, 7), 8 + 6);
-        assert_eq!(space.position_of(2, 1), 8 + DEFAULT_LINES_PER_FILE);
+        assert_eq!(space.position_of(1, 7), 8 + 6 * 1024);
+        assert_eq!(space.position_of(2, 1), 8 + CONVENTIONAL_FILE_SIZE);
     }
 
     #[test]
@@ -918,16 +1016,11 @@ mod tests {
     }
 
     #[test]
-    fn step_encoder_uses_nims_narrow_delta_window() {
+    fn step_encoder_hands_the_encoder_absolute_positions() {
         let mut enc = StepEncoder::new();
         assert_eq!(enc.step_at(1000, 0), StepEvent::AbsoluteStep { global_position_index: 1000 });
-        // +63 is inside the window.
-        assert_eq!(enc.step_at(1063, 0), StepEvent::DeltaStep { delta: 63 });
-        // +64 is outside it — the wider MAX_DELTA policy would have emitted a
-        // DeltaStep here, which is exactly the byte divergence this pins.
-        assert_eq!(enc.step_at(1127, 0), StepEvent::AbsoluteStep { global_position_index: 1127 });
-        // -64 is inside.
-        assert_eq!(enc.step_at(1063, 0), StepEvent::DeltaStep { delta: -64 });
+        assert_eq!(enc.step_at(1000, 3), StepEvent::AbsoluteStep { global_position_index: 1003 });
+        assert_eq!(enc.column_step(2), Ok(StepEvent::DeltaColumn { column_delta: 2 }));
     }
 
     #[test]
@@ -939,11 +1032,12 @@ mod tests {
 
     #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
     #[test]
-    fn chunk_boundary_promotes_a_delta_to_an_absolute() {
-        // Two events per chunk. The third event opens chunk 1 and must be
-        // promoted, or chunk 1 cannot be decoded on its own.
+    fn every_chunk_anchors_its_first_position_and_resolves_deltas_across_the_boundary() {
+        // Two events per chunk. Chunk 1 opens with a delta input, which the
+        // encoder resolves against the running position (102) and writes as
+        // the chunk's absolute anchor.
         let mut enc = ExecStreamEncoder::new(2, EXEC_COMPRESSION_LEVEL);
-        enc.write_event(StepEvent::AbsoluteStep { global_position_index: 100 }).unwrap();
+        enc.write_event(StepEvent::AbsoluteStep { global_position_index: 200 }).unwrap();
         enc.write_event(StepEvent::DeltaStep { delta: 1 }).unwrap();
         enc.write_event(StepEvent::DeltaStep { delta: 1 }).unwrap();
         enc.write_event(StepEvent::DeltaColumn { column_delta: 1 }).unwrap();
@@ -953,19 +1047,11 @@ mod tests {
         // idx: chunk_size + two chunk offsets.
         assert_eq!(out.idx.len(), 4 + 8 * 2);
         assert_eq!(u32::from_le_bytes(out.idx[0..4].try_into().unwrap()), 2);
-        let off0 = u64::from_le_bytes(out.idx[4..12].try_into().unwrap());
         let off1 = u64::from_le_bytes(out.idx[12..20].try_into().unwrap());
-        assert_eq!(off0, 0);
-        assert!(off1 > 0 && (off1 as usize) < out.dat.len());
-
-        // Chunk 1 decodes standalone and starts absolute at 102.
+        let raw0 = zstd::decode_all(&out.dat[..off1 as usize]).unwrap();
         let raw1 = zstd::decode_all(&out.dat[off1 as usize..]).unwrap();
-        let mut pos = 0usize;
-        assert_eq!(
-            decode_step_event(&raw1, &mut pos).unwrap(),
-            StepEvent::AbsoluteStep { global_position_index: 102 }
-        );
-        assert_eq!(decode_step_event(&raw1, &mut pos).unwrap(), StepEvent::DeltaColumn { column_delta: 1 });
+        assert_eq!(raw0, vec![0, 0xc8, 0x01, 1, 2]);
+        assert_eq!(raw1, vec![0, 0xca, 0x01, 7, 2], "chunk 1 decodes on its own");
     }
 
     #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
@@ -1006,7 +1092,8 @@ mod tests {
     }
 
     /// `resolve` inverts `position_of` at every column of every line, in a
-    /// space mixing tabled and untabled files, and refuses past the end.
+    /// space mixing tabled files and one with the conventional table, and
+    /// refuses past the end.
     #[test]
     fn resolve_inverts_position_of_in_a_mixed_space() {
         let mut space = PositionSpace::new(true);
@@ -1022,10 +1109,10 @@ mod tests {
                 }
             }
         }
-        let untabled = space.position_of(1, 42);
-        assert_eq!(untabled, 8 + 41);
-        assert_eq!(space.resolve(untabled), Some((1, 42, None)));
-        let end = 8 + DEFAULT_LINES_PER_FILE + 4;
+        let conventional = space.position_of(1, 42) + 1023;
+        assert_eq!(conventional, 8 + 41 * 1024 + 1023);
+        assert_eq!(space.resolve(conventional), Some((1, 42, Some(1024))));
+        let end = 8 + CONVENTIONAL_FILE_SIZE + 4;
         assert_eq!(space.resolve(end - 1), Some((2, 1, Some(4))));
         assert_eq!(space.resolve(end), None, "one past the end of the space");
     }

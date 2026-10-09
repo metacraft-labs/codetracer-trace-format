@@ -37,6 +37,8 @@
 
 use std::fmt;
 
+pub use codetracer_trace_writer::column_aware::FileTable;
+
 /// One position resolved from a `global_position_index`.
 ///
 /// Mirrors the Nim `decodeGlobalPositionIndex` return tuple
@@ -175,6 +177,9 @@ pub struct GlobalPositionDecoder {
     file_base: Vec<u64>,
     /// Per-file size (sum of that file's `line_lengths`).
     file_size: Vec<u64>,
+    /// Whether each file has the conventional table (100000 lines of 1024),
+    /// resolved by that rule with an empty `line_base`.
+    conventional: Vec<bool>,
     /// Sum of all `file_size` entries — exclusive upper bound on any
     /// valid GLI for this trace.
     total_positions: u64,
@@ -194,13 +199,58 @@ impl GlobalPositionDecoder {
     /// construction gives `decode_global_position_index` an
     /// immutable `&self` signature that downstream consumers can hold
     /// across threads.
+    ///
+    /// A table equal to the conventional one (100000 × 1024) is held as that
+    /// rule. An empty table is a file of no positions; a `paths.dat` record of
+    /// `line_count = 0` is the conventional table instead, which a caller
+    /// says with [`Self::from_file_tables`].
     pub fn from_line_lengths(line_lengths: Vec<Vec<u32>>) -> Self {
+        Self::build(line_lengths, &[])
+    }
+
+    /// Build a decoder from per-file tables as a reader states them
+    /// ([`InterningTablesReader::path_file_table`]): a
+    /// [`FileTable::Conventional`] file is 100000 lines of 1024 positions,
+    /// resolved by that rule (`internal-files.md` §"`paths.dat` Layout A").
+    ///
+    /// [`InterningTablesReader::path_file_table`]:
+    ///     crate::interning_tables_reader::InterningTablesReader::path_file_table
+    pub fn from_file_tables(tables: Vec<FileTable>) -> Self {
+        let mut conventional = Vec::with_capacity(tables.len());
+        let line_lengths = tables
+            .into_iter()
+            .map(|t| match t {
+                FileTable::Conventional => {
+                    conventional.push(true);
+                    Vec::new()
+                }
+                FileTable::Lines(lls) => {
+                    conventional.push(false);
+                    lls
+                }
+            })
+            .collect();
+        Self::build(line_lengths, &conventional)
+    }
+
+    fn build(line_lengths: Vec<Vec<u32>>, conventional_files: &[bool]) -> Self {
+        use codetracer_trace_writer::column_aware::{CONVENTIONAL_FILE_SIZE, is_conventional_table};
         let file_count = line_lengths.len();
         let mut line_base = Vec::with_capacity(file_count);
         let mut file_base = Vec::with_capacity(file_count);
         let mut file_size = Vec::with_capacity(file_count);
+        let mut conventional = Vec::with_capacity(file_count);
         let mut running_global: u64 = 0;
-        for lls in &line_lengths {
+        for (fid, lls) in line_lengths.iter().enumerate() {
+            if conventional_files.get(fid).copied().unwrap_or(false) || is_conventional_table(lls) {
+                line_base.push(Vec::new());
+                file_base.push(running_global);
+                file_size.push(CONVENTIONAL_FILE_SIZE);
+                conventional.push(true);
+                running_global = running_global.saturating_add(CONVENTIONAL_FILE_SIZE);
+                continue;
+            }
+            conventional.push(false);
             let mut lb = Vec::with_capacity(lls.len());
             let mut sum: u64 = 0;
             for length in lls {
@@ -216,6 +266,7 @@ impl GlobalPositionDecoder {
             line_base,
             file_base,
             file_size,
+            conventional,
             total_positions: running_global,
         }
     }
@@ -321,6 +372,14 @@ impl GlobalPositionDecoder {
 
         let fid = owner;
         let q = position - self.file_base[fid];
+        if self.conventional[fid] {
+            let width = u64::from(codetracer_trace_writer::column_aware::CONVENTIONAL_LINE_LENGTH);
+            return Ok(DecodedPosition {
+                file: fid as u64,
+                line: (q / width) as u32 + 1,
+                column: (q % width) as u32 + 1,
+            });
+        }
         let lb = &self.line_base[fid];
         if lb.is_empty() {
             return Err(DecodeError::FileHasNoLineTable { file: fid as u64 });

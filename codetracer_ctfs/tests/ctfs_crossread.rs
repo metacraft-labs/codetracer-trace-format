@@ -61,7 +61,9 @@ fn deterministic_bytes(seed: u64, n: usize) -> Vec<u8> {
 /// The sibling Nim checkout and the direnv that supplies its toolchain.
 /// `None` means the cross-implementation half cannot run here.
 fn nim_checker() -> Option<(PathBuf, PathBuf, PathBuf)> {
-    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../codetracer-trace-format-nim");
+    let repo = std::env::var("CODETRACER_TRACE_FORMAT_NIM_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../codetracer-trace-format-nim"));
     if !repo.join("tests/check_ctfs_container.nim").exists() {
         eprintln!(
             "SKIP: the sibling codetracer-trace-format-nim checkout has no \

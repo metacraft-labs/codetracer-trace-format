@@ -84,18 +84,22 @@ mod wasm_cbor_mode_stub {
 
 use crate::{
     abstract_trace_writer::{AbstractTraceWriter, AbstractTraceWriterData},
-    call_stream::{CallStreamBuilder, DEFAULT_CALLS_CHUNK_SIZE, encode_call_stream},
-    column_aware::{EXEC_COMPRESSION_LEVEL, ExecStreamEncoder, PositionSpace, StepEncoder},
-    event_stream::{DEFAULT_EVENTS_CHUNK_SIZE, IoEventStreamBuilder, encode_io_event_stream},
+    call_stream::{CallStreamBuilder, DEFAULT_CALLS_CHUNK_SIZE},
+    chunk_sink::ChunkSink,
+    column_aware::{
+        CONVENTIONAL_LINE_LENGTH, DEFAULT_LINES_PER_FILE, EXEC_COMPRESSION_LEVEL, ExecStreamEncoder, PositionSpace, StepEncoder,
+        column_table_at_first_mention,
+    },
+    event_stream::{DEFAULT_EVENTS_CHUNK_SIZE, IoEventStreamBuilder},
     interning_tables::InterningTablesBuilder,
     meta_dat::{
         FLAG_EXT_HAS_SOURCE_RELOAD, FLAG_HAS_CALL_STREAM, FLAG_HAS_COLUMN_AWARE_STEPS, FLAG_HAS_INTERNING_TABLES, FLAG_HAS_IO_EVENT_STREAM,
         FLAG_HAS_LINE_COUNT_TABLE, FLAG_HAS_STEP_STREAM, FLAG_HAS_VALUE_STREAM, FLAG_SUPPORTS_COLUMN_BREAKPOINTS, FLAG_SUPPORTS_COLUMN_MOTIONS,
         encode_meta_dat_ext,
     },
-    step_stream::{DEFAULT_STEPS_CHUNK_SIZE, SourceReloadChange, StepStreamBuilder, encode_step_stream},
+    step_stream::{DEFAULT_STEPS_CHUNK_SIZE, SourceReloadChange, StepStreamBuilder},
     trace_writer::TraceWriter,
-    value_stream::{DEFAULT_VALUES_CHUNK_SIZE, ValueStreamBuilder, encode_value_stream},
+    value_stream::{DEFAULT_VALUES_CHUNK_SIZE, ValueStreamBuilder},
 };
 use codetracer_trace_types::TraceLowLevelEvent;
 
@@ -196,8 +200,8 @@ pub struct CtfsTraceWriter {
     output: CtfsOutput,
     /// The finished container, when `output` is [`CtfsOutput::Memory`].
     container_bytes: Option<Vec<u8>>,
-    /// Overrides the `recording_id` that would otherwise be minted at
-    /// `finish_writing_trace_events`. See
+    /// Overrides the `recording_id` that would otherwise be minted
+    /// when `meta.dat` is written. See
     /// [`set_recording_id`](CtfsTraceWriter::set_recording_id).
     recording_id: Option<String>,
     /// The serialization format to use.
@@ -244,6 +248,9 @@ pub struct CtfsTraceWriter {
     /// Builds the compact step records from the observed event sequence (present
     /// while a trace is being written).
     step_stream_builder: Option<StepStreamBuilder>,
+    /// The `step-map.ns` index, built alongside the line-only step stream (a
+    /// column-aware trace carries none).
+    step_map_builder: Option<crate::step_map::StepMapBuilder>,
     /// Records-per-chunk for `steps.dat`.
     steps_chunk_size: usize,
 
@@ -317,6 +324,9 @@ pub struct CtfsTraceWriter {
     /// consume-once way as `pending_line_lengths`. Set by
     /// [`AbstractTraceWriter::register_step_with_column`].
     pending_column_delta: i64,
+    /// `(path id, line)` of the last step written in column-aware mode: the
+    /// line a column-only step moves along.
+    last_step_location: Option<(u64, u64)>,
 
     // --- Per-file line counts, path versions, source reloads ----------------
     //
@@ -333,9 +343,11 @@ pub struct CtfsTraceWriter {
     /// The recorded line count of each path id, when `line_count_table`.
     path_line_counts: Vec<u64>,
     /// How many `SourceReload` markers have been written; the next one's
-    /// ordinal is this plus one, and a non-zero value sets
-    /// `FLAG_EXT_HAS_SOURCE_RELOAD` at close.
+    /// ordinal is this plus one.
     source_reloads: u64,
+    /// Whether the recorder declared, before the trace opened, that source
+    /// reloads may occur (`meta.dat` `flags_ext` bit 0).
+    source_reloads_declared: bool,
     /// Operations this writer refused because honouring them would have
     /// written a location or record the container cannot represent. See
     /// [`CtfsTraceWriter::refusals`].
@@ -349,11 +361,86 @@ pub struct CtfsTraceWriter {
     /// recorder registers is registered — see
     /// [`AbstractTraceWriter::register_function`] on this type.
     pending_functions: Vec<(String, std::path::PathBuf, codetracer_trace_types::Line)>,
+
+    // --- Durability (`ctfs-container.md` §6) ---------------------------------
+    //
+    // The container is published as it is recorded: `meta.dat` by the first
+    // record, then every sealed chunk of every stream, with the interning
+    // records it may refer to, before the append that sealed it returns. A
+    // recording whose process dies leaves a container readable up to the last
+    // chunk each stream sealed.
+    /// The members, created when `meta.dat` is committed.
+    members: Option<Members>,
+    /// Whether `meta.dat` is written. From then on every field and flag in it
+    /// is fixed, and a call that would change one is refused.
+    meta_committed: bool,
+    /// `calls.dat`, `values.dat` and `events.dat`, written as their records
+    /// become final.
+    calls_sink: Option<ChunkSink>,
+    values_sink: Option<ChunkSink>,
+    events_sink: Option<ChunkSink>,
+    /// Interning records published so far, per table, and each table's
+    /// `.dat` length.
+    interning_published: [(usize, u64); 4],
+    /// Re-entrancy guard: a function written while publishing goes through
+    /// `add_event`, which must not publish again.
+    publishing: bool,
+    /// The first failure to encode or write the container. Recording calls
+    /// cannot return it, so it is held and returned by
+    /// `finish_writing_trace_events`; nothing is written after it.
+    write_error: Option<String>,
+}
+
+/// The members of a container being written, by role.
+struct Members {
+    calls: (codetracer_ctfs::FileHandle, codetracer_ctfs::FileHandle),
+    steps: (codetracer_ctfs::FileHandle, codetracer_ctfs::FileHandle),
+    values: (codetracer_ctfs::FileHandle, codetracer_ctfs::FileHandle),
+    events: (codetracer_ctfs::FileHandle, codetracer_ctfs::FileHandle),
+    /// `paths`, `funcs`, `types`, `varnames`: each a `.dat` and its `.off`.
+    interning: [(codetracer_ctfs::FileHandle, codetracer_ctfs::FileHandle); 4],
+}
+
+/// Whether `event` is a record — something `meta.dat` must be committed
+/// before (`ctfs-container.md` §6, "Durability", rule 1) — rather than an
+/// interning registration.
+fn is_record(event: &TraceLowLevelEvent) -> bool {
+    !matches!(
+        event,
+        TraceLowLevelEvent::Path(_)
+            | TraceLowLevelEvent::VariableName(_)
+            | TraceLowLevelEvent::Variable(_)
+            | TraceLowLevelEvent::Type(_)
+            | TraceLowLevelEvent::Function(_)
+    )
 }
 
 /// The id handed back for a path the writer refused to register. Never a real
 /// `paths.dat` index.
 pub const INVALID_PATH_ID: codetracer_trace_types::PathId = codetracer_trace_types::PathId(usize::MAX);
+
+/// THE refusal of a table offered for a path interned with a different one
+/// (`internal-files.md` §"`paths.dat` Layout A"). The Nim writer states it in
+/// the same words.
+pub fn late_column_table_diagnostic(path: &Path, recorded_lines: usize, offered_lines: usize) -> String {
+    format!(
+        "paths.dat: {} was interned with a {recorded_lines}-line table, and a later registration offering a \
+         different {offered_lines}-line table is refused; a file's table is fixed when the file is first interned, \
+         so register it before the file's first step, function or call",
+        path.display()
+    )
+}
+
+/// THE refusal of a step past the last line of a file with the conventional
+/// table (`internal-files.md` §"`paths.dat` Layout A"). The Nim writer states
+/// it in the same words.
+pub fn conventional_line_diagnostic(path: &Path, line: i64) -> String {
+    format!(
+        "step at line {line} of {}, which has the conventional table of 100000 lines; its position would fall \
+         inside the next file's range",
+        path.display()
+    )
+}
 
 impl CtfsTraceWriter {
     /// Create a new CTFS trace writer using the default SplitBinary format.
@@ -400,6 +487,7 @@ impl CtfsTraceWriter {
             call_stream_builder: None,
             calls_chunk_size: DEFAULT_CALLS_CHUNK_SIZE,
             step_stream_builder: None,
+            step_map_builder: None,
             steps_chunk_size: DEFAULT_STEPS_CHUNK_SIZE,
             value_stream_builder: None,
             values_chunk_size: DEFAULT_VALUES_CHUNK_SIZE,
@@ -421,13 +509,23 @@ impl CtfsTraceWriter {
             exec_encoder: None,
             pending_line_lengths: None,
             pending_column_delta: 0,
+            last_step_location: None,
             line_count_table: false,
             pending_line_count: None,
             path_line_counts: Vec::new(),
             source_reloads: 0,
+            source_reloads_declared: false,
             refusals: Vec::new(),
             fatal_refusal: None,
             pending_functions: Vec::new(),
+            members: None,
+            meta_committed: false,
+            calls_sink: None,
+            values_sink: None,
+            events_sink: None,
+            interning_published: [(0, 0); 4],
+            publishing: false,
+            write_error: None,
         }
     }
 
@@ -444,6 +542,11 @@ impl CtfsTraceWriter {
     /// registered, and is refused on a column-aware writer, whose Layout A
     /// records already carry `line_count`.
     pub fn enable_line_count_table(&mut self) -> Result<(), String> {
+        if self.meta_committed {
+            return Err("enable_line_count_table: the trace has recorded already, and meta.dat, which declares \
+                        the table, was written by its first record"
+                .to_string());
+        }
         if self.column_aware_requested {
             return Err(
                 "enable_line_count_table: this writer is column-aware, whose paths.dat records already carry the \
@@ -548,6 +651,14 @@ impl CtfsTraceWriter {
         if self.ctfs_writer.is_none() {
             return Err("register_source_reload called before begin_writing_trace_events".to_string());
         }
+        if !self.source_reloads_declared {
+            return Err(
+                "register_source_reload: this trace did not declare source reloads before its first record \
+                        (call declare_source_reload). meta.dat is written by the first record and does not \
+                        admit a SourceReload record unless it declares one may occur"
+                    .to_string(),
+            );
+        }
         if changed.is_empty() {
             return Err(
                 "register_source_reload: no changed files. A marker that records a reload without recording what \
@@ -585,19 +696,41 @@ impl CtfsTraceWriter {
             }
         }
         let ordinal = self.source_reloads + 1;
-        if let Some(encoder) = self.exec_encoder.as_mut() {
+        self.commit_meta();
+        // The line-only stream is built by `StepStreamBuilder`, which counts
+        // the exec records `step-map.ns` indexes; the column-aware one is
+        // written straight into the encoder.
+        if let Some(builder) = self.step_stream_builder.as_mut() {
+            builder.push_source_reload(ordinal, changed.to_vec(), in_flight_frames);
+        } else if let Some(encoder) = self.exec_encoder.as_mut() {
             encoder.write_event(crate::column_aware::StepEvent::SourceReload {
                 reload_ordinal: ordinal,
                 changed: changed.to_vec(),
                 in_flight_frames,
             })?;
             self.step_encoder.note_non_step_event();
-        } else if let Some(builder) = self.step_stream_builder.as_mut() {
-            builder.push_source_reload(ordinal, changed.to_vec(), in_flight_frames);
         }
         self.note_non_step_exec_record();
         self.source_reloads = ordinal;
+        self.after_record();
         Ok(ordinal)
+    }
+
+    /// Declare that this recording may contain source reload markers
+    /// (`meta.dat` `flags_ext` bit 0, `internal-files.md` §"Extended flags").
+    ///
+    /// A capability, declared like the line-count table before the trace's
+    /// first record: `meta.dat` is written by that record and never
+    /// rewritten, so it is refused after it. A trace that declares it and
+    /// records no reload is well-formed.
+    pub fn declare_source_reload(&mut self) -> Result<(), String> {
+        if self.meta_committed {
+            return Err("declare_source_reload: the trace has recorded already, and meta.dat, which carries the \
+                        declaration, was written by its first record"
+                .to_string());
+        }
+        self.source_reloads_declared = true;
+        Ok(())
     }
 
     /// How many source reload markers this writer has written.
@@ -700,19 +833,58 @@ impl CtfsTraceWriter {
     /// the Nim writer ignores it, so a recorder can call this unconditionally
     /// without changing a line-only trace's bytes.
     ///
+    /// In column-aware mode the file's table is decided when the path is first
+    /// mentioned — here, or by a step, a function or an id request naming it —
+    /// by [`column_table_at_first_mention`] (`internal-files.md` §"`paths.dat`
+    /// Layout A"): a given table as given, except that one whose lines hold
+    /// nothing gives its first line a position; an empty table or none, the
+    /// conventional table. A recorder that can read a file's source registers
+    /// its real table before the file's first mention.
+    ///
+    /// For a path already interned, a non-empty table that is not the recorded
+    /// one (after the same normalisation) is refused, naming the path:
+    /// positions already written depend on the file's size. The refusal is
+    /// recorded in [`Self::refusals`], which fails the recording, and
+    /// [`INVALID_PATH_ID`] is returned. The same table again, or none, returns
+    /// the existing id.
+    ///
     /// Mirrors the Nim writer's `registerPath(path, lineLengths)`.
     pub fn register_path_with_line_lengths(&mut self, path: &Path, line_lengths: &[u32]) -> codetracer_trace_types::PathId {
-        if self.base.paths.contains_key(path) {
-            // Already interned; the table was attached when it was first seen.
-            return *self.base.paths.get(path).unwrap();
+        match self.try_register_path_with_line_lengths(path, line_lengths) {
+            Ok(id) => id,
+            Err(refusal) => {
+                self.refusals.push(refusal);
+                INVALID_PATH_ID
+            }
         }
-        self.pending_line_lengths = Some(line_lengths.to_vec());
+    }
+
+    fn try_register_path_with_line_lengths(&mut self, path: &Path, line_lengths: &[u32]) -> Result<codetracer_trace_types::PathId, String> {
+        if let Some(id) = self.base.paths.get(path).copied() {
+            if self.column_aware_active
+                && !line_lengths.is_empty()
+                && let Some(recorded) = self.position_space.line_lengths().get(id.0)
+            {
+                let offered = column_table_at_first_mention(line_lengths);
+                if &offered != recorded {
+                    // An empty held table is the conventional one.
+                    let lines = |t: &[u32]| if t.is_empty() { DEFAULT_LINES_PER_FILE as usize } else { t.len() };
+                    return Err(late_column_table_diagnostic(path, lines(recorded), lines(&offered)));
+                }
+            }
+            return Ok(id);
+        }
+        self.pending_line_lengths = Some(if self.column_aware_active {
+            column_table_at_first_mention(line_lengths)
+        } else {
+            line_lengths.to_vec()
+        });
         let id = AbstractTraceWriter::ensure_path_id(self, path);
         // `ensure_path_id` emits the `Path` event, which consumes the pending
         // table. Clear it defensively so a path that somehow did not emit one
         // cannot leak its table onto the next path registered.
         self.pending_line_lengths = None;
-        id
+        Ok(id)
     }
 
     /// Emit a column-only step: a `DeltaColumn` (tag 0x07) record that advances
@@ -732,11 +904,22 @@ impl CtfsTraceWriter {
                         (call enable_column_aware_steps before begin_writing_trace_events)"
                 .to_string());
         }
-        let Some(encoder) = self.exec_encoder.as_mut() else {
+        if self.exec_encoder.is_none() {
             return Err("register_column_step called before begin_writing_trace_events".to_string());
-        };
+        }
+        // On a file with the conventional table a move past column
+        // `CONVENTIONAL_LINE_LENGTH` stops at that column of the current line.
+        let mut column_delta = column_delta;
+        if let Some((path_id, line)) = self.last_step_location
+            && self.position_space.is_conventional(path_id)
+        {
+            let line_base = self.position_space.position_of(path_id, line);
+            let column = self.step_encoder.last_position() as i64 - line_base as i64 + 1;
+            column_delta = (column + column_delta).min(i64::from(CONVENTIONAL_LINE_LENGTH)) - column;
+        }
         let event = self.step_encoder.column_step(column_delta)?;
-        encoder.write_event(event)?;
+        self.commit_meta();
+        self.exec_encoder.as_mut().expect("checked above").write_event(event)?;
         // A column step is an exec record: it owns a value record and advances
         // the index `calls.dat` and `events.dat` are expressed in.
         if let Some(builder) = self.value_stream_builder.as_mut() {
@@ -748,6 +931,7 @@ impl CtfsTraceWriter {
         if let Some(builder) = self.io_event_stream_builder.as_mut() {
             builder.note_exec_record();
         }
+        self.after_record();
         Ok(())
     }
 
@@ -850,14 +1034,22 @@ impl CtfsTraceWriter {
 
     /// Pin the `recording_id` stamped into `meta.json` and `meta.dat`.
     ///
-    /// By default the writer mints a fresh UUIDv7 at
-    /// `finish_writing_trace_events`. Set it explicitly when the identity is
+    /// By default the writer mints a fresh UUIDv7 when it writes `meta.dat`. Set it explicitly when the identity is
     /// decided elsewhere — an import pinning a pre-existing id, a test that
     /// wants a reproducible container, or a browser host minting the id in
     /// JavaScript because `wasm32-unknown-unknown` has neither a wall clock
     /// nor an entropy source.
+    ///
+    /// A change is refused, failing the recording, once `meta.dat` has been
+    /// written by the first record.
     pub fn set_recording_id(&mut self, recording_id: impl Into<String>) {
-        self.recording_id = Some(recording_id.into());
+        let recording_id = recording_id.into();
+        if self.meta_committed && self.recording_id.as_deref() != Some(recording_id.as_str()) {
+            self.refusals
+                .push("set_recording_id after the first record: meta.dat, which carries the recording id, is already written".to_string());
+            return;
+        }
+        self.recording_id = Some(recording_id);
     }
 
     /// Create a new CTFS trace writer using the legacy CBOR format.
@@ -935,6 +1127,249 @@ impl CtfsTraceWriter {
         Ok(())
     }
 
+    /// Hold the first failure to encode or write the container.
+    fn latch<E: std::fmt::Display>(&mut self, result: Result<(), E>) {
+        if let Err(e) = result {
+            self.write_error.get_or_insert_with(|| e.to_string());
+        }
+    }
+
+    /// The `meta.dat` this trace is committed with.
+    fn meta_dat_bytes(&mut self) -> Vec<u8> {
+        let recording_id = self
+            .recording_id
+            .get_or_insert_with(|| {
+                codetracer_trace_types::TraceMetadata::new(self.base.program.clone(), self.base.args.clone(), self.base.workdir.clone()).recording_id
+            })
+            .clone();
+        // Bits 8-12: the streams this writer creates when it commits; it never
+        // creates a member lazily, so it sets no other stream-presence bit
+        // (`internal-files.md` §"Stream-presence flags are a hint, not a gate").
+        let mut flags = FLAG_HAS_CALL_STREAM | FLAG_HAS_STEP_STREAM | FLAG_HAS_VALUE_STREAM | FLAG_HAS_IO_EVENT_STREAM | FLAG_HAS_INTERNING_TABLES;
+        // The column bits. Bit 4 says the wire format changed — `paths.dat`
+        // is Layout A and `steps.dat` positions address (line, column) —
+        // and a reader that does not know it is required by spec to refuse
+        // the container rather than misdecode it. Bits 6 and 7 are
+        // capability claims about the recorder, and are meaningless without
+        // bit 4, so they are only ever set alongside it.
+        if self.column_aware_active {
+            flags |= FLAG_HAS_COLUMN_AWARE_STEPS;
+            if self.column_breakpoints_requested {
+                flags |= FLAG_SUPPORTS_COLUMN_BREAKPOINTS;
+            }
+            if self.column_motions_requested {
+                flags |= FLAG_SUPPORTS_COLUMN_MOTIONS;
+            }
+        }
+        if self.line_count_table {
+            flags |= FLAG_HAS_LINE_COUNT_TABLE;
+        }
+        let ext_flags = if self.source_reloads_declared { FLAG_EXT_HAS_SOURCE_RELOAD } else { 0 };
+        encode_meta_dat_ext(
+            &recording_id,
+            &self.base.program,
+            &self.base.args,
+            &self.base.workdir.to_string_lossy(),
+            "",
+            flags,
+            ext_flags,
+        )
+    }
+
+    /// Write `meta.dat`, complete, and create the members the trace is
+    /// recorded into. Done by the first record, or at finish for a trace with
+    /// none (`ctfs-container.md` §6, "Durability", rule 1); every field and
+    /// flag is fixed from then on.
+    fn commit_meta(&mut self) {
+        if self.meta_committed || self.ctfs_writer.is_none() {
+            return;
+        }
+        self.meta_committed = true;
+        let meta = self.meta_dat_bytes();
+        let result = (|| -> Result<Members, codetracer_ctfs::CtfsError> {
+            let w = self.ctfs_writer.as_mut().expect("checked above");
+            let mut pair = |dat: &str, idx: &str| -> Result<_, codetracer_ctfs::CtfsError> { Ok((w.add_file(dat)?, w.add_file(idx)?)) };
+            let members = Members {
+                calls: pair("calls.dat", "calls.idx")?,
+                steps: pair("steps.dat", "steps.idx")?,
+                values: pair("values.dat", "values.idx")?,
+                events: pair("events.dat", "events.idx")?,
+                interning: [
+                    pair("paths.dat", "paths.off")?,
+                    pair("funcs.dat", "funcs.off")?,
+                    pair("types.dat", "types.off")?,
+                    pair("varnames.dat", "varnames.off")?,
+                ],
+            };
+            let meta_handle = w.add_file("meta.dat")?;
+            w.write(meta_handle, &meta)?;
+            // Every offset table starts with record 0's offset, `0`.
+            for (_, off) in members.interning {
+                w.write(off, &0u64.to_le_bytes())?;
+            }
+            w.sync_entry(meta_handle)?;
+            Ok(members)
+        })();
+        match result {
+            Ok(members) => self.members = Some(members),
+            Err(e) => self.latch(Err::<(), _>(format!("writing meta.dat: {e}"))),
+        }
+        // The index headers, so that every stream is readable — empty — from
+        // here on.
+        self.publish();
+    }
+
+    /// Move every record that has become final into its stream: steps as they
+    /// are built, values once no later event can change them, calls once they
+    /// and every call before them have returned, I/O events as they are
+    /// built. Chunks seal as they fill.
+    fn drain_streams(&mut self) {
+        let mut result: Result<(), String> = Ok(());
+        if let (Some(builder), Some(encoder)) = (self.step_stream_builder.as_mut(), self.exec_encoder.as_mut()) {
+            for record in builder.drain() {
+                if result.is_ok() {
+                    result = crate::step_stream::write_record(encoder, &record);
+                }
+            }
+        }
+        if let (Some(builder), Some(sink)) = (self.value_stream_builder.as_mut(), self.values_sink.as_mut()) {
+            for record in builder.take_final() {
+                let mut bytes = Vec::new();
+                record.encode(&mut bytes);
+                if result.is_ok() {
+                    result = sink.push(&bytes);
+                }
+            }
+        }
+        if let (Some(builder), Some(sink)) = (self.call_stream_builder.as_mut(), self.calls_sink.as_mut()) {
+            for record in builder.take_complete() {
+                let mut bytes = Vec::new();
+                record.encode(&mut bytes);
+                if result.is_ok() {
+                    result = sink.push(&bytes);
+                }
+            }
+        }
+        if let (Some(builder), Some(sink)) = (self.io_event_stream_builder.as_mut(), self.events_sink.as_mut()) {
+            for record in builder.take_records() {
+                if result.is_ok() {
+                    result = crate::event_stream::event_log_kind(record.kind).and_then(|_| {
+                        let mut bytes = Vec::new();
+                        record.encode(&mut bytes);
+                        sink.push(&bytes)
+                    });
+                }
+            }
+        }
+        self.latch(result);
+    }
+
+    /// Whether a stream sealed a chunk that is not yet in the container.
+    fn sealed_unpublished(&self) -> bool {
+        self.exec_encoder.as_ref().is_some_and(|e| e.has_sealed())
+            || [&self.calls_sink, &self.values_sink, &self.events_sink]
+                .iter()
+                .any(|s| s.as_ref().is_some_and(ChunkSink::has_new))
+    }
+
+    /// After a record: drain what became final and, if a chunk sealed,
+    /// publish it.
+    fn after_record(&mut self) {
+        if self.publishing {
+            return;
+        }
+        self.drain_streams();
+        if self.sealed_unpublished() {
+            self.publish();
+        }
+    }
+
+    /// Write the functions whose declaration path is registered, in id order,
+    /// stopping at the first whose path is not: its record can only be written
+    /// once its file is laid out, and `funcs.dat` is in id order.
+    fn write_ready_functions(&mut self) {
+        while let Some((_, path, _)) = self.pending_functions.first() {
+            let Some(&path_id) = self.base.paths.get(path) else {
+                break;
+            };
+            let (name, _, line) = self.pending_functions.remove(0);
+            self.base.function_list.push((name.clone(), path_id, line));
+            AbstractTraceWriter::add_event(
+                self,
+                TraceLowLevelEvent::Function(codetracer_trace_types::FunctionRecord { name, path_id, line }),
+            );
+        }
+    }
+
+    /// Publish everything sealed so far (`ctfs-container.md` §6,
+    /// "Durability", rule 2): the sealed chunks' bytes and index entries,
+    /// every interning record registered so far, then the root entries of
+    /// every member that grew — data before the entry that publishes it.
+    fn publish(&mut self) {
+        if self.write_error.is_some() || self.members.is_none() {
+            return;
+        }
+        self.publishing = true;
+        self.write_ready_functions();
+        self.publishing = false;
+
+        let members = self.members.as_ref().expect("checked above");
+        let mut writes: Vec<(codetracer_ctfs::FileHandle, Vec<u8>)> = Vec::new();
+        let mut stream = |handles: (codetracer_ctfs::FileHandle, codetracer_ctfs::FileHandle), (dat, idx): (Vec<u8>, Vec<u8>)| {
+            writes.push((handles.0, dat));
+            writes.push((handles.1, idx));
+        };
+        if let Some(e) = self.exec_encoder.as_mut() {
+            stream(members.steps, e.take_sealed());
+        }
+        if let Some(s) = self.calls_sink.as_mut() {
+            stream(members.calls, s.take());
+        }
+        if let Some(s) = self.values_sink.as_mut() {
+            stream(members.values, s.take());
+        }
+        if let Some(s) = self.events_sink.as_mut() {
+            stream(members.events, s.take());
+        }
+        if let Some(tables) = self.interning_tables_builder.as_ref() {
+            let counts = [tables.path_count(), tables.func_count(), tables.type_count(), tables.varname_count()];
+            for (t, &(dat_h, off_h)) in members.interning.iter().enumerate() {
+                let (published, mut dat_len) = self.interning_published[t];
+                let mut dat = Vec::new();
+                let mut off = Vec::new();
+                for id in published..counts[t] {
+                    let rec = match t {
+                        0 => tables.path_record(id),
+                        1 => tables.func_record(id),
+                        2 => tables.type_record(id),
+                        _ => tables.varname_record(id),
+                    };
+                    dat_len += rec.len() as u64;
+                    dat.extend_from_slice(&rec);
+                    off.extend_from_slice(&dat_len.to_le_bytes());
+                }
+                self.interning_published[t] = (counts[t], dat_len);
+                writes.push((dat_h, dat));
+                writes.push((off_h, off));
+            }
+        }
+        writes.retain(|(_, bytes)| !bytes.is_empty());
+        let w = self.ctfs_writer.as_mut().expect("members exist only while the container is open");
+        let result = (|| -> Result<(), codetracer_ctfs::CtfsError> {
+            for (h, bytes) in &writes {
+                w.write(*h, bytes)?;
+            }
+            for (h, _) in &writes {
+                w.write_pending(*h)?;
+            }
+            for (h, _) in &writes {
+                w.publish_entry(*h)?;
+            }
+            w.flush()
+        })();
+        self.latch(result.map_err(|e| format!("publishing a sealed chunk: {e}")));
+    }
+
     /// Returns the number of flushes performed so far.
     pub fn flush_count(&self) -> usize {
         self.flush_count
@@ -953,6 +1388,21 @@ impl AbstractTraceWriter for CtfsTraceWriter {
 
     fn get_mut_data(&mut self) -> &mut AbstractTraceWriterData {
         &mut self.base
+    }
+
+    /// Set the working directory `meta.dat` records. A change is refused,
+    /// failing the recording, once `meta.dat` has been written by the first
+    /// record
+    /// (`internal-files.md` §"Extended flags": every field is fixed then).
+    fn set_workdir(&mut self, workdir: &Path) {
+        if self.meta_committed && self.base.workdir != workdir {
+            self.refusals.push(format!(
+                "set_workdir({}) after the first record: meta.dat, which carries the workdir, is already written",
+                workdir.display()
+            ));
+            return;
+        }
+        self.base.workdir = workdir.to_path_buf();
     }
 
     /// Intern `path`, resolving it to its newest version.
@@ -1005,8 +1455,9 @@ impl AbstractTraceWriter for CtfsTraceWriter {
         AbstractTraceWriter::add_event(self, TraceLowLevelEvent::Step(codetracer_trace_types::StepRecord { path_id, line }));
     }
 
-    /// Register a function. Its record is WRITTEN at finish, not now, as the
-    /// Nim writer writes it at close.
+    /// Register a function. Its record is written once its declaration path
+    /// is registered — at the next publication after that, or at finish — not
+    /// now.
     ///
     /// A function's declaration path may be a file no step has visited yet.
     /// Interning it now would give it the next path id ahead of the files the
@@ -1052,6 +1503,22 @@ impl AbstractTraceWriter for CtfsTraceWriter {
     }
 
     fn add_event(&mut self, event: TraceLowLevelEvent) {
+        // A step past the last line of a file with the conventional table would
+        // address the next file's range; it is refused, failing the recording,
+        // as under the line-count table.
+        if self.column_aware_active
+            && let TraceLowLevelEvent::Step(step) = &event
+            && self.position_space.is_conventional(step.path_id.0 as u64)
+            && step.line.0 > DEFAULT_LINES_PER_FILE as i64
+        {
+            let path = self.base.path_list.get(step.path_id.0).cloned().unwrap_or_default();
+            self.refusals.push(conventional_line_diagnostic(&path, step.line.0));
+            self.pending_column_delta = 0;
+            return;
+        }
+        if is_record(&event) {
+            self.commit_meta();
+        }
         // Column-aware mode intercepts the two events that carry source
         // positions BEFORE the line-only builders see them. `Path` grows the
         // position space; `Step` is encoded through Nim's delta policy into the
@@ -1061,6 +1528,9 @@ impl AbstractTraceWriter for CtfsTraceWriter {
         if self.column_aware_active {
             match &event {
                 TraceLowLevelEvent::Path(_) => {
+                    // A path first mentioned with no table — by a step, a
+                    // function or an id request — gets the conventional one.
+                    // An empty table is the conventional one, held as its rule.
                     let lls = self.pending_line_lengths.take().unwrap_or_default();
                     let path_id = self.position_space.push_path(&lls) as usize;
                     if let Some(ref mut builder) = self.interning_tables_builder {
@@ -1079,10 +1549,17 @@ impl AbstractTraceWriter for CtfsTraceWriter {
                     // column-1 step carries no variables, so a line-granular
                     // step-over lands on it and `variables_at` answers empty.
                     let mut column_delta = std::mem::replace(&mut self.pending_column_delta, 0);
-                    // A file with no per-line table has no column axis: its
-                    // slot in the position space is sized by the line-only
-                    // fallback, so one address IS one line and a column delta
-                    // added to that address names a LATER LINE. The step is
+                    // On a file with the conventional table a column above
+                    // `CONVENTIONAL_LINE_LENGTH` is recorded at that column of
+                    // its line, as a line 0 is recorded as line 1.
+                    if self.position_space.is_conventional(step.path_id.0 as u64) {
+                        column_delta = column_delta.min(i64::from(CONVENTIONAL_LINE_LENGTH) - 1);
+                    }
+                    self.last_step_location = Some((step.path_id.0 as u64, step.line.0.max(0) as u64));
+                    // Every registered file has a column axis — its table or
+                    // the conventional one — so this guards a path id the
+                    // space does not know, whose column would name a later
+                    // address rather than a column. The step is
                     // kept at its line and the column is dropped, which is
                     // what the spec requires of a column arriving as part of
                     // a step (`trace-events.md` §"A column needs a file with
@@ -1095,11 +1572,10 @@ impl AbstractTraceWriter for CtfsTraceWriter {
                     }
                     let step_event = self.step_encoder.step_at(position, column_delta);
                     if let Some(encoder) = self.exec_encoder.as_mut() {
-                        // A failure here is a zstd failure, which the
-                        // line-only path also swallows (`let _ =
-                        // self.flush_chunk()`). Keep the shapes the same
-                        // rather than introducing a panic on one path only.
-                        let _ = encoder.write_event(step_event);
+                        // A failure here is a zstd failure: held, and
+                        // returned when the recording finishes.
+                        let r = encoder.write_event(step_event);
+                        self.latch(r);
                     }
                 }
                 TraceLowLevelEvent::ThreadSwitch(codetracer_trace_types::ThreadId(tid)) => {
@@ -1112,19 +1588,22 @@ impl AbstractTraceWriter for CtfsTraceWriter {
                     // The value record is opened by `ValueStreamBuilder::observe`
                     // below, as it is for the line-only stream.
                     if let Some(encoder) = self.exec_encoder.as_mut() {
-                        let _ = encoder.write_event(crate::column_aware::StepEvent::ThreadSwitch { thread_id: *tid });
+                        let r = encoder.write_event(crate::column_aware::StepEvent::ThreadSwitch { thread_id: *tid });
+                        self.latch(r);
                     }
                     self.step_encoder.note_non_step_event();
                 }
                 TraceLowLevelEvent::ThreadStart(codetracer_trace_types::ThreadId(tid)) => {
                     if let Some(encoder) = self.exec_encoder.as_mut() {
-                        let _ = encoder.write_event(crate::column_aware::StepEvent::ThreadStart { thread_id: *tid });
+                        let r = encoder.write_event(crate::column_aware::StepEvent::ThreadStart { thread_id: *tid });
+                        self.latch(r);
                     }
                     self.step_encoder.note_non_step_event();
                 }
                 TraceLowLevelEvent::ThreadExit(codetracer_trace_types::ThreadId(tid)) => {
                     if let Some(encoder) = self.exec_encoder.as_mut() {
-                        let _ = encoder.write_event(crate::column_aware::StepEvent::ThreadExit { thread_id: *tid });
+                        let r = encoder.write_event(crate::column_aware::StepEvent::ThreadExit { thread_id: *tid });
+                        self.latch(r);
                     }
                     self.step_encoder.note_non_step_event();
                 }
@@ -1155,6 +1634,11 @@ impl AbstractTraceWriter for CtfsTraceWriter {
         // Armed only in line-only mode; the column-aware path above owns
         // `steps.dat` instead.
         if let Some(ref mut builder) = self.step_stream_builder {
+            // The step's id in `step-map.ns` is the exec-record index it is
+            // about to take, so it is read before the builder appends it.
+            if let (TraceLowLevelEvent::Step(step), Some(map)) = (&event, self.step_map_builder.as_mut()) {
+                map.record_step(step.path_id.0 as u64, step.line.0, builder.len() as u64);
+            }
             builder.observe(&event);
         }
         // M23b: feed the dedicated value-stream builder from the SAME event
@@ -1178,21 +1662,23 @@ impl AbstractTraceWriter for CtfsTraceWriter {
         match self.serialization_format {
             EventSerializationFormat::Cbor => {
                 let buf: Vec<u8> = Vec::new();
-                let cbor_bytes = cbor4ii::serde::to_vec(buf, &event).unwrap();
+                let cbor_bytes = cbor4ii::serde::to_vec(buf, &event).expect("CBOR encoding into a Vec cannot fail");
 
                 if let Some(ref mut encoder) = self.encoder {
-                    encoder.write_all(&cbor_bytes).unwrap();
+                    let r = encoder.write_all(&cbor_bytes);
+                    self.latch(r);
                 }
                 self.unflushed_bytes += cbor_bytes.len();
 
                 // Auto-flush when uncompressed data exceeds threshold.
                 if self.unflushed_bytes >= self.flush_threshold {
-                    let _ = self.flush_events_cbor();
+                    let r = self.flush_events_cbor();
+                    self.latch(r);
                 }
             }
             EventSerializationFormat::SplitBinary => {
                 let start = self.event_buffer.len();
-                crate::split_binary::encode_event(&event, &mut self.event_buffer).unwrap();
+                crate::split_binary::encode_event(&event, &mut self.event_buffer).expect("encoding into a Vec cannot fail");
                 let size = self.event_buffer.len() - start;
                 self.event_sizes.push(size);
                 self.event_geids.push(self.total_events);
@@ -1200,10 +1686,12 @@ impl AbstractTraceWriter for CtfsTraceWriter {
                 self.unflushed_events += 1;
 
                 if self.unflushed_events >= self.chunk_size {
-                    let _ = self.flush_chunk();
+                    let r = self.flush_chunk();
+                    self.latch(r);
                 }
             }
         }
+        self.after_record();
     }
 
     fn append_events(&mut self, events: &mut Vec<TraceLowLevelEvent>) {
@@ -1246,7 +1734,11 @@ impl TraceWriter for CtfsTraceWriter {
     }
 
     fn write_delta_column(&mut self, column_delta: i64) {
-        let _ = CtfsTraceWriter::register_column_step(self, column_delta);
+        // The trait surface accepts and ignores a column step on a writer that
+        // is not column-aware; `dropped_column_awareness` reports a request
+        // for columns that could not be honoured. A caller that needs the
+        // refusal calls `register_column_step`.
+        let _ignored = CtfsTraceWriter::register_column_step(self, column_delta);
     }
 
     fn register_path_with_line_lengths(
@@ -1254,7 +1746,15 @@ impl TraceWriter for CtfsTraceWriter {
         path: &Path,
         line_lengths: &[u32],
     ) -> Result<codetracer_trace_types::PathId, Box<dyn std::error::Error>> {
-        Ok(CtfsTraceWriter::register_path_with_line_lengths(self, path, line_lengths))
+        match self.try_register_path_with_line_lengths(path, line_lengths) {
+            Ok(id) => Ok(id),
+            Err(refusal) => {
+                // Also held, so the recording fails even if the caller drops
+                // this error.
+                self.refusals.push(refusal.clone());
+                Err(refusal.into())
+            }
+        }
     }
 
     fn begin_writing_trace_events(&mut self, path: &Path) -> Result<(), Box<dyn std::error::Error>> {
@@ -1311,11 +1811,16 @@ impl TraceWriter for CtfsTraceWriter {
         // one of the two owns `steps.dat`.
         self.position_space = PositionSpace::new(self.column_aware_active);
         self.step_encoder = StepEncoder::new();
-        self.exec_encoder = if self.column_aware_active {
-            Some(ExecStreamEncoder::new(self.steps_chunk_size, EXEC_COMPRESSION_LEVEL))
-        } else {
-            None
-        };
+        // The one `steps.dat` chunk encoder. The column-aware path writes into
+        // it directly; the line-only path through `StepStreamBuilder`.
+        self.exec_encoder = Some(ExecStreamEncoder::new(self.steps_chunk_size, EXEC_COMPRESSION_LEVEL));
+        self.calls_sink = Some(ChunkSink::new("calls.dat", self.calls_chunk_size, DEFAULT_CALLS_ZSTD_LEVEL));
+        self.values_sink = Some(ChunkSink::new("values.dat", self.values_chunk_size, DEFAULT_CALLS_ZSTD_LEVEL));
+        self.events_sink = Some(ChunkSink::new("events.dat", self.events_chunk_size, DEFAULT_CALLS_ZSTD_LEVEL));
+        self.members = None;
+        self.meta_committed = false;
+        self.interning_published = [(0, 0); 4];
+        self.write_error = None;
         self.pending_line_lengths = None;
 
         // Every stream is written: each event kind has exactly one stream to
@@ -1326,6 +1831,11 @@ impl TraceWriter for CtfsTraceWriter {
         // The line-only step builder; a column-aware trace uses `exec_encoder`.
         self.step_stream_builder = if !self.column_aware_active {
             Some(StepStreamBuilder::new())
+        } else {
+            None
+        };
+        self.step_map_builder = if !self.column_aware_active {
+            Some(crate::step_map::StepMapBuilder::new())
         } else {
             None
         };
@@ -1392,191 +1902,54 @@ impl TraceWriter for CtfsTraceWriter {
             }
         }
 
-        if let Some(ref mut writer) = self.ctfs_writer {
-            // Write the format marker file.
+        // A trace with no record commits its meta.dat now.
+        self.commit_meta();
 
-            // M-REC-1: mint a UUIDv7 recording_id for this trace.
-            // Recorders that need to pin a pre-existing id (the
-            // import flow, M-REC-7) should construct TraceMetadata
-            // directly with their own id and then write it out.
-            //
-            // The metadata itself is written as `meta.dat` below; the legacy
-            // `meta.json` + `paths.json` JSON sidecars are retired.
-            //
-            // BOTH SIDES OF THIS MERGE HAD TO SURVIVE, and they are independent concerns that
-            // happened to touch adjacent lines. `dev` retired the two JSON sidecars; the wasm
-            // branch added the recording-id selection, so an importer can pin an existing id
-            // rather than having one minted. Taking either side whole would have silently undone
-            // the other — the sidecars would come back, or `with_recording_id` would be dropped and
-            // every imported trace would get a fresh identity.
-            let trace_metadata = match &self.recording_id {
-                Some(id) => codetracer_trace_types::TraceMetadata::with_recording_id(
-                    id.clone(),
-                    self.base.program.clone(),
-                    self.base.args.clone(),
-                    self.base.workdir.clone(),
-                ),
-                None => codetracer_trace_types::TraceMetadata::new(self.base.program.clone(), self.base.args.clone(), self.base.workdir.clone()),
-            };
-
-            // M17a/M23a: emit the dedicated call stream and/or the dedicated
-            // execution (step) stream, each with its companion seekable index,
-            // plus a single meta.dat carrying the corresponding capability
-            // flags. A reader that does not know a flag simply ignores the
-            // extra dat/idx files.
-            let mut stream_flags: u16 = 0;
-
-            // M17a: the dedicated call stream + companion index.
-            {
-                let records = self.call_stream_builder.take().map(|b| b.finish()).unwrap_or_default();
-                let encoded = encode_call_stream(&records, self.calls_chunk_size, DEFAULT_CALLS_ZSTD_LEVEL)
-                    .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-
-                let calls_handle = writer.add_file("calls.dat")?;
-                writer.write(calls_handle, &encoded.dat)?;
-                let calls_idx_handle = writer.add_file("calls.idx")?;
-                writer.write(calls_idx_handle, &encoded.idx)?;
-                stream_flags |= FLAG_HAS_CALL_STREAM;
+        // Close every stream: what was still open becomes final, the trailing
+        // partial chunks seal, and all of it is published.
+        self.drain_streams();
+        let mut closing: Result<(), String> = Ok(());
+        if let Some(sink) = self.values_sink.as_mut() {
+            for record in self.value_stream_builder.take().map(|b| b.finish()).unwrap_or_default() {
+                let mut bytes = Vec::new();
+                record.encode(&mut bytes);
+                closing = closing.and_then(|_| sink.push(&bytes));
             }
-
-            // M23a: the dedicated execution (step) stream + companion index.
-            //
-            // Two producers, one file. In column-aware mode the Nim-parity
-            // `ExecStreamEncoder` has been streaming records since `begin`, so
-            // its buffers are simply flushed here; in line-only mode the
-            // records are encoded now from `StepStreamBuilder`. The `.idx`
-            // framing is identical either way.
-            {
-                let (dat, idx) = if let Some(encoder) = self.exec_encoder.take() {
-                    let encoded = encoder.finish().map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-                    (encoded.dat, encoded.idx)
-                } else {
-                    let stream = self
-                        .step_stream_builder
-                        .take()
-                        .map(|b| b.finish())
-                        .unwrap_or_else(|| StepStreamBuilder::new().finish());
-                    let encoded = encode_step_stream(&stream, self.steps_chunk_size, DEFAULT_CALLS_ZSTD_LEVEL)
-                        .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-                    (encoded.dat, encoded.idx)
-                };
-
-                let steps_handle = writer.add_file("steps.dat")?;
-                writer.write(steps_handle, &dat)?;
-                let steps_idx_handle = writer.add_file("steps.idx")?;
-                writer.write(steps_idx_handle, &idx)?;
-                stream_flags |= FLAG_HAS_STEP_STREAM;
+            closing = closing.and_then(|_| sink.finish());
+        }
+        if let Some(sink) = self.calls_sink.as_mut() {
+            for record in self.call_stream_builder.take().map(|b| b.finish()).unwrap_or_default() {
+                let mut bytes = Vec::new();
+                record.encode(&mut bytes);
+                closing = closing.and_then(|_| sink.push(&bytes));
             }
+            closing = closing.and_then(|_| sink.finish());
+        }
+        if let Some(sink) = self.events_sink.as_mut() {
+            closing = closing.and_then(|_| sink.finish());
+        }
+        self.latch(closing);
+        if let Some(encoder) = self.exec_encoder.as_mut() {
+            let r = encoder.seal();
+            self.latch(r);
+        }
+        self.publish();
 
-            // M23b: the dedicated parallel value stream + companion index.
-            // Parallel-indexed to the step stream (value record N ↔ step N).
-            {
-                let records = self.value_stream_builder.take().map(|b| b.finish()).unwrap_or_default();
-                let encoded = encode_value_stream(&records, self.values_chunk_size, DEFAULT_CALLS_ZSTD_LEVEL)
-                    .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
+        // Close-time members (`ctfs-container.md` §6, "Durability", rule 4).
+        if let (Some(map), Some(writer)) = (self.step_map_builder.take(), self.ctfs_writer.as_mut())
+            && self.write_error.is_none()
+        {
+            let r = map.serialize().and_then(|bytes| {
+                let h = writer.add_file(crate::step_map::STEP_MAP_FILE_NAME).map_err(|e| e.to_string())?;
+                writer.write(h, &bytes).map_err(|e| e.to_string())?;
+                Ok(())
+            });
+            self.latch(r);
+        }
 
-                let values_handle = writer.add_file("values.dat")?;
-                writer.write(values_handle, &encoded.dat)?;
-                let values_idx_handle = writer.add_file("values.idx")?;
-                writer.write(values_idx_handle, &encoded.idx)?;
-                stream_flags |= FLAG_HAS_VALUE_STREAM;
-            }
-
-            // M23c: the dedicated I/O event stream + companion index. Holds the
-            // EventLogKind-tagged I/O / log events split out of events.log; each
-            // record carries kind / step_id (cross-ref to the execution stream)
-            // / metadata / content. NOTE: this `events.dat` is DISTINCT from the
-            // legacy `events.log` written above — do not collide the names.
-            {
-                let records = self.io_event_stream_builder.take().map(|b| b.finish()).unwrap_or_default();
-                let encoded = encode_io_event_stream(&records, self.events_chunk_size, DEFAULT_CALLS_ZSTD_LEVEL)
-                    .map_err(|e| -> Box<dyn std::error::Error> { e.into() })?;
-
-                let events_handle = writer.add_file("events.dat")?;
-                writer.write(events_handle, &encoded.dat)?;
-                let events_idx_handle = writer.add_file("events.idx")?;
-                writer.write(events_idx_handle, &encoded.idx)?;
-                stream_flags |= FLAG_HAS_IO_EVENT_STREAM;
-            }
-
-            // M23d: the binary varint interning tables. Each is a Variable-Size
-            // Record Table — a `.dat` of serialized records plus a `.off` u64-LE
-            // offset index — built from the SAME Path/Function/Type/VariableName
-            // interning that feeds events.log / paths.json, so the i-th record in
-            // each `.dat` resolves the id the event streams reference. ADDITIVE:
-            // the existing paths.json interning above is untouched.
-            {
-                let tables = self
-                    .interning_tables_builder
-                    .take()
-                    .map(|b| b.finish())
-                    .unwrap_or_else(|| InterningTablesBuilder::new().finish());
-
-                let paths_dat_handle = writer.add_file("paths.dat")?;
-                writer.write(paths_dat_handle, &tables.paths_dat)?;
-                let paths_off_handle = writer.add_file("paths.off")?;
-                writer.write(paths_off_handle, &tables.paths_off)?;
-
-                let funcs_dat_handle = writer.add_file("funcs.dat")?;
-                writer.write(funcs_dat_handle, &tables.funcs_dat)?;
-                let funcs_off_handle = writer.add_file("funcs.off")?;
-                writer.write(funcs_off_handle, &tables.funcs_off)?;
-
-                let types_dat_handle = writer.add_file("types.dat")?;
-                writer.write(types_dat_handle, &tables.types_dat)?;
-                let types_off_handle = writer.add_file("types.off")?;
-                writer.write(types_off_handle, &tables.types_off)?;
-
-                let varnames_dat_handle = writer.add_file("varnames.dat")?;
-                writer.write(varnames_dat_handle, &tables.varnames_dat)?;
-                let varnames_off_handle = writer.add_file("varnames.off")?;
-                writer.write(varnames_off_handle, &tables.varnames_off)?;
-
-                stream_flags |= FLAG_HAS_INTERNING_TABLES;
-            }
-
-            // The column bits. Bit 4 says the wire format changed — `paths.dat`
-            // is Layout A and `steps.dat` positions address (line, column) —
-            // and a reader that does not know it is required by spec to refuse
-            // the container rather than misdecode it. Bits 6 and 7 are
-            // capability claims about the recorder, and are meaningless without
-            // bit 4, so they are only ever set alongside it.
-            if self.column_aware_active {
-                stream_flags |= FLAG_HAS_COLUMN_AWARE_STEPS;
-                if self.column_breakpoints_requested {
-                    stream_flags |= FLAG_SUPPORTS_COLUMN_BREAKPOINTS;
-                }
-                if self.column_motions_requested {
-                    stream_flags |= FLAG_SUPPORTS_COLUMN_MOTIONS;
-                }
-            }
-
-            // Stamp meta.dat with the combined stream-capability flags.
-            //
-            // Written UNCONDITIONALLY. This used to be gated on
-            // `stream_flags != 0`, so that a flags-off bundle stayed
-            // byte-for-byte identical to the legacy container — which was only
-            // safe while `meta.json` carried the metadata for that case. With
-            // the JSON sidecars retired, gating this would leave a flags-off
-            // bundle with no metadata document at all.
-            if self.line_count_table {
-                stream_flags |= FLAG_HAS_LINE_COUNT_TABLE;
-            }
-            // Version 5 exactly when an extended flag is set
-            // (`internal-files.md` §"Extended flags").
-            let ext_flags = if self.source_reloads > 0 { FLAG_EXT_HAS_SOURCE_RELOAD } else { 0 };
-            let meta_dat = encode_meta_dat_ext(
-                &trace_metadata.recording_id,
-                &self.base.program,
-                &self.base.args,
-                &self.base.workdir.to_string_lossy(),
-                "",
-                &self.base.path_list.iter().map(|p| p.to_string_lossy().into_owned()).collect::<Vec<_>>(),
-                stream_flags,
-                ext_flags,
-            );
-            let meta_dat_handle = writer.add_file("meta.dat")?;
-            writer.write(meta_dat_handle, &meta_dat)?;
+        if let Some(err) = self.write_error.take() {
+            self.ctfs_writer = None;
+            return Err(format!("the trace could not be written: {err}").into());
         }
 
         // Close the CTFS container (takes ownership)

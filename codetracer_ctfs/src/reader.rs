@@ -4,7 +4,7 @@ use std::path::Path;
 
 use crate::base40::base40_decode;
 use crate::block_bounds::BlockBound;
-use crate::file_entry::FileEntry;
+use crate::file_entry::{FileEntry, MemberLayout};
 use crate::header::{CompressionMethod, EncryptionMethod, ExtendedHeader, Header};
 use crate::CtfsError;
 
@@ -26,8 +26,8 @@ fn level_capacity(usable: u64, level: u32) -> u64 {
 }
 
 impl CtfsReader {
-    /// Open an existing CTFS container.
-    /// Accepts both v2 and v3 files.
+    /// Open an existing CTFS container. Refuses every version but
+    /// [`crate::header::VERSION`], naming the one it found.
     pub fn open(path: &Path) -> Result<Self, CtfsError> {
         let mut file = File::open(path)?;
 
@@ -169,8 +169,21 @@ impl CtfsReader {
         let n = self.block_size as u64 / 8;
         let usable = n - 1;
 
+        // The form is decided from `MapBlock`, never from `Size`
+        // (`ctfs-container.md` §2, "Readers").
+        let root = match entry.layout() {
+            // Reached only with a non-zero `Size` (callers return early on an
+            // empty member), which is a null pointer: refused below by name.
+            MemberLayout::Empty => 0,
+            MemberLayout::Direct(b) => {
+                bound.check_direct_member(b, entry.size, name)?;
+                return Ok(b);
+            }
+            MemberLayout::Mapped(m) => m,
+        };
+
         let mut idx = block_index;
-        let mut current_level_block = entry.map_block;
+        let mut current_level_block = root;
         let mut level = 1u32;
 
         // Path 1 of 3: the entry's mapping root.

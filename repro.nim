@@ -61,6 +61,11 @@ import repro_dsl_stdlib/foreign_env
 ## run with "typed tool provisioning is required for uses declarations".
 
 import repro_project_dsl
+import nimcrypto/sha2 as nativeCompilerHash
+
+when defined(linux):
+  const nativeCompilerLockIdentity =
+    "trace-native-c-owning-lock-sha256:" & $nativeCompilerHash.sha256.digest(staticRead("flake.lock"))
 
 package codetracer_trace_format:
   devEnv:
@@ -70,6 +75,10 @@ package codetracer_trace_format:
   defaultToolProvisioning "path"
 
   uses:
+    when defined(linux):
+      "traceformat_native_clang"
+      "traceformat_native_gcc"
+
     # Rust toolchain — declared by version so the tarball-direct
     # provisioning entries in repro_dsl_stdlib/packages/cargo.nim /
     # rustc.nim resolve on Windows. On Linux/macOS the nix flake
@@ -193,4 +202,22 @@ package codetracer_trace_format:
       after = @[testsBuild.action],
       extraInputs = workspaceInputs & @["target/debug/deps"])
 
+    when defined(linux):
+      for action in [workspaceBuild, testsBuild.action, testsRun.action]:
+        appendRegisteredActionToolIdentityRefs(action.id,
+          ["traceformat_native_clang", "traceformat_native_gcc",
+           "nim", "nimble", "capnp", "zstd", "pkg-config"])
+
     discard collect("test", @[testsRun.action])
+
+when defined(linux):
+  package traceformat_native_clang:
+    provisioning:
+      nixPackage "nativeClang", executablePath = "bin/clang",
+        expressionFile = "ci/native-compiler-profiles.nix",
+        lockIdentity = nativeCompilerLockIdentity & ":clang"
+  package traceformat_native_gcc:
+    provisioning:
+      nixPackage "nativeGcc", executablePath = "bin/gcc",
+        expressionFile = "ci/native-compiler-profiles.nix",
+        lockIdentity = nativeCompilerLockIdentity & ":gcc"

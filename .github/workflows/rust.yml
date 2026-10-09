@@ -10,7 +10,7 @@ env:
 
 jobs:
   lint:
-    runs-on: eph-linux-x64
+    runs-on: [self-hosted, linux, x64, ephemeral, incus]
 
     steps:
       - name: Generate CI token
@@ -22,8 +22,6 @@ jobs:
           owner: metacraft-labs
 
       - uses: actions/checkout@v4
-        with:
-          path: codetracer-trace-format
       - name: Install capnproto
         run: sudo apt-get install -y capnproto
       - name: Install just
@@ -35,12 +33,10 @@ jobs:
       # `cargo clippy`, so the sibling needs to be checked out + the
       # build.rs-canonical env var exported, otherwise build.rs panics
       # before clippy gets a chance to lint.
-      - name: Clone codetracer-trace-format-nim
-        uses: metacraft-labs/metacraft-github-actions/clone-repo@dev
+      - name: Clone locked codetracer-trace-format-nim
+        uses: metacraft-labs/metacraft-github-actions/clone-siblings@dev
         with:
-          repo: metacraft-labs/codetracer-trace-format-nim
-          ref: dev
-          path: codetracer-trace-format-nim
+          siblings: codetracer-trace-format-nim
           gh-token: ${{ steps.app-token.outputs.token }}
       # Even `cargo clippy` runs build.rs, and codetracer_trace_writer_nim's
       # build.rs shells out to `nimble` (which ships with Nim) to compile
@@ -53,14 +49,71 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
       - name: Export Nim sibling path
         run: |
-          echo "CODETRACER_TRACE_FORMAT_NIM_DIR=${GITHUB_WORKSPACE}/codetracer-trace-format-nim" >> "$GITHUB_ENV"
+          echo "CODETRACER_TRACE_FORMAT_NIM_DIR=${GITHUB_WORKSPACE}/../codetracer-trace-format-nim" >> "$GITHUB_ENV"
+
+      - name: Install the declared locked Rust acquisition backend
+        uses: metacraft-labs/metacraft-github-actions/setup-nix@3fcbb26dd920adf6ccc64a87c6d24797ab0b5d94
+        with:
+          gh-token: ${{ steps.app-token.outputs.token }}
+          token-owner: metacraft-labs
+      - name: Bind the existing locked native C compiler profiles
+        shell: bash
+        run: bash ci/acquire-native-c-profile.sh
+
+      - name: Bind the complete locked Rust profile
+        shell: bash
+        run: bash ci/acquire-rust-profile.sh
 
       - name: Lint
-        working-directory: codetracer-trace-format
         run: just lint
 
+
+      - name: Retain locked Rust profile authority
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trace-rust-profile-lint
+          path: |
+            ${{ runner.temp }}/trace-format-rust-profile-*/
+            ${{ runner.temp }}/trace-format-native-c-profile-*/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
+
+  wasm32:
+    runs-on: [self-hosted, linux, x64, ephemeral, incus]
+
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install capnproto + clang
+        run: sudo apt-get install -y capnproto clang
+      - name: Install just
+        uses: extractions/setup-just@v2
+      - name: Install the declared locked Rust acquisition backend
+        uses: metacraft-labs/metacraft-github-actions/setup-nix@3fcbb26dd920adf6ccc64a87c6d24797ab0b5d94
+        with:
+          gh-token: ${{ secrets.GITHUB_TOKEN }}
+          token-owner: metacraft-labs
+      - name: Bind the complete locked Rust profile
+        shell: bash
+        run: bash ci/acquire-rust-profile.sh
+
+      - name: Check the reader for wasm32
+        run: just check-wasm32
+
+
+      - name: Retain locked Rust profile authority
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trace-rust-profile-wasm32
+          path: ${{ runner.temp }}/trace-format-rust-profile-*/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
+
   build-and-test:
-    runs-on: eph-linux-x64
+    runs-on: [self-hosted, linux, x64, ephemeral, incus]
 
     steps:
       - name: Generate CI token
@@ -72,8 +125,6 @@ jobs:
           owner: metacraft-labs
 
       - uses: actions/checkout@v4
-        with:
-          path: codetracer-trace-format
       - name: Install capnproto + zstd
         run: sudo apt-get install -y capnproto libzstd-dev
       - name: Install just
@@ -81,23 +132,30 @@ jobs:
 
       # codetracer_trace_writer_nim links against libcodetracer_trace_writer.a
       # built from the codetracer-trace-format-nim sibling.  All cross-repo
-      # checkouts go through the shared metacraft-github-actions/clone-repo
+      # checkouts go through shared locked clone-siblings resolution
       # action so the CI_TOKEN_PROVIDER_APP_ID secret (which the org
       # provisions to every CI repo) authenticates against private repos.
-      - name: Clone codetracer-trace-format-nim
-        uses: metacraft-labs/metacraft-github-actions/clone-repo@dev
+      - name: Clone locked codetracer-trace-format-nim
+        uses: metacraft-labs/metacraft-github-actions/clone-siblings@dev
         with:
-          repo: metacraft-labs/codetracer-trace-format-nim
-          ref: dev
-          path: codetracer-trace-format-nim
+          siblings: codetracer-trace-format-nim
           gh-token: ${{ steps.app-token.outputs.token }}
       - name: Install Nim
         uses: jiro4989/setup-nim-action@v2
         with:
           nim-version: "2.2.x"
           repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install the declared locked Rust acquisition backend
+        uses: metacraft-labs/metacraft-github-actions/setup-nix@3fcbb26dd920adf6ccc64a87c6d24797ab0b5d94
+        with:
+          gh-token: ${{ steps.app-token.outputs.token }}
+          token-owner: metacraft-labs
+      - name: Bind the existing locked native C compiler profiles
+        shell: bash
+        run: bash ci/acquire-native-c-profile.sh
+
       - name: Build Nim trace writer static library
-        working-directory: codetracer-trace-format-nim
+        working-directory: ../codetracer-trace-format-nim
         run: |
           nimble install -y stew results
           nim c --app:staticlib --mm:arc --noMain -d:release \
@@ -109,44 +167,50 @@ jobs:
           # one in case downstream scripts still rely on it, but the
           # build.rs-canonical one is required for the Rust crate to
           # find src/codetracer_trace_writer_ffi.nim.
-          echo "CODETRACER_NIM_LIB_DIR=${GITHUB_WORKSPACE}/codetracer-trace-format-nim" >> "$GITHUB_ENV"
-          echo "CODETRACER_TRACE_FORMAT_NIM_DIR=${GITHUB_WORKSPACE}/codetracer-trace-format-nim" >> "$GITHUB_ENV"
+          echo "CODETRACER_NIM_LIB_DIR=${GITHUB_WORKSPACE}/../codetracer-trace-format-nim" >> "$GITHUB_ENV"
+          echo "CODETRACER_TRACE_FORMAT_NIM_DIR=${GITHUB_WORKSPACE}/../codetracer-trace-format-nim" >> "$GITHUB_ENV"
 
       # codetracer_ctfs/tests/trace_storage.rs walks 4 recorder siblings to
       # enforce the "no private storage parser" contract.  codetracer-native-recorder
       # is private; clone-repo + CI_TOKEN_PROVIDER_APP_ID handles auth.
-      - name: Clone codetracer-python-recorder
-        uses: metacraft-labs/metacraft-github-actions/clone-repo@dev
+      - name: Clone locked codetracer-python-recorder
+        uses: metacraft-labs/metacraft-github-actions/clone-siblings@dev
         with:
-          repo: metacraft-labs/codetracer-python-recorder
-          ref: dev
-          path: codetracer-python-recorder
+          siblings: codetracer-python-recorder
           gh-token: ${{ steps.app-token.outputs.token }}
-      - name: Clone codetracer-ruby-recorder
-        uses: metacraft-labs/metacraft-github-actions/clone-repo@dev
+      - name: Clone locked codetracer-ruby-recorder
+        uses: metacraft-labs/metacraft-github-actions/clone-siblings@dev
         with:
-          repo: metacraft-labs/codetracer-ruby-recorder
-          ref: dev
-          path: codetracer-ruby-recorder
+          siblings: codetracer-ruby-recorder
           gh-token: ${{ steps.app-token.outputs.token }}
-      - name: Clone codetracer-js-recorder
-        uses: metacraft-labs/metacraft-github-actions/clone-repo@dev
+      - name: Clone locked codetracer-js-recorder
+        uses: metacraft-labs/metacraft-github-actions/clone-siblings@dev
         with:
-          repo: metacraft-labs/codetracer-js-recorder
-          ref: dev
-          path: codetracer-js-recorder
+          siblings: codetracer-js-recorder
           gh-token: ${{ steps.app-token.outputs.token }}
-      - name: Clone codetracer-native-recorder
-        uses: metacraft-labs/metacraft-github-actions/clone-repo@dev
+      - name: Clone locked codetracer-native-recorder
+        uses: metacraft-labs/metacraft-github-actions/clone-siblings@dev
         with:
-          repo: metacraft-labs/codetracer-native-recorder
-          ref: dev
-          path: codetracer-native-recorder
+          siblings: codetracer-native-recorder
           gh-token: ${{ steps.app-token.outputs.token }}
 
+      - name: Bind the complete locked Rust profile
+        shell: bash
+        run: bash ci/acquire-rust-profile.sh
+
       - name: Build
-        working-directory: codetracer-trace-format
         run: just build
       - name: Run tests
-        working-directory: codetracer-trace-format
         run: just test
+
+      - name: Retain locked Rust profile authority
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trace-rust-profile-build-and-test
+          path: |
+            ${{ runner.temp }}/trace-format-rust-profile-*/
+            ${{ runner.temp }}/trace-format-native-c-profile-*/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7

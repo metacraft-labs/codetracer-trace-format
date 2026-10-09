@@ -11,9 +11,17 @@ mod cbor_zstd_writer;
 
 pub mod ctfs_writer;
 
+/// A Chunked Compressed Table written as its records arrive.
+pub mod chunk_sink;
+
 pub mod call_stream;
 
 pub mod step_stream;
+// The one rule that chooses between an absolute and a delta position record.
+pub mod step_rule;
+
+/// `step-map.ns`, the `(path_id, line)` -> step-id index of a line-only trace.
+pub mod step_map;
 
 /// The line-only global line index: a prefix sum over the registered files, and
 /// its exact inverse. Shared by the writer, the reader and every downstream

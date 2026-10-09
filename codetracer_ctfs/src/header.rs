@@ -3,35 +3,25 @@ use std::io::{Read, Write};
 
 pub const MAGIC: [u8; 5] = [0xC0, 0xDE, 0x72, 0xAC, 0xE2];
 
-/// The version this implementation WRITES. `ctfs-container.md` §1 states that
-/// header byte 5 is `4`.
+/// The one container version this implementation writes and reads
+/// (`ctfs-container.md` §1 and §2, "Older versions are refused").
 ///
-/// Version 4 RE-DEFINES bytes 6 and 7, which is why bumping this alone would
-/// not have been enough:
+/// There is no compatibility path. Version 5 changed what `FileEntry.MapBlock`
+/// means (`crate::file_entry::MemberLayout`), and nothing in the bytes of an
+/// older container says which meaning it was written under, so a reader that
+/// accepted one would either read a small member's mapping block as its
+/// content or keep every writer of the old layout alive. A container of any
+/// other version is refused by [`Header::read_from`], naming the version.
 ///
-/// * v2/v3: byte 6 = compression method, byte 7 = encryption method.
-/// * v4:    byte 6 = encryption method,  byte 7 = max shard count.
-///
-/// The v4 header carries NO compression field, and that is deliberate rather
-/// than an omission: compression in this format is a per-stream property of the
-/// chunked writer, not a property of the container. `write_to` therefore
-/// serialises according to the version rather than to a fixed layout, so a
-/// caller that asks for Zstd cannot end up with `1` sitting in the byte a v4
-/// reader interprets as AES-256-GCM.
-pub const VERSION: u8 = 4;
-pub const VERSION_V2: u8 = 2;
-pub const VERSION_V3: u8 = 3;
-pub const VERSION_V4: u8 = 4;
-
-/// The versions this implementation READS. Writing v4 does not retire the
-/// ability to open what earlier versions produced, and the two are separate
-/// decisions — dropping v3 from this list is a deliberate act, not a side
-/// effect of moving the writer forward.
-pub const SUPPORTED_VERSIONS: [u8; 3] = [VERSION_V2, VERSION_V3, VERSION_V4];
+/// Bytes 6 and 7 are the encryption method and the maximum shard count, as
+/// they were in version 4. The header carries no compression field:
+/// compression is a property of each member's format, not of the container.
+pub const VERSION: u8 = 5;
 pub const HEADER_SIZE: usize = 8;
 pub const EXTENDED_HEADER_SIZE: usize = 8;
 
-/// Compression method stored in header byte 6.
+/// A compression method a writer applies in its chunked helpers. Not stored in
+/// the container header.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum CompressionMethod {
@@ -51,7 +41,7 @@ impl CompressionMethod {
     }
 }
 
-/// Encryption method stored in header byte 7.
+/// Encryption method stored in header byte 6.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum EncryptionMethod {
@@ -93,12 +83,12 @@ pub const DEFAULT_CHUNK_SIZE: usize = 4096;
 pub struct Header {
     pub id: [u8; 5],
     pub version: u8,
-    /// Byte 6 under v2/v3 only. A v4 header has no compression field —
-    /// compression is a per-stream property of the chunked writer — so this is
-    /// carried for reading older containers and is not serialised under v4.
+    /// Not serialised: the header has no compression field (see [`VERSION`]).
+    /// A writer keeps the method it was created with for its own chunked
+    /// helpers; a header read from a container always reports `None`.
     pub compression: CompressionMethod,
     pub encryption: EncryptionMethod,
-    /// Byte 7 under v4. `0` means the container is not sharded, which is what
+    /// Byte 7. `0` means the container is not sharded, which is what
     /// this implementation produces.
     pub max_shards: u8,
 }
@@ -134,16 +124,8 @@ impl Header {
     pub fn write_to<W: Write>(&self, w: &mut W) -> Result<(), CtfsError> {
         w.write_all(&self.id)?;
         w.write_all(&[self.version])?;
-        // BYTES 6 AND 7 MEAN DIFFERENT THINGS PER VERSION — see `VERSION`.
-        // Reading already branched here; writing did not, which is the whole
-        // of why the version could not simply be bumped.
-        if self.version >= VERSION_V4 {
-            w.write_all(&[self.encryption as u8])?;
-            w.write_all(&[self.max_shards])?;
-        } else {
-            w.write_all(&[self.compression as u8])?;
-            w.write_all(&[self.encryption as u8])?;
-        }
+        w.write_all(&[self.encryption as u8])?;
+        w.write_all(&[self.max_shards])?;
         Ok(())
     }
 
@@ -155,29 +137,12 @@ impl Header {
         }
         let mut ver = [0u8; 1];
         r.read_exact(&mut ver)?;
-        // Accept every version in `SUPPORTED_VERSIONS`, and note that this must
-        // NOT be spelled in terms of `VERSION`: that names the version written,
-        // and once it moved to 4 the old `!= VERSION && != VERSION_V2 &&
-        // != VERSION_V4` quietly stopped accepting v3 — a reader losing the
-        // ability to open existing containers as a side effect of the writer
-        // moving forward, which is a decision nobody would have taken on
-        // purpose in that line.
-        if !SUPPORTED_VERSIONS.contains(&ver[0]) {
+        if ver[0] != VERSION {
             return Err(CtfsError::InvalidVersion(ver[0]));
         }
         let mut tag_bytes = [0u8; 2];
         r.read_exact(&mut tag_bytes)?;
-        // V4 changed the header layout:
-        //   v2/v3: byte 6 = compression, byte 7 = encryption
-        //   v4:    byte 6 = encryption,  byte 7 = max_shards
-        // V4 files produced by the Nim writer currently use no compression,
-        // so we default to None.
-        let (compression, encryption, max_shards) = if ver[0] >= VERSION_V4 {
-            (CompressionMethod::None, EncryptionMethod::from_byte(tag_bytes[0]), tag_bytes[1])
-        } else {
-            // For v2 files, bytes 6-7 were reserved (0x00), which maps to None/None
-            (CompressionMethod::from_byte(tag_bytes[0]), EncryptionMethod::from_byte(tag_bytes[1]), 0)
-        };
+        let (compression, encryption, max_shards) = (CompressionMethod::None, EncryptionMethod::from_byte(tag_bytes[0]), tag_bytes[1]);
         Ok(Header {
             id,
             version: ver[0],

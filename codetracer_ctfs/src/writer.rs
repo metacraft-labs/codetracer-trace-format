@@ -4,7 +4,7 @@ use std::path::Path;
 
 use crate::base40::base40_encode;
 use crate::block_alloc::BlockAllocator;
-use crate::file_entry::{FileEntry, FILE_ENTRY_SIZE};
+use crate::file_entry::{FileEntry, MemberLayout, FILE_ENTRY_SIZE};
 use crate::header::{CompressionMethod, ExtendedHeader, Header, EXTENDED_HEADER_SIZE, HEADER_SIZE};
 use crate::CtfsError;
 
@@ -131,40 +131,35 @@ impl CtfsStore for MemoryStore {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FileHandle(pub(crate) usize);
 
-/// Bottom-up chain mapping state for a single file.
-///
-/// The spec defines a bottom-up chain model:
-/// - The root mapping block (from FileEntry.map_block) is ALWAYS a level-1 block.
-/// - Level-1 block: entries[0..N-2] are direct data block pointers,
-///   entries[N-1] points to a level-2 mapping block (0 if not needed).
-/// - Level-2 block: entries[0..N-2] point to level-1 mapping blocks,
-///   entries[N-1] points to a level-3 mapping block (0 if not needed).
-/// - And so on up to level 5.
-///
-/// N = block_size / 8 (entries per block)
-/// Usable entries per mapping block = N - 1 (last slot reserved for chain pointer)
-#[derive(Debug)]
-struct MappingChain {
-    /// The root mapping block number (always level-1).
-    root_block: u64,
-    /// Total data blocks mapped so far.
-    data_block_count: u64,
-}
-
 /// State for an open file being written.
+///
+/// # Layout (`ctfs-container.md` §2, "`MapBlock` has three forms")
+///
+/// `layout` is the member's `MapBlock` in decoded form. A member starts
+/// [`MemberLayout::Empty`] and owns no block; its first data block makes it
+/// [`MemberLayout::Direct`]; the append that takes it past one block claims a
+/// level-1 mapping block, puts the direct block in slot 0 and makes it
+/// [`MemberLayout::Mapped`] — the mapping block is claimed before any new data
+/// block, so two writers given the same appends allocate the same blocks.
+///
+/// Blocks are claimed when bytes are appended, not when they are flushed: the
+/// partial last block is claimed by the append that starts it and held in
+/// `pending_block`, its bytes in `buffer` until the block fills, an entry is
+/// synced, or the container closes.
 #[derive(Debug)]
 struct OpenFile {
     entry_index: usize,
     name_encoded: u64,
-    mapping: MappingChain,
+    layout: MemberLayout,
+    /// Data blocks whose bytes are complete on disk.
+    data_block_count: u64,
     /// Total bytes written.
     size: u64,
-    /// Buffered partial block data.
+    /// Bytes of the partial last block, not yet a whole block.
     buffer: Vec<u8>,
-    /// Block number used by `sync_entry` to write partial-block data.
-    /// This block is pre-allocated and its pointer is inserted into the
-    /// mapping chain. When the buffer fills a complete block, the pending
-    /// block becomes a regular data block (the pointer is already set).
+    /// The block claimed for logical block `data_block_count`, which `buffer`
+    /// fills. Its pointer is already in the member's mapping (or is the direct
+    /// block), so it is written in place on each sync and when it fills.
     pending_block: Option<u64>,
 }
 
@@ -321,42 +316,62 @@ impl CtfsWriter {
 
         let mut files = Vec::new();
         for (i, entry) in entries.iter().enumerate() {
-            if !entry.is_empty() {
-                let total_blocks = if entry.size == 0 { 0 } else { entry.size.div_ceil(bs) };
-                let partial_bytes = entry.size % bs;
-                let has_partial = partial_bytes != 0 && entry.size > 0;
-
-                // If the last block is partial, we need to read it back into the buffer
-                // and "undo" it so subsequent writes can re-fill it.
-                let (data_block_count, buffer, logical_size) = if has_partial {
-                    let full_blocks = total_blocks - 1;
-
-                    // Read the partial block data from the file using bottom-up chain navigation
-                    let partial_data = read_last_data_block_chain(
-                        &mut file,
-                        entry.map_block,
-                        total_blocks - 1,
-                        ext_header.block_size,
-                        partial_bytes as usize,
-                    )?;
-
-                    (full_blocks, partial_data, entry.size)
-                } else {
-                    (total_blocks, Vec::new(), entry.size)
-                };
-
-                files.push(OpenFile {
-                    entry_index: i,
-                    name_encoded: entry.name,
-                    mapping: MappingChain {
-                        root_block: entry.map_block,
-                        data_block_count,
-                    },
-                    size: logical_size,
-                    buffer,
-                    pending_block: None,
-                });
+            if entry.is_empty() {
+                continue;
             }
+            let name = crate::base40::base40_decode(entry.name);
+            let damaged = |what: String| CtfsError::Io(std::io::Error::new(std::io::ErrorKind::InvalidData, what));
+            let partial_bytes = (entry.size % bs) as usize;
+            let full_blocks = entry.size / bs;
+            let (data_block_count, buffer, pending_block) = match entry.layout() {
+                MemberLayout::Empty => {
+                    if entry.size != 0 {
+                        return Err(damaged(format!(
+                            "internal file {name} has {} bytes but a null MapBlock; its data cannot be located",
+                            entry.size
+                        )));
+                    }
+                    (0, Vec::new(), None)
+                }
+                MemberLayout::Direct(b) => {
+                    if b == 0 || entry.size > bs {
+                        return Err(damaged(format!(
+                            "internal file {name} is a single data block {b} holding {} bytes, which one {bs}-byte \
+                             block cannot be (a null block, or more than one block of data)",
+                            entry.size
+                        )));
+                    }
+                    if entry.size == bs {
+                        (1, Vec::new(), None)
+                    } else {
+                        // The block is the member's partial last block.
+                        (0, read_block_prefix(&mut file, b, ext_header.block_size, partial_bytes)?, Some(b))
+                    }
+                }
+                MemberLayout::Mapped(m) => {
+                    if partial_bytes == 0 {
+                        (full_blocks, Vec::new(), None)
+                    } else {
+                        // Resume the partial last block in place: its pointer
+                        // is already in the mapping.
+                        let b = resolve_block_chain(&mut file, m, full_blocks, ext_header.block_size)?;
+                        (
+                            full_blocks,
+                            read_block_prefix(&mut file, b, ext_header.block_size, partial_bytes)?,
+                            Some(b),
+                        )
+                    }
+                }
+            };
+            files.push(OpenFile {
+                entry_index: i,
+                name_encoded: entry.name,
+                layout: entry.layout(),
+                data_block_count,
+                size: entry.size,
+                buffer,
+                pending_block,
+            });
         }
 
         let writer: Box<dyn CtfsStore> = Box::new(FileStore::new(file));
@@ -380,17 +395,13 @@ impl CtfsWriter {
         let name_encoded = base40_encode(name)?;
         let entry_index = self.files.len();
 
-        // Allocate a level-1 mapping block for this file
-        let map_block = self.allocator.alloc();
-        write_zero_block(&mut *self.writer, map_block, self.block_size)?;
-
+        // A member is created empty and claims no block until it is written
+        // (`ctfs-container.md` §5, "Creating a File").
         self.files.push(OpenFile {
             entry_index,
             name_encoded,
-            mapping: MappingChain {
-                root_block: map_block,
-                data_block_count: 0,
-            },
+            layout: MemberLayout::Empty,
+            data_block_count: 0,
             size: 0,
             buffer: Vec::new(),
             pending_block: None,
@@ -406,18 +417,28 @@ impl CtfsWriter {
     }
 
     /// Write data to an open file (appends to end).
+    ///
+    /// Claims every block the appended bytes reach before returning, in file
+    /// order — the mapping block first when this append takes the member past
+    /// one block (`ctfs-container.md` §5, "Appending Data").
     pub fn write(&mut self, handle: FileHandle, data: &[u8]) -> Result<usize, CtfsError> {
         let bs = self.block_size as usize;
-        self.files[handle.0].buffer.extend_from_slice(data);
-        self.files[handle.0].size += data.len() as u64;
+        let fi = handle.0;
+        self.files[fi].buffer.extend_from_slice(data);
+        self.files[fi].size += data.len() as u64;
 
-        // Flush complete blocks
-        loop {
-            if self.files[handle.0].buffer.len() < bs {
-                break;
-            }
-            let block_data: Vec<u8> = self.files[handle.0].buffer.drain(..bs).collect();
-            self.flush_data_block(handle.0, &block_data)?;
+        while self.files[fi].buffer.len() >= bs {
+            let block = match self.files[fi].pending_block.take() {
+                Some(b) => b,
+                None => self.claim_data_block(fi)?,
+            };
+            let block_data: Vec<u8> = self.files[fi].buffer.drain(..bs).collect();
+            self.write_block_data(block, &block_data)?;
+            self.files[fi].data_block_count += 1;
+        }
+        if !self.files[fi].buffer.is_empty() && self.files[fi].pending_block.is_none() {
+            let block = self.claim_data_block(fi)?;
+            self.files[fi].pending_block = Some(block);
         }
 
         Ok(data.len())
@@ -428,33 +449,63 @@ impl CtfsWriter {
         self.write(handle, data)
     }
 
-    /// Flush a single data block into the mapping chain for the given file.
-    fn flush_data_block(&mut self, file_idx: usize, block_data: &[u8]) -> Result<(), CtfsError> {
+    /// Claim the data block for logical block `data_block_count` of file
+    /// `fi`, moving the member to the layout its size now needs.
+    fn claim_data_block(&mut self, fi: usize) -> Result<u64, CtfsError> {
         let bs = self.block_size;
-        let n = bs as u64 / 8; // entries per block
-        let usable = n - 1; // usable entries (last is chain pointer)
-
-        // If sync_entry pre-allocated a pending block for this slot, reuse it.
-        // The mapping chain pointer is already set.
-        let data_block = if let Some(pending) = self.files[file_idx].pending_block.take() {
-            pending
-        } else {
-            let data_block = self.allocator.alloc();
-            let block_index = self.files[file_idx].mapping.data_block_count;
-            let root_block = self.files[file_idx].mapping.root_block;
-            self.insert_data_block_chain(root_block, block_index, data_block, usable, bs)?;
-            data_block
+        let usable = bs as u64 / 8 - 1;
+        let block_index = self.files[fi].data_block_count;
+        let mapping = match self.files[fi].layout {
+            MemberLayout::Empty if self.files[fi].size <= bs as u64 => {
+                let b = self.allocator.alloc();
+                self.files[fi].layout = MemberLayout::Direct(b);
+                return Ok(b);
+            }
+            // A first write longer than one block: the mapping block first,
+            // then the data blocks.
+            MemberLayout::Empty => self.claim_mapping_block(None)?,
+            // The direct-to-mapped transition: the direct block becomes slot 0.
+            MemberLayout::Direct(b) => self.claim_mapping_block(Some(b))?,
+            MemberLayout::Mapped(m) => m,
         };
+        self.files[fi].layout = MemberLayout::Mapped(mapping);
+        let data_block = self.allocator.alloc();
+        self.insert_data_block_chain(mapping, block_index, data_block, usable, bs)?;
+        Ok(data_block)
+    }
 
-        // Write block data (padded to block_size).
-        let offset = data_block * bs as u64;
-        self.writer.seek(SeekFrom::Start(offset))?;
-        let mut padded = block_data.to_vec();
-        padded.resize(bs as usize, 0);
+    /// Claim and zero a level-1 mapping block, with `slot0` in its first slot.
+    fn claim_mapping_block(&mut self, slot0: Option<u64>) -> Result<u64, CtfsError> {
+        let m = self.allocator.alloc();
+        write_zero_block(&mut *self.writer, m, self.block_size)?;
+        if let Some(b) = slot0 {
+            write_ptr(&mut *self.writer, m, 0, b, self.block_size)?;
+        }
+        Ok(m)
+    }
+
+    /// Write `data` into `block`, padded to the block size.
+    fn write_block_data(&mut self, block: u64, data: &[u8]) -> Result<(), CtfsError> {
+        let bs = self.block_size as usize;
+        self.writer.seek(SeekFrom::Start(block * bs as u64))?;
+        let mut padded = data.to_vec();
+        padded.resize(bs, 0);
         self.writer.write_all(&padded)?;
+        Ok(())
+    }
 
-        self.files[file_idx].mapping.data_block_count += 1;
-
+    /// Store file `fi`'s root entry: `MapBlock` before `Size`
+    /// (`ctfs-container.md` §6), then the name.
+    fn write_entry(&mut self, fi: usize) -> Result<(), CtfsError> {
+        let file = &self.files[fi];
+        let entry_offset = self.entries_offset + (file.entry_index as u64) * FILE_ENTRY_SIZE as u64;
+        let (size, map_block, name) = (file.size, file.layout.map_block(), file.name_encoded);
+        self.writer.seek(SeekFrom::Start(entry_offset + 8))?;
+        self.writer.write_all(&map_block.to_le_bytes())?;
+        self.writer.seek(SeekFrom::Start(entry_offset))?;
+        self.writer.write_all(&size.to_le_bytes())?;
+        self.writer.seek(SeekFrom::Start(entry_offset + 16))?;
+        self.writer.write_all(&name.to_le_bytes())?;
         Ok(())
     }
 
@@ -601,53 +652,43 @@ impl CtfsWriter {
     /// all bytes written so far, including any partial block still in the
     /// write buffer.
     ///
-    /// If there is buffered data that does not fill a complete block, a
-    /// "pending block" is allocated (or reused from a previous sync), the
-    /// buffer content is written to it padded with zeros, and the block
-    /// pointer is inserted into the mapping chain. When the buffer later
-    /// fills to a complete block, `flush_data_block` reuses this pending
-    /// block instead of allocating a new one.
+    /// The partial last block was claimed by the append that started it (its
+    /// pointer is already in the mapping, or it is the member's direct block),
+    /// so a sync writes the buffered bytes into it, padded with zeros, and the
+    /// block is rewritten in place on each later sync and when it fills.
     ///
     /// The file entry's `size` field always reflects the true logical byte
     /// count, so readers only access valid data even though the on-disk
     /// pending block is zero-padded.
     pub fn sync_entry(&mut self, handle: FileHandle) -> Result<(), CtfsError> {
-        let bs = self.block_size as usize;
+        self.write_pending(handle)?;
+        self.publish_entry(handle)?;
+        self.writer.flush()?;
+        Ok(())
+    }
+
+    /// Write a member's partial last block to the store, without publishing
+    /// its root entry. With [`publish_entry`](Self::publish_entry) this splits
+    /// [`sync_entry`](Self::sync_entry) so a caller publishing several members
+    /// at once writes all their data before any entry that makes it visible
+    /// (`ctfs-container.md` §6, "Durability").
+    pub fn write_pending(&mut self, handle: FileHandle) -> Result<(), CtfsError> {
         let file_idx = handle.0;
-
-        if !self.files[file_idx].buffer.is_empty() {
-            // Allocate a pending block on the first sync; reuse on subsequent ones.
-            if self.files[file_idx].pending_block.is_none() {
-                let n = self.block_size as u64 / 8;
-                let usable = n - 1;
-                let block_index = self.files[file_idx].mapping.data_block_count;
-                let root_block = self.files[file_idx].mapping.root_block;
-
-                let data_block = self.allocator.alloc();
-                self.insert_data_block_chain(root_block, block_index, data_block, usable, self.block_size)?;
-                self.files[file_idx].pending_block = Some(data_block);
-            }
-
-            // Write current buffer contents to the pending block (padded).
-            let data_block = self.files[file_idx].pending_block.unwrap();
-            let offset = data_block * bs as u64;
-            self.writer.seek(SeekFrom::Start(offset))?;
-            let mut padded = self.files[file_idx].buffer.clone();
-            padded.resize(bs, 0);
-            self.writer.write_all(&padded)?;
+        if let Some(block) = self.files[file_idx].pending_block {
+            let buffer = self.files[file_idx].buffer.clone();
+            self.write_block_data(block, &buffer)?;
         }
+        Ok(())
+    }
 
-        // Write the file entry with the full logical size so readers can
-        // see all bytes written so far.
-        let file = &self.files[file_idx];
-        let entry = crate::file_entry::FileEntry {
-            size: file.size,
-            map_block: file.mapping.root_block,
-            name: file.name_encoded,
-        };
-        let entry_offset = self.entries_offset + (file.entry_index as u64) * FILE_ENTRY_SIZE as u64;
-        self.writer.seek(SeekFrom::Start(entry_offset))?;
-        entry.write_to(&mut self.writer)?;
+    /// Store a member's root entry (`MapBlock`, then `Size`). Its data must
+    /// already be in the store; see [`write_pending`](Self::write_pending).
+    pub fn publish_entry(&mut self, handle: FileHandle) -> Result<(), CtfsError> {
+        self.write_entry(handle.0)
+    }
+
+    /// Hand everything written so far to the operating system.
+    pub fn flush(&mut self) -> Result<(), CtfsError> {
         self.writer.flush()?;
         Ok(())
     }
@@ -699,54 +740,25 @@ impl CtfsWriter {
     }
 
     fn close_inner(&mut self) -> Result<(), CtfsError> {
-        // Flush remaining buffered data for each file
-        let file_count = self.files.len();
-        for i in 0..file_count {
-            let buffer = std::mem::take(&mut self.files[i].buffer);
-            if !buffer.is_empty() {
-                self.flush_data_block(i, &buffer)?;
+        for i in 0..self.files.len() {
+            if let Some(block) = self.files[i].pending_block.take() {
+                let buffer = std::mem::take(&mut self.files[i].buffer);
+                self.write_block_data(block, &buffer)?;
+                self.files[i].data_block_count += 1;
             }
+            self.write_entry(i)?;
         }
-
-        // Update file entries in root block
-        for file in &self.files {
-            let entry = FileEntry {
-                size: file.size,
-                map_block: file.mapping.root_block,
-                name: file.name_encoded,
-            };
-            let entry_offset = self.entries_offset + (file.entry_index as u64) * FILE_ENTRY_SIZE as u64;
-            self.writer.seek(SeekFrom::Start(entry_offset))?;
-            entry.write_to(&mut self.writer)?;
-        }
-
         self.writer.flush()?;
         Ok(())
     }
 }
 
-/// Read partial data from the last data block of a file using the bottom-up chain model.
-/// Used during open_append to restore the write buffer.
-fn read_last_data_block_chain(
-    file: &mut File,
-    root_block: u64,
-    block_index: u64,
-    block_size: u32,
-    partial_bytes: usize,
-) -> Result<Vec<u8>, CtfsError> {
-    let n = block_size as u64 / 8;
-    let usable = n - 1;
-
-    // Navigate the chain to find the data block
-    let data_block = resolve_block_chain(file, root_block, block_index, block_size)?;
-
-    // Read the partial data from the data block
-    let data_offset = data_block * block_size as u64;
-    file.seek(SeekFrom::Start(data_offset))?;
-    let mut data = vec![0u8; partial_bytes];
+/// Read the first `len` bytes of `block`. Used by `open_append` to restore a
+/// member's partial last block into its write buffer.
+fn read_block_prefix(file: &mut File, block: u64, block_size: u32, len: usize) -> Result<Vec<u8>, CtfsError> {
+    file.seek(SeekFrom::Start(block * block_size as u64))?;
+    let mut data = vec![0u8; len];
     file.read_exact(&mut data)?;
-
-    let _ = usable; // suppress warning
     Ok(data)
 }
 

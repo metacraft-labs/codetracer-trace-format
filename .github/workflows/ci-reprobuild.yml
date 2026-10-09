@@ -29,7 +29,7 @@ jobs:
         include:
           - os: linux
             arch: x64
-            runner: eph-linux-x64
+            runner: [self-hosted, linux, x64, ephemeral, incus]
           - os: linux
             arch: arm64
             runner: eph-linux-arm64

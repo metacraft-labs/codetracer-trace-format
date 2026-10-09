@@ -10,7 +10,7 @@ env:
 
 jobs:
   lint:
-    runs-on: eph-linux-x64
+    runs-on: [self-hosted, linux, x64, ephemeral, incus]
 
     steps:
       - name: Generate CI token
@@ -55,7 +55,7 @@ jobs:
         run: just lint
 
   wasm32:
-    runs-on: eph-linux-x64
+    runs-on: [self-hosted, linux, x64, ephemeral, incus]
 
     steps:
       - uses: actions/checkout@v4
@@ -69,7 +69,7 @@ jobs:
         run: just check-wasm32
 
   build-and-test:
-    runs-on: eph-linux-x64
+    runs-on: [self-hosted, linux, x64, ephemeral, incus]
 
     steps:
       - name: Generate CI token

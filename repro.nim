@@ -221,4 +221,3 @@ when defined(linux):
       nixPackage "nativeGcc", executablePath = "bin/gcc",
         expressionFile = "ci/native-compiler-profiles.nix",
         lockIdentity = nativeCompilerLockIdentity & ":gcc"
-

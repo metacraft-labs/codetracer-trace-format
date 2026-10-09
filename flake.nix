@@ -36,6 +36,9 @@
           ];
         in
         {
+          # CI selects the same complete locked Rust constructor explicitly.
+          packages.ci-rust-profile = rustWithWasm;
+
           devShells.default = pkgs.mkShell {
             packages = [
               # Rust toolchain

@@ -51,8 +51,28 @@ jobs:
         run: |
           echo "CODETRACER_TRACE_FORMAT_NIM_DIR=${GITHUB_WORKSPACE}/../codetracer-trace-format-nim" >> "$GITHUB_ENV"
 
+      - name: Install the declared locked Rust acquisition backend
+        uses: metacraft-labs/metacraft-github-actions/setup-nix@3fcbb26dd920adf6ccc64a87c6d24797ab0b5d94
+        with:
+          gh-token: ${{ steps.app-token.outputs.token }}
+          token-owner: metacraft-labs
+      - name: Bind the complete locked Rust profile
+        shell: bash
+        run: bash ci/acquire-rust-profile.sh
+
       - name: Lint
         run: just lint
+
+
+      - name: Retain locked Rust profile authority
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trace-rust-profile-lint
+          path: ${{ runner.temp }}/trace-format-rust-profile-*/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
 
   wasm32:
     runs-on: [self-hosted, linux, x64, ephemeral, incus]
@@ -63,10 +83,28 @@ jobs:
         run: sudo apt-get install -y capnproto clang
       - name: Install just
         uses: extractions/setup-just@v2
-      - name: Add the wasm32 target
-        run: rustup target add wasm32-unknown-unknown
+      - name: Install the declared locked Rust acquisition backend
+        uses: metacraft-labs/metacraft-github-actions/setup-nix@3fcbb26dd920adf6ccc64a87c6d24797ab0b5d94
+        with:
+          gh-token: ${{ secrets.GITHUB_TOKEN }}
+          token-owner: metacraft-labs
+      - name: Bind the complete locked Rust profile
+        shell: bash
+        run: bash ci/acquire-rust-profile.sh
+
       - name: Check the reader for wasm32
         run: just check-wasm32
+
+
+      - name: Retain locked Rust profile authority
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trace-rust-profile-wasm32
+          path: ${{ runner.temp }}/trace-format-rust-profile-*/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
 
   build-and-test:
     runs-on: [self-hosted, linux, x64, ephemeral, incus]
@@ -141,7 +179,26 @@ jobs:
           siblings: codetracer-native-recorder
           gh-token: ${{ steps.app-token.outputs.token }}
 
+      - name: Install the declared locked Rust acquisition backend
+        uses: metacraft-labs/metacraft-github-actions/setup-nix@3fcbb26dd920adf6ccc64a87c6d24797ab0b5d94
+        with:
+          gh-token: ${{ steps.app-token.outputs.token }}
+          token-owner: metacraft-labs
+      - name: Bind the complete locked Rust profile
+        shell: bash
+        run: bash ci/acquire-rust-profile.sh
+
       - name: Build
         run: just build
       - name: Run tests
         run: just test
+
+      - name: Retain locked Rust profile authority
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trace-rust-profile-build-and-test
+          path: ${{ runner.temp }}/trace-format-rust-profile-*/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7

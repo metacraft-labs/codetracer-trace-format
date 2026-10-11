@@ -8,6 +8,9 @@ from pathlib import Path
 import argparse, ctypes, hashlib, json, os, platform, shutil, struct, subprocess, sys, tempfile, tomllib
 from contextlib import ExitStack
 
+# Dynamic producer helpers must not write build cache into tracked source roots.
+sys.dont_write_bytecode = True
+
 parser = argparse.ArgumentParser()
 parser.add_argument('--nim-environment-root', required=True, type=Path)
 parser.add_argument('--qualification-source', type=Path)

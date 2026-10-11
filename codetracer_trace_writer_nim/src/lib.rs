@@ -57,6 +57,7 @@ extern "C" {
     /// `trace_writer_register_call`.  Multiple calls accumulate; the buffer
     /// is consumed and cleared by the next `trace_writer_register_call`.
     fn trace_writer_register_call_arg(handle: *mut std::ffi::c_void, name: *const std::os::raw::c_char, cbor_data: *const u8, cbor_len: usize);
+    fn trace_writer_mark_current_call_as_entry(handle: *mut std::ffi::c_void) -> std::os::raw::c_int;
     fn trace_writer_register_return(handle: *mut std::ffi::c_void);
 
     // Kept for ABI compatibility — the `_by_type_id` form below replaced this
@@ -420,6 +421,7 @@ extern "C" {
 
     fn ct_reader_step_count(h: *mut std::ffi::c_void) -> u64;
     fn ct_reader_call_count(h: *mut std::ffi::c_void) -> u64;
+    fn ct_reader_recorded_entry(h: *mut std::ffi::c_void, call_key: *mut u64, function_id: *mut u64, entry_step: *mut u64) -> i32;
     fn ct_reader_event_count(h: *mut std::ffi::c_void) -> u64;
 
     fn ct_reader_path_count(h: *mut std::ffi::c_void) -> u64;
@@ -1850,6 +1852,16 @@ impl NimTraceWriter {
         }
     }
 
+    /// Mark the actual active call through the checked supplier API.
+    pub fn mark_current_call_as_entry(&mut self) -> Result<(), Box<dyn Error>> {
+        let status = unsafe { trace_writer_mark_current_call_as_entry(self.handle) };
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(last_error().into())
+        }
+    }
+
     pub fn register_return(&mut self, return_value: ValueRecord) {
         match &return_value {
             // Fast paths that bypass CBOR encoding for the most common shapes.
@@ -3039,6 +3051,11 @@ pub trait TraceWriter: Send {
 
     fn register_call(&mut self, function_id: FunctionId, args: Vec<FullValueRecord>);
     fn arg(&mut self, name: &str, value: ValueRecord) -> FullValueRecord;
+    /// Optional recorded entry identity requires explicit writer support.
+    fn mark_current_call_as_entry(&mut self) -> Result<(), Box<dyn Error>> {
+        Err("entry.dat: writer does not support recorded entry identity".into())
+    }
+
     fn register_return(&mut self, return_value: ValueRecord);
     fn register_special_event(&mut self, kind: EventLogKind, metadata: &str, content: &str);
 
@@ -3345,6 +3362,10 @@ impl TraceWriter for NimTraceWriter {
     fn arg(&mut self, name: &str, value: ValueRecord) -> FullValueRecord {
         NimTraceWriter::arg(self, name, value)
     }
+    fn mark_current_call_as_entry(&mut self) -> Result<(), Box<dyn Error>> {
+        NimTraceWriter::mark_current_call_as_entry(self)
+    }
+
     fn register_return(&mut self, return_value: ValueRecord) {
         NimTraceWriter::register_return(self, return_value)
     }
@@ -3663,6 +3684,9 @@ fn read_nim_buffer(ptr: *mut u8, len: usize) -> String {
 /// whether it is the exit step or the depth.
 pub type CallFields = (u64, i64, u64, u64, u32, u64);
 
+/// Checked recorded entry fields: `(call_key, function_id, entry_step)`.
+pub type RecordedEntryFields = (u64, u64, u64);
+
 impl NimTraceReaderHandle {
     /// Open a `.ct` trace file for reading.
     pub fn open(path: &str) -> Result<Self, Box<dyn Error>> {
@@ -3692,6 +3716,16 @@ impl NimTraceReaderHandle {
 
     pub fn step_count(&self) -> u64 {
         unsafe { ct_reader_step_count(self.handle) }
+    }
+
+    /// Return the entry identity checked against the supplier's owned image.
+    pub fn recorded_entry(&self) -> Result<Option<RecordedEntryFields>, Box<dyn Error>> {
+        let (mut key, mut function, mut step) = (0, 0, 0);
+        match unsafe { ct_reader_recorded_entry(self.handle, &mut key, &mut function, &mut step) } {
+            0 => Ok(None),
+            1 => Ok(Some((key, function, step))),
+            _ => Err(last_error().into()),
+        }
     }
 
     pub fn call_count(&self) -> u64 {

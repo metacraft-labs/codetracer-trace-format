@@ -157,10 +157,28 @@ jobs:
       - name: Build Nim trace writer static library
         working-directory: ../codetracer-trace-format-nim
         run: |
+          # The locked Nix compiler cannot consume apt's host zstd headers.
+          # Admit both outputs from this source's existing locked nixpkgs.
+          set -euo pipefail
+          nix_image=$(command -v nix)
+          [[ $nix_image == /* && -x $nix_image ]] || { echo 'Declared Nix image absent' >&2; exit 1; }
+          nix_sha=$(sha256sum "$(readlink -f "$nix_image")" | cut -d' ' -f1)
+          flake="git+file://${GITHUB_WORKSPACE:?}?rev=${GITHUB_SHA:?}&shallow=1"
+          zstd_dev=$("$nix_image" build --no-link --print-out-paths --no-update-lock-file "$flake#ci-native-zstd.dev")
+          zstd_out=$("$nix_image" build --no-link --print-out-paths --no-update-lock-file "$flake#ci-native-zstd.out")
+          for output in "$zstd_dev" "$zstd_out"; do
+            [[ $output == /nix/store/* && $output != *$'\n'* && -d $output ]] || { echo 'Foreign declared Zstd output' >&2; exit 1; }
+          done
+          [[ $("$nix_image" path-info --derivation "$zstd_dev") == $("$nix_image" eval --raw --no-update-lock-file "$flake#ci-native-zstd.dev.drvPath") && $("$nix_image" path-info --derivation "$zstd_out") == $("$nix_image" eval --raw --no-update-lock-file "$flake#ci-native-zstd.out.drvPath") ]] || { echo 'Foreign declared Zstd constructor' >&2; exit 1; }
+          "$nix_image" store verify --recursive --no-trust "$zstd_dev" "$zstd_out"
+          [[ -f $zstd_dev/include/zstd.h && -d $zstd_out/lib ]] || { echo 'Incomplete declared Zstd profile' >&2; exit 1; }
+          zstd_dev_nar=$("$nix_image" hash path --type sha256 --sri "$zstd_dev")
+          zstd_out_nar=$("$nix_image" hash path --type sha256 --sri "$zstd_out")
           nimble install -y stew results
           nim c --app:staticlib --mm:arc --noMain -d:release \
-            --passC:"-fPIC" -p:src \
+            --passC:"-fPIC" --passC:"-I$zstd_dev/include" --passL:"-L$zstd_out/lib" -p:src \
             -o:libcodetracer_trace_writer.a src/codetracer_trace_writer_ffi.nim
+          [[ $(sha256sum "$(readlink -f "$nix_image")" | cut -d' ' -f1) == "$nix_sha" && $("$nix_image" hash path --type sha256 --sri "$zstd_dev") == "$zstd_dev_nar" && $("$nix_image" hash path --type sha256 --sri "$zstd_out") == "$zstd_out_nar" ]] || { echo 'Changed declared Zstd authority' >&2; exit 1; }
           # build.rs reads CODETRACER_TRACE_FORMAT_NIM_DIR (not
           # CODETRACER_NIM_LIB_DIR) to locate the Nim FFI sibling for
           # cross-language testing.  Export both names: keep the legacy

@@ -44,6 +44,8 @@ import repro_dsl_stdlib/foreign_env
 
 import repro_project_dsl
 import std/[os, strutils]
+when defined(linux) or defined(macosx):
+  import trace_nim_ffi_contribution
 import nimcrypto/sha2 as nativeCompilerHash
 
 when defined(linux):
@@ -85,6 +87,8 @@ package codetracer_trace_format:
     "git"
     when not defined(windows):
       "direnv"
+      "sh"
+      "traceformat_native_env"
 
     # Cap'n Proto schema compiler — ``codetracer_trace_format_capnp``'s
     # build.rs runs ``capnpc`` over ``src/trace.capnp``.
@@ -133,7 +137,9 @@ package codetracer_trace_format:
     # per-crate at action-end via the makeDepfile dependency policy the
     # cargo package declares).
     let workspaceInputs = @[
-      "Cargo.toml", "Cargo.lock",
+      "Cargo.toml", "Cargo.lock", "repro.lock",
+      "trace_nim_ffi_contribution.nim", "ci/locked-nim-library-profile.nix",
+      "ci/native-compiler-profiles.nix", "ci/cross-reader-profiles.nix", "flake.lock",
       "codetracer_trace_types",
       "codetracer_trace_format_capnp",
       "codetracer_trace_format_cbor_zstd",
@@ -222,7 +228,12 @@ package codetracer_trace_format:
       for action in [workspaceBuild, testsBuild.action, testsRun.action]:
         appendRegisteredActionToolIdentityRefs(action.id,
           ["traceformat_native_clang", "traceformat_native_gcc",
-           "nim", "nimble", "capnp", "zstd", "pkg-config"])
+           "nim", "nimble", "git", "capnp", "zstd", "pkg-config"])
+
+    when not defined(windows):
+      # Original cross-read and durability tests spawn these declared tools.
+      appendRegisteredActionToolIdentityRefs(testsRun.action.id,
+        ["direnv", "sh", "traceformat_native_env"])
 
     discard collect("test", @[testsRun.action])
 
@@ -237,3 +248,11 @@ when defined(linux):
       nixPackage "nativeGcc", executablePath = "bin/gcc",
         expressionFile = "ci/native-compiler-profiles.nix",
         lockIdentity = nativeCompilerLockIdentity & ":gcc"
+
+when not defined(windows):
+  const crossReaderProcessLockIdentity =
+    "trace-cross-reader-process-owning-lock-sha256:" & $nativeCompilerHash.sha256.digest(staticRead("flake.lock"))
+  package traceformat_native_env:
+    provisioning:
+      nixPackage "nativeEnv", expressionFile = "ci/native-compiler-profiles.nix",
+        executablePath = "bin/env", lockIdentity = crossReaderProcessLockIdentity

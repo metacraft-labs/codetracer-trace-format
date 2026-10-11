@@ -21,6 +21,8 @@ let
     then builtins.fetchTree supplier else fail "unbound supplier";
   pkgs = import source.outPath { system = builtins.currentSystem; config = {}; overlays = []; };
 in {
+  nativeEnv = pkgs.coreutils.out;
   nativeClang = pkgs.clang.out;
   nativeGcc = pkgs.stdenv.cc.out;
+  nativeDirenv = (import ./cross-reader-profiles.nix { inherit pkgs; }).direnv;
 }

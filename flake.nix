@@ -40,17 +40,9 @@
           packages.ci-rust-profile = rustWithWasm;
           packages.ci-native-clang = pkgs.clang;
           packages.ci-native-gcc = pkgs.stdenv.cc;
+          packages.ci-native-zstd = pkgs.zstd;
           packages.ci-cross-reader-python = pkgs.python3;
-          packages.ci-cross-reader-direnv = pkgs.symlinkJoin {
-            name = "trace-cross-reader-direnv";
-            paths = [ pkgs.direnv ];
-            passthru.backend = pkgs.direnv;
-            nativeBuildInputs = [ pkgs.makeWrapper ];
-            postBuild = ''
-              wrapProgram "$out/bin/direnv" \
-                --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.nix pkgs.coreutils pkgs.bash pkgs.git pkgs.curl ]}
-            '';
-          };
+          packages.ci-cross-reader-direnv = (import ./ci/cross-reader-profiles.nix { inherit pkgs; }).direnv;
 
           devShells.default = pkgs.mkShell {
             packages = [

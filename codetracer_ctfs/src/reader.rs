@@ -19,15 +19,24 @@ pub struct CtfsReader {
 
 // File-backed readers retain their existing live semantics. Owned images cannot
 // change between directory decoding, entry validation, and split-stream reads.
-enum ReaderImage { File(File), Owned(Cursor<Vec<u8>>) }
+enum ReaderImage {
+    File(File),
+    Owned(Cursor<Vec<u8>>),
+}
 impl Read for ReaderImage {
     fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
-        match self { Self::File(file) => file.read(bytes), Self::Owned(image) => image.read(bytes) }
+        match self {
+            Self::File(file) => file.read(bytes),
+            Self::Owned(image) => image.read(bytes),
+        }
     }
 }
 impl Seek for ReaderImage {
     fn seek(&mut self, offset: SeekFrom) -> std::io::Result<u64> {
-        match self { Self::File(file) => file.seek(offset), Self::Owned(image) => image.seek(offset) }
+        match self {
+            Self::File(file) => file.seek(offset),
+            Self::Owned(image) => image.seek(offset),
+        }
     }
 }
 
@@ -51,7 +60,6 @@ impl CtfsReader {
     }
 
     fn from_image(mut file: ReaderImage) -> Result<Self, CtfsError> {
-
         let header = Header::read_from(&mut file)?;
         let ext_header = ExtendedHeader::read_from(&mut file)?;
 
@@ -66,8 +74,12 @@ impl CtfsReader {
         } else {
             u64::from(ext_header.max_root_entries)
         };
-        let directory_end = first_entry.checked_add(effective_entries.checked_mul(24)
-            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "root directory size overflow"))?)
+        let directory_end = first_entry
+            .checked_add(
+                effective_entries
+                    .checked_mul(24)
+                    .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "root directory size overflow"))?,
+            )
             .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "root directory end overflow"))?;
         if first_entry > image_len || directory_end > image_len {
             return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "incomplete CTFS shard prefix or root directory").into());
@@ -88,7 +100,9 @@ impl CtfsReader {
         })
     }
 
-    pub fn is_owned_image(&self) -> bool { matches!(self.file, ReaderImage::Owned(_)) }
+    pub fn is_owned_image(&self) -> bool {
+        matches!(self.file, ReaderImage::Owned(_))
+    }
 
     /// Copy bytes from this held file/image and parse the resulting immutable
     /// owned image. This never reopens a mutable pathname.

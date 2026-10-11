@@ -1233,11 +1233,14 @@ impl CtfsTraceWriter {
         let builder = self.call_stream_builder.as_ref().ok_or("entry.dat: call stream is not active")?;
         let entry = builder.active_entry().ok_or("entry.dat: no active call")?;
         if let Some(old) = self.recorded_entry {
-            if old != entry { return Err("entry.dat: a different entry is already marked".into()); }
+            if old != entry {
+                return Err("entry.dat: a different entry is already marked".into());
+            }
             return Ok(());
         }
         crate::recorded_entry_identity::encode_entry_identity(entry)?;
-        self.entry_records.extend(builder.pending_entry_records().into_iter().map(|r| (r.call_key, r)));
+        self.entry_records
+            .extend(builder.pending_entry_records().into_iter().map(|r| (r.call_key, r)));
         self.recorded_entry = Some(entry);
         Ok(())
     }
@@ -1262,7 +1265,9 @@ impl CtfsTraceWriter {
         }
         if let (Some(builder), Some(sink)) = (self.call_stream_builder.as_mut(), self.calls_sink.as_mut()) {
             for record in builder.take_complete() {
-                if self.recorded_entry.is_some() { self.entry_records.insert(record.call_key, record.clone()); }
+                if self.recorded_entry.is_some() {
+                    self.entry_records.insert(record.call_key, record.clone());
+                }
                 let mut bytes = Vec::new();
                 record.encode(&mut bytes);
                 if result.is_ok() {
@@ -1944,7 +1949,9 @@ impl TraceWriter for CtfsTraceWriter {
         let entry_step_count = self.call_stream_builder.as_ref().map(|b| b.recorded_step_count()).unwrap_or(0);
         if let Some(sink) = self.calls_sink.as_mut() {
             for record in self.call_stream_builder.take().map(|b| b.finish()).unwrap_or_default() {
-                if self.recorded_entry.is_some() { self.entry_records.insert(record.call_key, record.clone()); }
+                if self.recorded_entry.is_some() {
+                    self.entry_records.insert(record.call_key, record.clone());
+                }
                 let mut bytes = Vec::new();
                 record.encode(&mut bytes);
                 closing = closing.and_then(|_| sink.push(&bytes));
@@ -1975,7 +1982,12 @@ impl TraceWriter for CtfsTraceWriter {
 
         if let Some(entry) = self.recorded_entry {
             let records: Vec<_> = self.entry_records.values().cloned().collect();
-            let names = self.base.functions.iter().map(|(name, id)| (id.0 as u64, name.as_bytes().to_vec())).collect();
+            let names = self
+                .base
+                .functions
+                .iter()
+                .map(|(name, id)| (id.0 as u64, name.as_bytes().to_vec()))
+                .collect();
             let result = crate::recorded_entry_identity::validate_entry_image(entry, &records, entry_step_count, &names)
                 .and_then(|_| crate::recorded_entry_identity::encode_entry_identity(entry))
                 .and_then(|bytes| {

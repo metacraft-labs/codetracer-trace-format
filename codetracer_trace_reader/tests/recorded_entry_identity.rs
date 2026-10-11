@@ -1,11 +1,11 @@
 //! Real native writer/container/owned-reader controls. No mocks or path-reopening getter.
 #[path = "common/entry_fixture_capture.rs"]
 mod entry_fixture_capture;
-use std::path::Path;
-use codetracer_trace_writer::{ctfs_writer::CtfsTraceWriter, trace_writer::TraceWriter};
-use codetracer_trace_types::*;
-use codetracer_trace_reader::recorded_entry_reader::RecordedEntryReader;
 use codetracer_ctfs::CtfsReader;
+use codetracer_trace_reader::recorded_entry_reader::RecordedEntryReader;
+use codetracer_trace_types::*;
+use codetracer_trace_writer::{ctfs_writer::CtfsTraceWriter, trace_writer::TraceWriter};
+use std::path::Path;
 
 #[test]
 fn marked_active_child_and_partial_root_finalize_from_same_image() {
@@ -30,13 +30,18 @@ fn marked_active_child_and_partial_root_finalize_from_same_image() {
     assert!(reader.is_owned_image());
     let owned = &mut reader;
     let before_steps = codetracer_trace_reader::step_stream_reader::StepStreamReader::open(owned)
-        .unwrap().unwrap().read_all().unwrap();
+        .unwrap()
+        .unwrap()
+        .read_all()
+        .unwrap();
     std::fs::write(path.with_extension("ct"), b"replaced after held-image capture").unwrap();
     assert_eq!(owned.recorded_entry().unwrap(), Some(identity));
     let after_steps = codetracer_trace_reader::step_stream_reader::StepStreamReader::open(owned)
-        .unwrap().unwrap().read_all().unwrap();
+        .unwrap()
+        .unwrap()
+        .read_all()
+        .unwrap();
     assert_eq!(before_steps, after_steps);
-
 }
 
 #[test]
@@ -79,7 +84,7 @@ fn genuine_nim_images_crossread() {
     let base = captured.path();
     let mut marked = CtfsReader::open(&Path::new(&base).join("marked.ct")).unwrap();
     let entry = marked.recorded_entry().unwrap().unwrap();
-    assert_eq!((entry.call_key, entry.function_id, entry.entry_step), (1,1,1));
+    assert_eq!((entry.call_key, entry.function_id, entry.entry_step), (1, 1, 1));
     assert!(marked.is_owned_image());
     let mut unmarked = CtfsReader::open(&Path::new(&base).join("unmarked.ct")).unwrap();
     assert_eq!(unmarked.recorded_entry().unwrap(), None);

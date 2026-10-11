@@ -25,7 +25,7 @@
         "aarch64-darwin"
       ];
       perSystem =
-        { pkgs, system, ... }:
+        { pkgs, system, config, ... }:
         let
           toolchainsPkgs = inputs."codetracer-toolchains".packages.${system};
           fenixPkgs = inputs."codetracer-toolchains".inputs.fenix.packages.${system};
@@ -40,6 +40,17 @@
           packages.ci-rust-profile = rustWithWasm;
           packages.ci-native-clang = pkgs.clang;
           packages.ci-native-gcc = pkgs.stdenv.cc;
+          packages.ci-cross-reader-python = pkgs.python3;
+          packages.ci-cross-reader-direnv = pkgs.symlinkJoin {
+            name = "trace-cross-reader-direnv";
+            paths = [ pkgs.direnv ];
+            passthru.backend = pkgs.direnv;
+            nativeBuildInputs = [ pkgs.makeWrapper ];
+            postBuild = ''
+              wrapProgram "$out/bin/direnv" \
+                --prefix PATH : ${pkgs.lib.makeBinPath [ pkgs.nix pkgs.coreutils pkgs.bash pkgs.git pkgs.curl ]}
+            '';
+          };
 
           devShells.default = pkgs.mkShell {
             packages = [
@@ -56,6 +67,10 @@
 
               # Monitored launches require a non-SIP shell on macOS.
               pkgs.bash
+
+              # Required coupled entry gate uses the same declared CI providers.
+              config.packages.ci-cross-reader-python
+              config.packages.ci-cross-reader-direnv
 
               # Development tools
               pkgs.cargo-edit

@@ -1,0 +1,5104 @@
+{
+  "schema": "entry-zstd-source.v1",
+  "version": "1.5.7",
+  "archiveSHA256": "eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3",
+  "members": [
+    {
+      "name": "zstd-1.5.7",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/.buckconfig",
+      "mode": 436,
+      "size": 407,
+      "kind": "file",
+      "sha256": "b080e111e9879293593f84c29a702051512c1209ac828a64697be52bc3bad2e3"
+    },
+    {
+      "name": "zstd-1.5.7/.buckversion",
+      "mode": 436,
+      "size": 41,
+      "kind": "file",
+      "sha256": "61bb45fc1c301a683d8e7e56b6a27a9b5ac4aedb1ddfd4ab926fc8040f289242"
+    },
+    {
+      "name": "zstd-1.5.7/.cirrus.yml",
+      "mode": 436,
+      "size": 214,
+      "kind": "file",
+      "sha256": "8b895d29cb5e15d2d507709dd2b7faee87d0f2e17ada50c4d876449c22cd1b11"
+    },
+    {
+      "name": "zstd-1.5.7/.gitattributes",
+      "mode": 436,
+      "size": 348,
+      "kind": "file",
+      "sha256": "0ee157945a4a1cc81ac5bd2f9d6a985363516201f50cda9602f4a6a16fb778bb"
+    },
+    {
+      "name": "zstd-1.5.7/.github",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/.github/ISSUE_TEMPLATE",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/.github/ISSUE_TEMPLATE/bug_report.md",
+      "mode": 436,
+      "size": 807,
+      "kind": "file",
+      "sha256": "9829393f9096a281708aa54afbb35d5c0ce7f0a9b03c8aa6a22a30e63856ab94"
+    },
+    {
+      "name": "zstd-1.5.7/.github/ISSUE_TEMPLATE/feature_request.md",
+      "mode": 436,
+      "size": 595,
+      "kind": "file",
+      "sha256": "1f48c52f209a971b8e7eae4120144d28fcf8ee38a7778a7b4d8cf1ab356617d2"
+    },
+    {
+      "name": "zstd-1.5.7/.github/dependabot.yml",
+      "mode": 436,
+      "size": 118,
+      "kind": "file",
+      "sha256": "883b95e3be554fbadd92b315e4a8c6ea6ca688b64924e22dd61222b07f683507"
+    },
+    {
+      "name": "zstd-1.5.7/.github/workflows",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/.github/workflows/android-ndk-build.yml",
+      "mode": 436,
+      "size": 1043,
+      "kind": "file",
+      "sha256": "5253a4355eaf2691a108a520fdc92ca50dbce1c67b284dae570f597da815c690"
+    },
+    {
+      "name": "zstd-1.5.7/.github/workflows/commit.yml",
+      "mode": 436,
+      "size": 3445,
+      "kind": "file",
+      "sha256": "9bfb61a16b51e45f4e401a2f1a4f2ded1c621fc685bca15405fe22801893c64f"
+    },
+    {
+      "name": "zstd-1.5.7/.github/workflows/dev-long-tests.yml",
+      "mode": 436,
+      "size": 10048,
+      "kind": "file",
+      "sha256": "1fec88c2c94106492de8b1761d3d52c1f4c2d4c65780ec7ac53e058273b6bd55"
+    },
+    {
+      "name": "zstd-1.5.7/.github/workflows/dev-short-tests.yml",
+      "mode": 436,
+      "size": 29194,
+      "kind": "file",
+      "sha256": "036b06ebf4e81c550f9a9ca9ca34dd0a9b3a86e9aca34c858015a1683fe2858c"
+    },
+    {
+      "name": "zstd-1.5.7/.github/workflows/nightly.yml",
+      "mode": 436,
+      "size": 1283,
+      "kind": "file",
+      "sha256": "0a2ed7a53b50ea68ec9fd8dac7cd5252e90b523d7c41bbdcaa78675899e8af2f"
+    },
+    {
+      "name": "zstd-1.5.7/.github/workflows/publish-release-artifacts.yml",
+      "mode": 436,
+      "size": 2706,
+      "kind": "file",
+      "sha256": "ca9392bcb89432a0b412ff6d86e4eb5701343f42cf2fc0f96147b9e1b284b628"
+    },
+    {
+      "name": "zstd-1.5.7/.github/workflows/scorecards.yml",
+      "mode": 436,
+      "size": 2460,
+      "kind": "file",
+      "sha256": "c8a5c7df97f94f134247fb99b7d8c3d0fe68264b8bb1eac68519070761ba64f2"
+    },
+    {
+      "name": "zstd-1.5.7/.github/workflows/windows-artifacts.yml",
+      "mode": 436,
+      "size": 1845,
+      "kind": "file",
+      "sha256": "5e7e4749207cb13c8f134eb0cbdbc4ccb9e9b9cac1f1ba3848b44359b0917fb9"
+    },
+    {
+      "name": "zstd-1.5.7/.gitignore",
+      "mode": 436,
+      "size": 592,
+      "kind": "file",
+      "sha256": "41fd6eca3b79e80744ec41714c86bca884cef93454d72a07943c18c8b2324b24"
+    },
+    {
+      "name": "zstd-1.5.7/CHANGELOG",
+      "mode": 436,
+      "size": 51367,
+      "kind": "file",
+      "sha256": "a4a6e1490ecc8b8a66016733dd537493615da3660cf67623df05994f7cc13835"
+    },
+    {
+      "name": "zstd-1.5.7/CODE_OF_CONDUCT.md",
+      "mode": 436,
+      "size": 244,
+      "kind": "file",
+      "sha256": "1ce27940af665ed0b061c37de87b728100f1f548d9dccd4fd78158d2cf8f51f0"
+    },
+    {
+      "name": "zstd-1.5.7/CONTRIBUTING.md",
+      "mode": 436,
+      "size": 30781,
+      "kind": "file",
+      "sha256": "ee734a06ea411138c4c13cd75b3d92d0cabba496f65dd39f1111bbbe93d901b9"
+    },
+    {
+      "name": "zstd-1.5.7/COPYING",
+      "mode": 436,
+      "size": 18091,
+      "kind": "file",
+      "sha256": "f9c375a1be4a41f7b70301dd83c91cb89e41567478859b77eef375a52d782505"
+    },
+    {
+      "name": "zstd-1.5.7/LICENSE",
+      "mode": 436,
+      "size": 1549,
+      "kind": "file",
+      "sha256": "7055266497633c9025b777c78eb7235af13922117480ed5c674677adc381c9d8"
+    },
+    {
+      "name": "zstd-1.5.7/Makefile",
+      "mode": 436,
+      "size": 16542,
+      "kind": "file",
+      "sha256": "2804f91b48243346c7cfc2b85ce1b06ca29b23b0c73d8ed1bc48aefe1fdde41d"
+    },
+    {
+      "name": "zstd-1.5.7/Package.swift",
+      "mode": 436,
+      "size": 1264,
+      "kind": "file",
+      "sha256": "e8115ff36b45c8ff2395ed3cfaac87eb8c913ade5b766818714f7e7d31b8fe01"
+    },
+    {
+      "name": "zstd-1.5.7/README.md",
+      "mode": 436,
+      "size": 11487,
+      "kind": "file",
+      "sha256": "c97c5752f0cf8e235e5834726968708ff1f4b3bf6bfbfcf59db0229b5889ac35"
+    },
+    {
+      "name": "zstd-1.5.7/SECURITY.md",
+      "mode": 436,
+      "size": 952,
+      "kind": "file",
+      "sha256": "b05f2cd49c82ae1339cfa26c625770472bd5b204b37518c17aea5c1bd8107d58"
+    },
+    {
+      "name": "zstd-1.5.7/TESTING.md",
+      "mode": 436,
+      "size": 1824,
+      "kind": "file",
+      "sha256": "84cf11926e9ccd1977680933c2b432ccd9f21f95ac75fe693e9ff18350a93cee"
+    },
+    {
+      "name": "zstd-1.5.7/build",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/build/.gitignore",
+      "mode": 436,
+      "size": 336,
+      "kind": "file",
+      "sha256": "ea7ae1a20b2fd6cc229e53ce0a097e453577a99a29218a88692a5b725c9b7200"
+    },
+    {
+      "name": "zstd-1.5.7/build/LICENSE",
+      "mode": 436,
+      "size": 0,
+      "kind": "file",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "zstd-1.5.7/build/README.md",
+      "mode": 436,
+      "size": 3142,
+      "kind": "file",
+      "sha256": "b2f99d989ff960b09b5845463cfd4a111840cac906c2672f7452129ec116bb3f"
+    },
+    {
+      "name": "zstd-1.5.7/build/VS2008",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/build/VS2008/fullbench",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/build/VS2008/fullbench/fullbench.vcproj",
+      "mode": 436,
+      "size": 11989,
+      "kind": "file",
+      "sha256": "98bb09f34b4c017c8cca9adfc11d24758ae5cd0dbbf1c9895a6e049e21b44e1e"
+    },
+    {
+      "name": "zstd-1.5.7/build/VS2008/fuzzer",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/build/VS2008/fuzzer/fuzzer.vcproj",
+      "mode": 436,
+      "size": 12933,
+      "kind": "file",
+      "sha256": "6aad63c0f1f94c90bafb73c823acacb76cafd04599f9a173717bc64e53cbdafa"
+    },
+    {
+      "name": "zstd-1.5.7/build/VS2008/zstd.sln",
+      "mode": 436,
+      "size": 3509,
+      "kind": "file",
+      "sha256": "0c2f51b30d8a1a742f0fc3250bae1dd6f546f826bf536e12c6f68a70ee0ce423"
+    },
+    {
+      "name": "zstd-1.5.7/build/VS2008/zstd",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/build/VS2008/zstd/zstd.vcproj",
+      "mode": 436,
+      "size": 14858,
+      "kind": "file",
+      "sha256": "3203152290a60581fb994eaef5496e9bd67573793a59237cc3821456dde0c22e"
+    },
+    {
+      "name": "zstd-1.5.7/build/VS2008/zstdlib",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/build/VS2008/zstdlib/zstdlib.vcproj",
+      "mode": 436,
+      "size": 14099,
+      "kind": "file",
+      "sha256": "3aa3fdbf4d22b4b7b78733f21afe0fe6f78cb8d3b284450a76ab0bd4abf30500"
+    },
+    {
+      "name": "zstd-1.5.7/build/VS2010",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/build/VS2010/CompileAsCpp.props",
+      "mode": 436,
+      "size": 244,
+      "kind": "file",
+      "sha256": "aa9bb098a9b623ab0d2180645d73cac222030f4c72ba990502675bb4d7af4a41"
+    },
+    {
+      "name": "zstd-1.5.7/build/VS2010/datagen",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/build/VS2010/datagen/datagen.vcxproj",
+      "mode": 436,
+      "size": 8810,
+      "kind": "file",
+      "sha256": "50969a7c0dbe2115310fbc04af07f397885ac58a337346c31b969d7ae3d8d482"
+    },
+    {
+      "name": "zstd-1.5.7/build/VS2010/fullbench",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/build/VS2010/fullbench/fullbench.vcxproj",
+      "mode": 436,
+      "size": 12131,
+      "kind": "file",
+      "sha256": "f83fab321ad7b671d1d3b21c6f55ac67bcbb84bbd5f3bcf10ddf889282e3457c"
+    },
+    {
+      "name": "zstd-1.5.7/build/VS2010/fuzzer",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/build/VS2010/fuzzer/fuzzer.vcxproj",
+      "mode": 436,
+      "size": 12744,
+      "kind": "file",
+      "sha256": "cce300946c63b356e20097668e5a3d7113eb21576afb17d8db788b88b332df62"
+    },
+    {
+      "name": "zstd-1.5.7/build/VS2010/libzstd-dll",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/build/VS2010/libzstd-dll/libzstd-dll.rc",
+      "mode": 436,
+      "size": 1461,
+      "kind": "file",
+      "sha256": "c5fdd8b7fcd01f11e3d24617fb3f4119f142e33e11676a118b4607c594a337da"
+    },
+    {
+      "name": "zstd-1.5.7/build/VS2010/libzstd-dll/libzstd-dll.vcxproj",
+      "mode": 436,
+      "size": 14357,
+      "kind": "file",
+      "sha256": "81dbfcface95edfc54ccfae13b9c6529e1be13295264ed19a66e62d229107ecb"
+    },
+    {
+      "name": "zstd-1.5.7/build/VS2010/libzstd",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/build/VS2010/libzstd/libzstd.vcxproj",
+      "mode": 436,
+      "size": 13954,
+      "kind": "file",
+      "sha256": "a49c157f36b5bc265d853a3c42f76d9985a3897691148c2435a7015446fe1362"
+    },
+    {
+      "name": "zstd-1.5.7/build/VS2010/zstd.sln",
+      "mode": 436,
+      "size": 5692,
+      "kind": "file",
+      "sha256": "dcf6470e57e9bbdb0df0c9084c56bacd88964a72f77d0a8916af2a6e7f90788c"
+    },
+    {
+      "name": "zstd-1.5.7/build/VS2010/zstd",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/build/VS2010/zstd/zstd.rc",
+      "mode": 436,
+      "size": 1455,
+      "kind": "file",
+      "sha256": "00e18d6b05ebccfb6e0eb7649c8e19341193e8fbff73a175c3b0d39354bba6f0"
+    },
+    {
+      "name": "zstd-1.5.7/build/VS2010/zstd/zstd.vcxproj",
+      "mode": 436,
+      "size": 15310,
+      "kind": "file",
+      "sha256": "f955f85a497a306e61a86d194434f3ae4584cef071bce60f169bf1ac633037d9"
+    },
+    {
+      "name": "zstd-1.5.7/build/VS_scripts",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/build/VS_scripts/README.md",
+      "mode": 436,
+      "size": 2136,
+      "kind": "file",
+      "sha256": "5233f818eaab8cbfde8946ffd3d47da595d49439fd82f4c961bebeea0fbaf12f"
+    },
+    {
+      "name": "zstd-1.5.7/build/VS_scripts/build.VS2010.cmd",
+      "mode": 436,
+      "size": 161,
+      "kind": "file",
+      "sha256": "99385fe13bf132c2c30639a8372b4fbcd34e21322a8de374a6731a3c91184f99"
+    },
+    {
+      "name": "zstd-1.5.7/build/VS_scripts/build.VS2012.cmd",
+      "mode": 436,
+      "size": 159,
+      "kind": "file",
+      "sha256": "43ec66eb99d7389afeb0b03c1863f751648c10b2f08ce1f5bfcf66c89be02220"
+    },
+    {
+      "name": "zstd-1.5.7/build/VS_scripts/build.VS2013.cmd",
+      "mode": 436,
+      "size": 161,
+      "kind": "file",
+      "sha256": "3e6e170dfc54d05071e6aaa00d653648f83f5d44007954d908dbefca8cae9f8b"
+    },
+    {
+      "name": "zstd-1.5.7/build/VS_scripts/build.VS2015.cmd",
+      "mode": 436,
+      "size": 161,
+      "kind": "file",
+      "sha256": "420a6d81afffccd80f71e44a3d63e0d335a6f01a5098f6ea06def319f614252e"
+    },
+    {
+      "name": "zstd-1.5.7/build/VS_scripts/build.VS2017.cmd",
+      "mode": 436,
+      "size": 161,
+      "kind": "file",
+      "sha256": "ffca4b2a7e2b8241c858620205eea2fdcec2f79c8dc956ee1fc41b80a2a2f391"
+    },
+    {
+      "name": "zstd-1.5.7/build/VS_scripts/build.VS2017Community.cmd",
+      "mode": 436,
+      "size": 179,
+      "kind": "file",
+      "sha256": "0c0c878a0a9674d1c779fcd26390af46570eede0e3ae3086f735c200b7f48d54"
+    },
+    {
+      "name": "zstd-1.5.7/build/VS_scripts/build.VS2017Enterprise.cmd",
+      "mode": 436,
+      "size": 181,
+      "kind": "file",
+      "sha256": "7967e51b6628940ec5ff01fdfe84b141fd017975794d011bf91f194d74517937"
+    },
+    {
+      "name": "zstd-1.5.7/build/VS_scripts/build.VS2017Professional.cmd",
+      "mode": 436,
+      "size": 185,
+      "kind": "file",
+      "sha256": "eb88d7128808d4c8040357e5dca6726619e9da336d50f254bb759cf5bc9e1d21"
+    },
+    {
+      "name": "zstd-1.5.7/build/VS_scripts/build.VSPreview.cmd",
+      "mode": 436,
+      "size": 163,
+      "kind": "file",
+      "sha256": "f83b67df6f0e55351a7820c1e0c72a73da62b54a91ad48800c4aec5805255fc4"
+    },
+    {
+      "name": "zstd-1.5.7/build/VS_scripts/build.generic.cmd",
+      "mode": 436,
+      "size": 2833,
+      "kind": "file",
+      "sha256": "584c19064e1a43cbfa3547dc26959581a6f5abc8b0d68bea6224d9289db64207"
+    },
+    {
+      "name": "zstd-1.5.7/build/cmake",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/build/cmake/.gitignore",
+      "mode": 436,
+      "size": 137,
+      "kind": "file",
+      "sha256": "83b50603c5ff91c7e2bb93757cb00d7f448619e9e8a4e85abec90e1e3d79a234"
+    },
+    {
+      "name": "zstd-1.5.7/build/cmake/CMakeLists.txt",
+      "mode": 436,
+      "size": 8505,
+      "kind": "file",
+      "sha256": "d48e97f730e3aff782a37d1c85e22ecfda68dbfcd58596e7588e3cd2627f3650"
+    },
+    {
+      "name": "zstd-1.5.7/build/cmake/CMakeModules",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/build/cmake/CMakeModules/AddZstdCompilationFlags.cmake",
+      "mode": 436,
+      "size": 6077,
+      "kind": "file",
+      "sha256": "0a937cc18b1881fabf6add1c36869e7f993b05b30d3b5fa1e2c0264cfd9e9ccf"
+    },
+    {
+      "name": "zstd-1.5.7/build/cmake/CMakeModules/FindLibLZ4.cmake",
+      "mode": 436,
+      "size": 2053,
+      "kind": "file",
+      "sha256": "4d50bed0ccbd391e8e1115ee2f26782583e111530bdc4a0292bdc006136f1c5b"
+    },
+    {
+      "name": "zstd-1.5.7/build/cmake/CMakeModules/GetZstdLibraryVersion.cmake",
+      "mode": 436,
+      "size": 449,
+      "kind": "file",
+      "sha256": "f4fb42fc824549b8533d6f4c8c8a09667f97da59219cd1ed3f75959b818c15d7"
+    },
+    {
+      "name": "zstd-1.5.7/build/cmake/CMakeModules/JoinPaths.cmake",
+      "mode": 436,
+      "size": 817,
+      "kind": "file",
+      "sha256": "794b0d8fa62a3b798c7df12d50114580d1a47a234bfb6b4d83092eb646a6ecc4"
+    },
+    {
+      "name": "zstd-1.5.7/build/cmake/README.md",
+      "mode": 436,
+      "size": 3486,
+      "kind": "file",
+      "sha256": "ce7f84da56ce8a9f74e56fae7127066c6ca42cbcf0feb9bb70b5ba2727219b47"
+    },
+    {
+      "name": "zstd-1.5.7/build/cmake/contrib",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/build/cmake/contrib/CMakeLists.txt",
+      "mode": 436,
+      "size": 505,
+      "kind": "file",
+      "sha256": "ed21440aba993577a07bd7d282f36478dbfd12cd71d4081047cc436dfc236faa"
+    },
+    {
+      "name": "zstd-1.5.7/build/cmake/contrib/gen_html",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/build/cmake/contrib/gen_html/CMakeLists.txt",
+      "mode": 436,
+      "size": 1389,
+      "kind": "file",
+      "sha256": "9976591a42202c74aeaeec978310c917726b177e64b28675614b10e696c35d65"
+    },
+    {
+      "name": "zstd-1.5.7/build/cmake/contrib/pzstd",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/build/cmake/contrib/pzstd/CMakeLists.txt",
+      "mode": 436,
+      "size": 1556,
+      "kind": "file",
+      "sha256": "a94865088e6e8e1d5b86c77d66dbe1c3005bd06032002a09c79e3632adf6fc8f"
+    },
+    {
+      "name": "zstd-1.5.7/build/cmake/lib",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/build/cmake/lib/.gitignore",
+      "mode": 436,
+      "size": 34,
+      "kind": "file",
+      "sha256": "933c979e5e9fae13c73b7420d5cf4abf94789db3609a6c2cb36aa8dc077df105"
+    },
+    {
+      "name": "zstd-1.5.7/build/cmake/lib/CMakeLists.txt",
+      "mode": 436,
+      "size": 12582,
+      "kind": "file",
+      "sha256": "f8263b092b1c02b2cfd4f7028f62bbcf3ee73b4b97ccf9929f0be500e43fb110"
+    },
+    {
+      "name": "zstd-1.5.7/build/cmake/lib/cmake_uninstall.cmake.in",
+      "mode": 436,
+      "size": 788,
+      "kind": "file",
+      "sha256": "17a754e4e5e079b630f54bbdeff98acd7fb54b78b7f4ba12121f12fcb5db8c6e"
+    },
+    {
+      "name": "zstd-1.5.7/build/cmake/programs",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/build/cmake/programs/.gitignore",
+      "mode": 436,
+      "size": 51,
+      "kind": "file",
+      "sha256": "cdff44d520cec7f84b39a8f48eb404de1269cff1e35d401401a34c1ee0f49c42"
+    },
+    {
+      "name": "zstd-1.5.7/build/cmake/programs/CMakeLists.txt",
+      "mode": 436,
+      "size": 5693,
+      "kind": "file",
+      "sha256": "7311f91181b12cfbc699101044125c4e63e276663380f8e44b3d1c49ff08beb3"
+    },
+    {
+      "name": "zstd-1.5.7/build/cmake/tests",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/build/cmake/tests/.gitignore",
+      "mode": 436,
+      "size": 56,
+      "kind": "file",
+      "sha256": "c06dcd3e05f32fca8b2613766f5f6353e6651d916f85b1a2c751e97649dfc693"
+    },
+    {
+      "name": "zstd-1.5.7/build/cmake/tests/CMakeLists.txt",
+      "mode": 436,
+      "size": 5596,
+      "kind": "file",
+      "sha256": "d9da18ade8cca627604604d6fcf0b0d40ab94b464db66349cb014c17ee33e5da"
+    },
+    {
+      "name": "zstd-1.5.7/build/cmake/zstdConfig.cmake.in",
+      "mode": 436,
+      "size": 220,
+      "kind": "file",
+      "sha256": "d5ff43ecbdfbeb35a82719f7e0baed410b9c80f9d99ffca180e29f916599b608"
+    },
+    {
+      "name": "zstd-1.5.7/build/meson",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/build/meson/GetZstdLibraryVersion.py",
+      "mode": 436,
+      "size": 1303,
+      "kind": "file",
+      "sha256": "5e95e7d3f2c688acab69516025e37de31edd80a8e01cc44f8894a5bba8413e68"
+    },
+    {
+      "name": "zstd-1.5.7/build/meson/InstallSymlink.py",
+      "mode": 436,
+      "size": 2120,
+      "kind": "file",
+      "sha256": "12b3f1c37e97424085ecbb337a8058df6c1e7b2457643136ade33ca14d3ebfb0"
+    },
+    {
+      "name": "zstd-1.5.7/build/meson/README.md",
+      "mode": 436,
+      "size": 967,
+      "kind": "file",
+      "sha256": "0a739c43b805ba7444ebd4b3f9684d5c90498a9a00de9f8c2847c7611e78f7d4"
+    },
+    {
+      "name": "zstd-1.5.7/build/meson/contrib",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/build/meson/contrib/gen_html",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/build/meson/contrib/gen_html/meson.build",
+      "mode": 436,
+      "size": 1130,
+      "kind": "file",
+      "sha256": "e0465a6dea6a8bb824b94694d6d2e543476a17400aa2400b949d80b99d2bb6b0"
+    },
+    {
+      "name": "zstd-1.5.7/build/meson/contrib/meson.build",
+      "mode": 436,
+      "size": 575,
+      "kind": "file",
+      "sha256": "57890f80be503ee8b7a57c1e458b12aa31eeb3cf5791415c7de88d81807fa9ef"
+    },
+    {
+      "name": "zstd-1.5.7/build/meson/contrib/pzstd",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/build/meson/contrib/pzstd/meson.build",
+      "mode": 436,
+      "size": 1139,
+      "kind": "file",
+      "sha256": "3586289e1fee735cb3fbc9277900ada96e57d0e0058575d7da88545dbb60835e"
+    },
+    {
+      "name": "zstd-1.5.7/build/meson/lib",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/build/meson/lib/meson.build",
+      "mode": 436,
+      "size": 6935,
+      "kind": "file",
+      "sha256": "a61f6a347c4747641746689a411533d3c29ae9aabe104c5755f354e6d9393744"
+    },
+    {
+      "name": "zstd-1.5.7/build/meson/meson.build",
+      "mode": 436,
+      "size": 5487,
+      "kind": "file",
+      "sha256": "d921dcbcf241630348c92372de6e31e6f3665f74a272e8adcf5e2b0c20a2bb98"
+    },
+    {
+      "name": "zstd-1.5.7/build/meson/meson_options.txt",
+      "mode": 436,
+      "size": 1813,
+      "kind": "file",
+      "sha256": "1285900feccb2bebb5b545679a298f6aa081ad70e0ced80bb53482208aa0ab0b"
+    },
+    {
+      "name": "zstd-1.5.7/build/meson/programs",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/build/meson/programs/meson.build",
+      "mode": 436,
+      "size": 4535,
+      "kind": "file",
+      "sha256": "2decc4544f6be76043bc08e48badacee211b4757e9eb95d27f2ecf17430f5f61"
+    },
+    {
+      "name": "zstd-1.5.7/build/meson/tests",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/build/meson/tests/meson.build",
+      "mode": 436,
+      "size": 7146,
+      "kind": "file",
+      "sha256": "6b840a67742c2298f41a631b17b8e7a3f57defd4157d63b611d9a1d49398a63a"
+    },
+    {
+      "name": "zstd-1.5.7/build/meson/tests/valgrindTest.py",
+      "mode": 436,
+      "size": 3422,
+      "kind": "file",
+      "sha256": "510b1d1d0ee4556e401979d6339fc1105e7519d5b89a3a8e902209fde80136b5"
+    },
+    {
+      "name": "zstd-1.5.7/build/single_file_libs",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/build/single_file_libs/.gitignore",
+      "mode": 436,
+      "size": 97,
+      "kind": "file",
+      "sha256": "e91185490f2cfb1dc690a77ade16a8e269ce0ce4ff1050f3398a693092de4a45"
+    },
+    {
+      "name": "zstd-1.5.7/build/single_file_libs/README.md",
+      "mode": 436,
+      "size": 2162,
+      "kind": "file",
+      "sha256": "be517f8565c98f7d76c845f6ea150e8f31132723a2c9a4946f3ee22047f79e9d"
+    },
+    {
+      "name": "zstd-1.5.7/build/single_file_libs/build_decoder_test.sh",
+      "mode": 509,
+      "size": 2048,
+      "kind": "file",
+      "sha256": "4428ed7a172a01d03113a25b0447e467a1e87b9d4e5e3bc538b65a3d82e05a28"
+    },
+    {
+      "name": "zstd-1.5.7/build/single_file_libs/build_library_test.sh",
+      "mode": 509,
+      "size": 2314,
+      "kind": "file",
+      "sha256": "3ae297266f5731781b99dfd4e25560965f14ecfa8cd52a49fc852fb2d4fb0262"
+    },
+    {
+      "name": "zstd-1.5.7/build/single_file_libs/combine.py",
+      "mode": 509,
+      "size": 10120,
+      "kind": "file",
+      "sha256": "4fd5e30ab95f558cb46159abe81a620878b53c0aeba7ebd20f0c23d12ae8bff5"
+    },
+    {
+      "name": "zstd-1.5.7/build/single_file_libs/combine.sh",
+      "mode": 509,
+      "size": 7632,
+      "kind": "file",
+      "sha256": "a06c265de7c81fdd2b1f6f59cb2d02c7c5fcc02b0db4507ef32e05dae9c3d5a4"
+    },
+    {
+      "name": "zstd-1.5.7/build/single_file_libs/create_single_file_decoder.sh",
+      "mode": 509,
+      "size": 565,
+      "kind": "file",
+      "sha256": "2915315bb79970f1a9a68e9f7741f33d216a9a95ed76488af7ce8d95c32084be"
+    },
+    {
+      "name": "zstd-1.5.7/build/single_file_libs/create_single_file_library.sh",
+      "mode": 509,
+      "size": 541,
+      "kind": "file",
+      "sha256": "efd4967d751a9429b23b7b4b74e9cfc7bb6aa63d041c1645a746aad30a7ba960"
+    },
+    {
+      "name": "zstd-1.5.7/build/single_file_libs/examples",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/build/single_file_libs/examples/README.md",
+      "mode": 436,
+      "size": 1031,
+      "kind": "file",
+      "sha256": "ddc4fda25b585bdae4997eae06e671b684835a430c79d8eaab1fc75d41424e72"
+    },
+    {
+      "name": "zstd-1.5.7/build/single_file_libs/examples/emscripten.c",
+      "mode": 436,
+      "size": 8751,
+      "kind": "file",
+      "sha256": "a3a9cc2c49b24b4199b73a7f3e00afb1cec4092be520a988aa87dcc18a027539"
+    },
+    {
+      "name": "zstd-1.5.7/build/single_file_libs/examples/roundtrip.c",
+      "mode": 436,
+      "size": 2520,
+      "kind": "file",
+      "sha256": "5dc2d98e34599fbcab8015252d195d2b89a5e44dec4d14cc1b56b67c9122d92f"
+    },
+    {
+      "name": "zstd-1.5.7/build/single_file_libs/examples/shell.html",
+      "mode": 436,
+      "size": 982,
+      "kind": "file",
+      "sha256": "1a68bd605016a5c3417324bd717cfae9ea77298b0e75012e5c953805ec7274f6"
+    },
+    {
+      "name": "zstd-1.5.7/build/single_file_libs/examples/simple.c",
+      "mode": 436,
+      "size": 2309,
+      "kind": "file",
+      "sha256": "3ecd6e56d47babf600ba889e86950ee1e1260051f98a7acf698022cebfa6f03b"
+    },
+    {
+      "name": "zstd-1.5.7/build/single_file_libs/examples/testcard-dxt1.inl",
+      "mode": 436,
+      "size": 196606,
+      "kind": "file",
+      "sha256": "22c257809b135888cb528082fc5b880214e21bc08fc329ca41b8b5b63520b232"
+    },
+    {
+      "name": "zstd-1.5.7/build/single_file_libs/examples/testcard-zstd.inl",
+      "mode": 436,
+      "size": 18760,
+      "kind": "file",
+      "sha256": "020bcbbbfd66dff33821e11f6428d0d0e3a58f2eefea566398f678e7a63de7be"
+    },
+    {
+      "name": "zstd-1.5.7/build/single_file_libs/examples/testcard.png",
+      "mode": 509,
+      "size": 12675,
+      "kind": "file",
+      "sha256": "cfd95706d4bc826a524e212e686907a71a452e77a9ec2069e026f3bdf6359538"
+    },
+    {
+      "name": "zstd-1.5.7/build/single_file_libs/zstd-in.c",
+      "mode": 436,
+      "size": 2842,
+      "kind": "file",
+      "sha256": "238606d9ad2cb4f40063a7def25395f31302da31c0e09727e20af0d204f87721"
+    },
+    {
+      "name": "zstd-1.5.7/build/single_file_libs/zstddeclib-in.c",
+      "mode": 436,
+      "size": 2007,
+      "kind": "file",
+      "sha256": "bc92e749753feac9beaeae6e5fd8efe80f8ba31f937a71179ffa2876c903d6b6"
+    },
+    {
+      "name": "zstd-1.5.7/contrib",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/VS2005",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/VS2005/README.md",
+      "mode": 436,
+      "size": 154,
+      "kind": "file",
+      "sha256": "2e6c807a8c0cdc3fa13705e035419b329dbe2101e7c3324af13625faf06a0dd8"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/VS2005/fullbench",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/VS2005/fullbench/fullbench.vcproj",
+      "mode": 436,
+      "size": 9471,
+      "kind": "file",
+      "sha256": "3fb6770b780241d07b9a2098355ead61b8a49e21d6c4dcc5aed628ad4d1eee50"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/VS2005/fuzzer",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/VS2005/fuzzer/fuzzer.vcproj",
+      "mode": 436,
+      "size": 10471,
+      "kind": "file",
+      "sha256": "48e345992e0a90b5f8d8b49867e03f42ded95217b932126494271cf78a7673e9"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/VS2005/zstd.sln",
+      "mode": 436,
+      "size": 3511,
+      "kind": "file",
+      "sha256": "1095bb9942dbd88434174043b5c83bb031f7f4b42c7e35974040804492cccbb5"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/VS2005/zstd",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/VS2005/zstd/zstd.vcproj",
+      "mode": 436,
+      "size": 12175,
+      "kind": "file",
+      "sha256": "a73dac3fe395163a4f952849f49ce1ca13a8d1dcf73473ec9a05115f60a5e956"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/VS2005/zstdlib",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/VS2005/zstdlib/zstdlib.vcproj",
+      "mode": 436,
+      "size": 12119,
+      "kind": "file",
+      "sha256": "8156e24174f8a5aa8452e75343b9cd471d2afd77328ec178bafad557c13e9347"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/cleanTabs",
+      "mode": 509,
+      "size": 140,
+      "kind": "file",
+      "sha256": "60f35ef2ac59294e9f88c9180f464e9b06bc32c4a1c1e07a31228fa8b8e31229"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/diagnose_corruption",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/diagnose_corruption/.gitignore",
+      "mode": 436,
+      "size": 19,
+      "kind": "file",
+      "sha256": "00df95f30ca310d4c38b97f06c6f95e04b1420d9062b7501d2c6db913dab9650"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/diagnose_corruption/Makefile",
+      "mode": 436,
+      "size": 1361,
+      "kind": "file",
+      "sha256": "5b17879fb741e34891569bfa4a0b69a234826bfd0bd9332bc13f60babcee96f9"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/diagnose_corruption/check_flipped_bits.c",
+      "mode": 436,
+      "size": 10377,
+      "kind": "file",
+      "sha256": "c8f01e3aeb2292c4699df08f7c3e75e47a33fed65f289fd1044b34319fc8aced"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/docker",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/docker/Dockerfile",
+      "mode": 436,
+      "size": 661,
+      "kind": "file",
+      "sha256": "025b38899dfac0a22e2e80f25dfaf36ffcad3cfc7b68827f020d03bcedf9c782"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/docker/README.md",
+      "mode": 436,
+      "size": 368,
+      "kind": "file",
+      "sha256": "920ded3172525e3edecd856f4f5fe801e8442dd381c7c501a5dd1de34a8f867e"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/externalSequenceProducer",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/externalSequenceProducer/.gitignore",
+      "mode": 436,
+      "size": 43,
+      "kind": "file",
+      "sha256": "f367ddbd58ef50f6a9a03a2222b0dbb97aa8bb73c17e7493a9e90cc791ae19e2"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/externalSequenceProducer/Makefile",
+      "mode": 436,
+      "size": 1274,
+      "kind": "file",
+      "sha256": "77a7c44a54a529cc5375daa026e3d280db9044a89f73fb4589bf424b9acff72f"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/externalSequenceProducer/README.md",
+      "mode": 436,
+      "size": 517,
+      "kind": "file",
+      "sha256": "2913a2cdf8831a56c4d191884aaac76a584eb53fb59f85f3d7c46db706836f2e"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/externalSequenceProducer/main.c",
+      "mode": 436,
+      "size": 2952,
+      "kind": "file",
+      "sha256": "2b4bed7e10155178a10922f05e683f7447f030fd99afd562b91fe7329726ce57"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/externalSequenceProducer/sequence_producer.c",
+      "mode": 436,
+      "size": 2330,
+      "kind": "file",
+      "sha256": "5848adb10e47dd264f711669194b0bf17456d3bb35fec21378f35e3443c6e7ad"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/externalSequenceProducer/sequence_producer.h",
+      "mode": 436,
+      "size": 717,
+      "kind": "file",
+      "sha256": "93f69b4346aaa15c49d7c54c15f958e65b48f515e981844bd6316e3a78aed4df"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/freestanding_lib",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/freestanding_lib/freestanding.py",
+      "mode": 509,
+      "size": 28922,
+      "kind": "file",
+      "sha256": "4beede0647a686b974c7f675ebd0b52647ca770c0b1ad5f52dad51efaf2eeabb"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/gen_html",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/gen_html/.gitignore",
+      "mode": 436,
+      "size": 42,
+      "kind": "file",
+      "sha256": "81bc4300ad8df19c7cde13ad8402af4d3a7238cb3d45d74522a38de849af759a"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/gen_html/Makefile",
+      "mode": 436,
+      "size": 1625,
+      "kind": "file",
+      "sha256": "4939bd6e1a508a69e2b64f3462f2465efdfff10a992f1478faf86eb161d8aa2d"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/gen_html/README.md",
+      "mode": 436,
+      "size": 1120,
+      "kind": "file",
+      "sha256": "c1188127206b5c255e74ca76739f35b24c3a02a6bc95c6480947c0ec7ac24cf5"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/gen_html/gen-zstd-manual.sh",
+      "mode": 509,
+      "size": 531,
+      "kind": "file",
+      "sha256": "c5f45cf12834fb69919e526fd6bbab194dc8cf9e3aa3e53faeeb39ac8274e323"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/gen_html/gen_html.cpp",
+      "mode": 436,
+      "size": 7674,
+      "kind": "file",
+      "sha256": "70bd716c0c3b458afc86b3567c366018babc6c332ae5f9d80e15bf3cd81a12f2"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/largeNbDicts",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/largeNbDicts/.gitignore",
+      "mode": 436,
+      "size": 31,
+      "kind": "file",
+      "sha256": "23236154fce017c22158855eafd81febb168e8485e0c6c8e3a6c7ddcbc3863c6"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/largeNbDicts/Makefile",
+      "mode": 436,
+      "size": 1619,
+      "kind": "file",
+      "sha256": "632bf38cfbb47a1547a9031a565a690afda1dcd719e714969bad824f7b33a729"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/largeNbDicts/README.md",
+      "mode": 436,
+      "size": 1163,
+      "kind": "file",
+      "sha256": "d0c5876dddeeddb3f53a11b64e70a72df351d2a38d04e037e439ee68256c3a4a"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/largeNbDicts/largeNbDicts.c",
+      "mode": 436,
+      "size": 37509,
+      "kind": "file",
+      "sha256": "22e68fbd8a4355d9611284476d10208d03af17e199cb7f900779f2104cddd7bd"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/linux-kernel",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/linux-kernel/.gitignore",
+      "mode": 436,
+      "size": 30,
+      "kind": "file",
+      "sha256": "a559eddefd5f3dbc1184a5b40424c56c11a00f93056073deba77c73600567bf3"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/linux-kernel/Makefile",
+      "mode": 436,
+      "size": 3592,
+      "kind": "file",
+      "sha256": "98bf858de31300054944f26104c98d60c4b463d338ccd4df63ca5bb3195df4b6"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/linux-kernel/README.md",
+      "mode": 436,
+      "size": 874,
+      "kind": "file",
+      "sha256": "4fea4fb80d4fdfce6a882ad544b7824851e3ba4b43ef37dbb27210aa1496a422"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/linux-kernel/btrfs-benchmark.sh",
+      "mode": 509,
+      "size": 2640,
+      "kind": "file",
+      "sha256": "4d41aa25b83ffacba2c18310d8ca23f57d5b423bbfdb054fd4ba3b18748cc0ac"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/linux-kernel/btrfs-extract-benchmark.sh",
+      "mode": 509,
+      "size": 2926,
+      "kind": "file",
+      "sha256": "44a9342e9c2b6c144d3ee1df5195377f6f2552259592c977f93ea6dd2bf01d9a"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/linux-kernel/decompress_sources.h",
+      "mode": 436,
+      "size": 1146,
+      "kind": "file",
+      "sha256": "0c30d37211246feef5fbf43d15b9948312d4fc7e8aa03ffae37afae5c9920f85"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/linux-kernel/linux.mk",
+      "mode": 436,
+      "size": 1483,
+      "kind": "file",
+      "sha256": "8f1a90691a030ef3d130f6d1c23213be951f99a681d373f7c2d7b42877ec2e54"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/linux-kernel/linux_zstd.h",
+      "mode": 436,
+      "size": 20671,
+      "kind": "file",
+      "sha256": "bf91f3b663a3cde309152a94a78cbe1968bb3849c5e2a03c65951a9f05a61bd0"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/linux-kernel/mem.h",
+      "mode": 436,
+      "size": 6571,
+      "kind": "file",
+      "sha256": "c1a8aae5e34b395a778d066e4c4641a01c02b3ec98a7789ff80f5b80d840ac1a"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/linux-kernel/squashfs-benchmark.sh",
+      "mode": 509,
+      "size": 1339,
+      "kind": "file",
+      "sha256": "f43231389ab044c1023fc8944aeb2f577e0b7b55e5fd097c0b139fc3cb9a5175"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/linux-kernel/test",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/linux-kernel/test/Makefile",
+      "mode": 436,
+      "size": 1779,
+      "kind": "file",
+      "sha256": "89ffb5d5c000ad1de452cd5b5351ea9dbd896decc162b19d9989e956bc272b63"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/linux-kernel/test/include",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/linux-kernel/test/include/linux",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/linux-kernel/test/include/linux/compiler.h",
+      "mode": 436,
+      "size": 634,
+      "kind": "file",
+      "sha256": "def0c5c5924df1009c29f75c696b9e5a150a488077a69c875a9d5df254153a6c"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/linux-kernel/test/include/linux/errno.h",
+      "mode": 436,
+      "size": 454,
+      "kind": "file",
+      "sha256": "15ca063e42e8faca19c3336a9cc373edd6cf8724ac41d1eba7f23ac41c5af6af"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/linux-kernel/test/include/linux/kernel.h",
+      "mode": 436,
+      "size": 637,
+      "kind": "file",
+      "sha256": "1f9702f879397e56c4fe01d6ed3c3b823d225cf8b85c07dc2bf328927fabaa84"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/linux-kernel/test/include/linux/limits.h",
+      "mode": 436,
+      "size": 458,
+      "kind": "file",
+      "sha256": "d1d163306b780da4fed65fb27aa4717980ff7b446a1a40c059feaf412ec42338"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/linux-kernel/test/include/linux/math64.h",
+      "mode": 436,
+      "size": 498,
+      "kind": "file",
+      "sha256": "347bb4678bc14253a0a56f69f1d3a277cbeea787480355fec06e7e43482135c8"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/linux-kernel/test/include/linux/module.h",
+      "mode": 436,
+      "size": 728,
+      "kind": "file",
+      "sha256": "53932533c9a737f5e42231b99d142d938a3bc6e99073fd9ff255885fa5118e2f"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/linux-kernel/test/include/linux/printk.h",
+      "mode": 436,
+      "size": 460,
+      "kind": "file",
+      "sha256": "1d55b2f99e453ce22aed2d6ca7826da1aec81e7c17ba2f5a8e1fd26985f61a46"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/linux-kernel/test/include/linux/stddef.h",
+      "mode": 436,
+      "size": 458,
+      "kind": "file",
+      "sha256": "06259267599a45b2bd50b11399c4d920ac414c64bd565009173c836491945113"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/linux-kernel/test/include/linux/swab.h",
+      "mode": 436,
+      "size": 516,
+      "kind": "file",
+      "sha256": "3855f87412781a8eaf066668c0ed53b3f28a8f2922d1c57119b4115c14194f79"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/linux-kernel/test/include/linux/types.h",
+      "mode": 436,
+      "size": 476,
+      "kind": "file",
+      "sha256": "7c385b85f2cffa7997030d5025ee593f54e41d3e09b999d258049a2855356949"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/linux-kernel/test/include/linux/unaligned.h",
+      "mode": 436,
+      "size": 7285,
+      "kind": "file",
+      "sha256": "4432cc16cb8ce25390d92060a7dad5dc2b837c4aad0ff3f8890ecec90916a82e"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/linux-kernel/test/include/linux/xxhash.h",
+      "mode": 436,
+      "size": 21369,
+      "kind": "file",
+      "sha256": "5ae0afd54d963a59b1fac24550112bed93faca08d4f9c4b39b65786b755b859f"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/linux-kernel/test/macro-test.sh",
+      "mode": 509,
+      "size": 1055,
+      "kind": "file",
+      "sha256": "dd0b9c054e93ef80e300d76042a99c3f78c73937389513a7cab1b5dd8067b338"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/linux-kernel/test/static_test.c",
+      "mode": 436,
+      "size": 1790,
+      "kind": "file",
+      "sha256": "8e779264cec731f77bc272085e72512195e3e6488da58001635447e9e186e7c5"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/linux-kernel/test/test.c",
+      "mode": 436,
+      "size": 6640,
+      "kind": "file",
+      "sha256": "41f6e37c149fcfbd4923e7961447472767643521083369f5c9239dc20f1e623a"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/linux-kernel/zstd_common_module.c",
+      "mode": 436,
+      "size": 965,
+      "kind": "file",
+      "sha256": "d13fade9725dca9a6248e919073b23dff209a84d7dfe8566d79a97242bd79664"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/linux-kernel/zstd_compress_module.c",
+      "mode": 436,
+      "size": 7691,
+      "kind": "file",
+      "sha256": "de461cb0ee9270266fa79ffacdbe9b535ec7d5a4f186e4aafc87f38ab593b35b"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/linux-kernel/zstd_decompress_module.c",
+      "mode": 436,
+      "size": 2760,
+      "kind": "file",
+      "sha256": "03e68435cf31728414946addfdb3b799d258ec1d9d7a0b085e301e9fbecd4ac7"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/linux-kernel/zstd_deps.h",
+      "mode": 436,
+      "size": 2803,
+      "kind": "file",
+      "sha256": "009b50af10a528ad885723e5b804f6f30a61d9aafc88558f92c155a2ed7e3203"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/match_finders",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/match_finders/README.md",
+      "mode": 436,
+      "size": 2233,
+      "kind": "file",
+      "sha256": "9a24ea3741cd8684e8fda7cec09488aa8158302c5831be8e14f9fd07d8392d17"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/match_finders/zstd_edist.c",
+      "mode": 436,
+      "size": 20325,
+      "kind": "file",
+      "sha256": "a5230b2374f48ba94ff5b73725a578e40b36b788ca85625455932dc17e9a731c"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/match_finders/zstd_edist.h",
+      "mode": 436,
+      "size": 3275,
+      "kind": "file",
+      "sha256": "91aa18bfb5b953caa908cfbe80f02ff4693b74bb69924dd5809c27b852cf7d31"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/premake",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/premake/premake4.lua",
+      "mode": 436,
+      "size": 196,
+      "kind": "file",
+      "sha256": "675c2a8dc095d97e9d78c92b855e9d3b732d377357667e96b525db4423be5c74"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/premake/zstd.lua",
+      "mode": 436,
+      "size": 1451,
+      "kind": "file",
+      "sha256": "8e97be7804d3a6c89fa7e67186c4e797f07e3bef7fb582fe04512ade2f88a72c"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/pzstd",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/pzstd/.gitignore",
+      "mode": 436,
+      "size": 27,
+      "kind": "file",
+      "sha256": "47a2190fac3698d24ba494cce4ef31c2c7c3794625142910c5c3d36c4dc885d0"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/pzstd/BUCK",
+      "mode": 436,
+      "size": 1579,
+      "kind": "file",
+      "sha256": "10fa8060bf7454e742b64350d4e7c596024238ec8c39c53fbf916a38bd5b2c05"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/pzstd/ErrorHolder.h",
+      "mode": 436,
+      "size": 1223,
+      "kind": "file",
+      "sha256": "7163030ff3b98b846084cbc563be2907b3ed2d1feea2a20d4c83806515362f8a"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/pzstd/Logging.h",
+      "mode": 436,
+      "size": 1657,
+      "kind": "file",
+      "sha256": "524e8e6bd0d9377c887fcb12ff96401157ea8433da1403804b8b26152a0a3999"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/pzstd/Makefile",
+      "mode": 436,
+      "size": 7336,
+      "kind": "file",
+      "sha256": "18c00d4b5ae8ad7cdf7a0b5efa65f4748736be5ce2c3fba8ef1e2dbe81e1f917"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/pzstd/Options.cpp",
+      "mode": 436,
+      "size": 13827,
+      "kind": "file",
+      "sha256": "53c2abd55e5e82c13abf5341a2fa3e3bb97645be4c741cb3499f08d4ff3b2c32"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/pzstd/Options.h",
+      "mode": 436,
+      "size": 2353,
+      "kind": "file",
+      "sha256": "1448cc8e434c12e83eab0545619bf5230de98191730fbdf38978d2f425cfece8"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/pzstd/Pzstd.cpp",
+      "mode": 436,
+      "size": 21645,
+      "kind": "file",
+      "sha256": "b1b9d2ca13098dc8dfea5a784431db303658b460c7a21dee963bbc5e3981621c"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/pzstd/Pzstd.h",
+      "mode": 436,
+      "size": 5238,
+      "kind": "file",
+      "sha256": "99ec763f61ffa3511edc1ec2602f828b29b7f9d15facc66eba28b3a9c3773d6e"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/pzstd/README.md",
+      "mode": 436,
+      "size": 2923,
+      "kind": "file",
+      "sha256": "fdae0aae9a6b30289ed54ce8da34e2b145458b53d10908b51998375f861bcb39"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/pzstd/SkippableFrame.cpp",
+      "mode": 436,
+      "size": 970,
+      "kind": "file",
+      "sha256": "21ee7da9e31a7e9ba2caaf19cfc4e27a53494b76b32217972f7cd5405530cf5d"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/pzstd/SkippableFrame.h",
+      "mode": 436,
+      "size": 1828,
+      "kind": "file",
+      "sha256": "6a7120da5a377e5467a3d9b7cfc4403adee2a233c106aec0a124865c0c51ae66"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/pzstd/images",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/pzstd/images/Cspeed.png",
+      "mode": 436,
+      "size": 69804,
+      "kind": "file",
+      "sha256": "07322684df7adee954e19783593e25d5849f3106a45471b737764932c17060c5"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/pzstd/images/Dspeed.png",
+      "mode": 436,
+      "size": 26335,
+      "kind": "file",
+      "sha256": "46eb35e28a0a853e6fc97eabaa67828800c4bf0c64b90ee2258e33cb9f9dc7ff"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/pzstd/main.cpp",
+      "mode": 436,
+      "size": 654,
+      "kind": "file",
+      "sha256": "56c6f55f507e05b9904f4873a43c9ac866c12a3bfb843aea5f8253dcb691447a"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/pzstd/test",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/pzstd/test/BUCK",
+      "mode": 436,
+      "size": 750,
+      "kind": "file",
+      "sha256": "90e6dac8346cb3fbde8c94af36feec3624988eb5ead750008e54568825688a6d"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/pzstd/test/OptionsTest.cpp",
+      "mode": 436,
+      "size": 15444,
+      "kind": "file",
+      "sha256": "e0879e366e5fd681b21f6beca1a7394e528165425ba53e5dd73dceae58fa1792"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/pzstd/test/PzstdTest.cpp",
+      "mode": 436,
+      "size": 4778,
+      "kind": "file",
+      "sha256": "9add967548c1be11c875972586d9b17a68784a7f98ae4954ed40b7d0d786a609"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/pzstd/test/RoundTrip.h",
+      "mode": 436,
+      "size": 2134,
+      "kind": "file",
+      "sha256": "a2ae3bd68162c7c25832f9e025aa34e50c8d0b9c86e92142d9120228bb4c2665"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/pzstd/test/RoundTripTest.cpp",
+      "mode": 436,
+      "size": 2588,
+      "kind": "file",
+      "sha256": "9821c24b673c63c1aa26930496599dca495e1ea47697683372f5ab6af6ed653b"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/pzstd/utils",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/pzstd/utils/BUCK",
+      "mode": 436,
+      "size": 1428,
+      "kind": "file",
+      "sha256": "bba6eab567073501cbd8c7d4a10cc9739bb6e29c40ff77bfe9777ee912c966ea"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/pzstd/utils/Buffer.h",
+      "mode": 436,
+      "size": 2631,
+      "kind": "file",
+      "sha256": "431945032b15c360e3d05020494682ea75ddf64e4db375f324596d3afd34b79e"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/pzstd/utils/FileSystem.h",
+      "mode": 436,
+      "size": 2762,
+      "kind": "file",
+      "sha256": "a221d4de716d366d728dfa96bb0b2b6a6f0a3ca20d7e487541980ab36651c4a8"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/pzstd/utils/Likely.h",
+      "mode": 436,
+      "size": 725,
+      "kind": "file",
+      "sha256": "9efdaff922aee0a6f1f187acb04f9cbdf094bae92a6bc80c1f2d8c7a5998cf3d"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/pzstd/utils/Portability.h",
+      "mode": 436,
+      "size": 452,
+      "kind": "file",
+      "sha256": "28c89220b36c8fee0f86f165bfaad9eca7fc77a80523c664503cdf5fca7c924e"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/pzstd/utils/Range.h",
+      "mode": 436,
+      "size": 3304,
+      "kind": "file",
+      "sha256": "119058ce4431581ca118d9f9970842c4d7366a7695fc3cdbcc2b055863534d85"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/pzstd/utils/ResourcePool.h",
+      "mode": 436,
+      "size": 2650,
+      "kind": "file",
+      "sha256": "4249ea5b5ed2988b5ba88c73917c7a5fb775394ae1277d296b9e437f00f7e765"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/pzstd/utils/ScopeGuard.h",
+      "mode": 436,
+      "size": 1152,
+      "kind": "file",
+      "sha256": "a4bc3e9089cb202f88375c5ad992fc48b6fef539ba97f151aeea370f20ead621"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/pzstd/utils/ThreadPool.h",
+      "mode": 436,
+      "size": 1488,
+      "kind": "file",
+      "sha256": "2eae198a85c0a3508d931ea7b695197857314ee25864b4c0c167f4dced421ed0"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/pzstd/utils/WorkQueue.h",
+      "mode": 436,
+      "size": 4675,
+      "kind": "file",
+      "sha256": "84002e6dc4e566248aca5f22f50da6bc30c11dddd250bd16c9458c38cb70ee0e"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/pzstd/utils/test",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/pzstd/utils/test/BUCK",
+      "mode": 436,
+      "size": 705,
+      "kind": "file",
+      "sha256": "5c30c6c41fb7caeb2ec916e3bfc63382e99ba084852934ae8f331708419500cb"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/pzstd/utils/test/BufferTest.cpp",
+      "mode": 436,
+      "size": 1958,
+      "kind": "file",
+      "sha256": "25b421f24309dc5d50c40149b17960eae359ad008d0e1df22a8a2cc7f8c7a2f5"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/pzstd/utils/test/RangeTest.cpp",
+      "mode": 436,
+      "size": 2041,
+      "kind": "file",
+      "sha256": "77c3839b526c66cc6211de144e7a89c2faf56b1d2492215353365385d43d2d23"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/pzstd/utils/test/ResourcePoolTest.cpp",
+      "mode": 436,
+      "size": 1672,
+      "kind": "file",
+      "sha256": "178f7409c005bb0c8be2ecb0aa3d2f4abfa9ab2f93b33c81995a0c5606b10eef"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/pzstd/utils/test/ScopeGuardTest.cpp",
+      "mode": 436,
+      "size": 665,
+      "kind": "file",
+      "sha256": "c9ad4415e158994c66be9381e7f999a337ac96f3479f95fdbfabde47e3eeaef9"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/pzstd/utils/test/ThreadPoolTest.cpp",
+      "mode": 436,
+      "size": 1713,
+      "kind": "file",
+      "sha256": "61a07fe033a583fa0cbf33f345d76415712c505d01b321b19397fc0f8c95655d"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/pzstd/utils/test/WorkQueueTest.cpp",
+      "mode": 436,
+      "size": 6091,
+      "kind": "file",
+      "sha256": "b86584638a78ca875c1aa31a04149cf4a72c54f335bde60fc8b7966a6e44cda0"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/recovery",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/recovery/Makefile",
+      "mode": 436,
+      "size": 1308,
+      "kind": "file",
+      "sha256": "d33bdd6a0c6962c377f4d78c1718aec0c47f86b833f3f9bbe9d33f5807a8c369"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/recovery/recover_directory.c",
+      "mode": 436,
+      "size": 5054,
+      "kind": "file",
+      "sha256": "29c96f981c2ec4eb7489f358e7b7814dcee2684c46c6c3c613c747f96a8010c4"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/seekable_format",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/seekable_format/README.md",
+      "mode": 436,
+      "size": 1835,
+      "kind": "file",
+      "sha256": "31870cb1b5266ad963f705cca7fc06437818debb20ded6cc0b15b07090159d77"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/seekable_format/examples",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/seekable_format/examples/.gitignore",
+      "mode": 436,
+      "size": 112,
+      "kind": "file",
+      "sha256": "c82972d6310476168d9f9d1d1554c352b1dd3c60925c4b87433db50dd0396582"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/seekable_format/examples/Makefile",
+      "mode": 436,
+      "size": 1775,
+      "kind": "file",
+      "sha256": "db179200b24658bf1887c34ce83c767e36fe7ce97b201ed24002861b97f913b7"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/seekable_format/examples/parallel_compression.c",
+      "mode": 436,
+      "size": 6029,
+      "kind": "file",
+      "sha256": "9696cb6cbe9ba6f4ab3dae6fc22d158783c4e5f7c53f3ff2d93dbfa744a4099f"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/seekable_format/examples/parallel_processing.c",
+      "mode": 436,
+      "size": 5378,
+      "kind": "file",
+      "sha256": "7bc22e496e867c38ed95c7a3c2a966a2b6ef025f5b4f94fa1ed1c7f94bf54811"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/seekable_format/examples/seekable_compression.c",
+      "mode": 436,
+      "size": 4869,
+      "kind": "file",
+      "sha256": "fc0dfdb04e639bb2844c672261252068572c29ed2272adcdb8bcb0314290e705"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/seekable_format/examples/seekable_decompression.c",
+      "mode": 436,
+      "size": 3964,
+      "kind": "file",
+      "sha256": "3f98a6cdb0e96c27ee662cafdede0f10e46562c90b4aedbf46bd71f6fc5da17d"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/seekable_format/examples/seekable_decompression_mem.c",
+      "mode": 436,
+      "size": 4216,
+      "kind": "file",
+      "sha256": "a06e5dff6141b7bb668c819ff63acf8f0257cbc307362843b82344a5d1a3db09"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/seekable_format/tests",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/seekable_format/tests/.gitignore",
+      "mode": 436,
+      "size": 15,
+      "kind": "file",
+      "sha256": "73773923c07d2ee22a7513228921ab23147efc907c5ee56ce9bb22ee68c49687"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/seekable_format/tests/Makefile",
+      "mode": 436,
+      "size": 1148,
+      "kind": "file",
+      "sha256": "8a922defdc2e2ccc14bc7f59ba06b59346523bf45e42592c1f248d5af4b3b625"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/seekable_format/tests/seekable_tests.c",
+      "mode": 436,
+      "size": 12778,
+      "kind": "file",
+      "sha256": "060ba0d1e705f8c426a360ca46a10ff61613ba69b6a12bfe0f6b45a5066f1ad0"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/seekable_format/zstd_seekable.h",
+      "mode": 436,
+      "size": 12080,
+      "kind": "file",
+      "sha256": "c28fd17b21371596cf3b73d0cf1d5f5ce1724489330f9f2492575a2ea1c21b1b"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/seekable_format/zstd_seekable_compression_format.md",
+      "mode": 436,
+      "size": 4857,
+      "kind": "file",
+      "sha256": "faf6aece7f227061092956bb6e5152f90a09cf7ed5ac394d8288c37ac40de183"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/seekable_format/zstdseek_compress.c",
+      "mode": 436,
+      "size": 10987,
+      "kind": "file",
+      "sha256": "3aefdd381ba8989857392037ada029441030a00f5af0b6dfbfbf817dbbeba4de"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/seekable_format/zstdseek_decompress.c",
+      "mode": 436,
+      "size": 21327,
+      "kind": "file",
+      "sha256": "019da12b3a8856336cc9f853a7d3ac644102e32e424fd75a711fcc8e28165214"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/seqBench",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/seqBench/Makefile",
+      "mode": 436,
+      "size": 1602,
+      "kind": "file",
+      "sha256": "9ecbdf67cb57a2a986776c8af9db26bbf2a8ce727e078401845d30b54ed0e743"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/seqBench/seqBench.c",
+      "mode": 436,
+      "size": 1651,
+      "kind": "file",
+      "sha256": "0fe0bf231011c6030568de399ef199bd3b3ae77c6e4df75b10a1daadd0175762"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/snap",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/contrib/snap/snapcraft.yaml",
+      "mode": 436,
+      "size": 819,
+      "kind": "file",
+      "sha256": "5c56217ba830ead8f6b4fd52f61df23a3376f6fd53e72a6d54faf87f14012052"
+    },
+    {
+      "name": "zstd-1.5.7/doc",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/doc/README.md",
+      "mode": 436,
+      "size": 1476,
+      "kind": "file",
+      "sha256": "cf8fec9d5c5ea6939e64af9f87b171bd22b6be0c937ffb0bb3906a17f0670e38"
+    },
+    {
+      "name": "zstd-1.5.7/doc/decompressor_errata.md",
+      "mode": 436,
+      "size": 6183,
+      "kind": "file",
+      "sha256": "ac05664e59e03d19ebf492757930a3a04169247a170772875caf097bb9a95852"
+    },
+    {
+      "name": "zstd-1.5.7/doc/decompressor_permissive.md",
+      "mode": 436,
+      "size": 3011,
+      "kind": "file",
+      "sha256": "eb9b5e8f3801c30c1b8a64c0a86c60cd92176be376c268dcd25f9f6a420e2db5"
+    },
+    {
+      "name": "zstd-1.5.7/doc/educational_decoder",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/doc/educational_decoder/.gitignore",
+      "mode": 436,
+      "size": 26,
+      "kind": "file",
+      "sha256": "33498a6f93ff3b16d68e7a0cd9d0cf48f8d65854ebe4bf291b7b28bf3362ab54"
+    },
+    {
+      "name": "zstd-1.5.7/doc/educational_decoder/Makefile",
+      "mode": 436,
+      "size": 2213,
+      "kind": "file",
+      "sha256": "1cadf673d9bf3bcb781575612af176607ded0ccb63dd37b7b5e0923f5a59d5ec"
+    },
+    {
+      "name": "zstd-1.5.7/doc/educational_decoder/README.md",
+      "mode": 436,
+      "size": 1727,
+      "kind": "file",
+      "sha256": "4e0421a0f95b2168865c7713c99448b880d67bbe8dd42e29c2a35fb17bcc842a"
+    },
+    {
+      "name": "zstd-1.5.7/doc/educational_decoder/harness.c",
+      "mode": 436,
+      "size": 3515,
+      "kind": "file",
+      "sha256": "419d644613881903fc4f7e91163107b38e91bb8a2d46dfa661335827950a4fd0"
+    },
+    {
+      "name": "zstd-1.5.7/doc/educational_decoder/zstd_decompress.c",
+      "mode": 436,
+      "size": 90617,
+      "kind": "file",
+      "sha256": "d6980a5308e488d6b25f22c5c3b8fbc1820579695a2300f8c5cc1356cdccd612"
+    },
+    {
+      "name": "zstd-1.5.7/doc/educational_decoder/zstd_decompress.h",
+      "mode": 436,
+      "size": 2580,
+      "kind": "file",
+      "sha256": "70021196b86934b4072428f584304616f382134b1f199c3db363cbfa4468cf43"
+    },
+    {
+      "name": "zstd-1.5.7/doc/images",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/doc/images/CSpeed2.png",
+      "mode": 436,
+      "size": 73335,
+      "kind": "file",
+      "sha256": "6c8ff381951765b045f1e7dde790e6aaabdc660c39faeff09abd01c6ba5395e5"
+    },
+    {
+      "name": "zstd-1.5.7/doc/images/DCspeed5.png",
+      "mode": 436,
+      "size": 69278,
+      "kind": "file",
+      "sha256": "a86ef457ff5c926e0c710e16828864379eef2487ace253f7c93dae0f72a9172b"
+    },
+    {
+      "name": "zstd-1.5.7/doc/images/DSpeed3.png",
+      "mode": 436,
+      "size": 27123,
+      "kind": "file",
+      "sha256": "4fb12ccebd53569672f0b1c539ad8950d3f4e2a93648baa214553b1eb00d4a63"
+    },
+    {
+      "name": "zstd-1.5.7/doc/images/cdict_v136.png",
+      "mode": 436,
+      "size": 33330,
+      "kind": "file",
+      "sha256": "24495a89edbef37f830093950b99989b5d6361ec5a4ca4883dcdb1c5568e8752"
+    },
+    {
+      "name": "zstd-1.5.7/doc/images/dict-cr.png",
+      "mode": 436,
+      "size": 90412,
+      "kind": "file",
+      "sha256": "d81e32e43cd89fa301c4380edd59184672b71cfd40b153cbfd3502fb0585ae39"
+    },
+    {
+      "name": "zstd-1.5.7/doc/images/dict-cs.png",
+      "mode": 436,
+      "size": 91518,
+      "kind": "file",
+      "sha256": "91460b20e9817c7ffc463ab69f9f8c8bef8513da1b5bf28d3501264e1fdaeb0b"
+    },
+    {
+      "name": "zstd-1.5.7/doc/images/dict-ds.png",
+      "mode": 436,
+      "size": 98316,
+      "kind": "file",
+      "sha256": "28b60851ed26d6faa83f5d50adf0404e6bcd3b92156cb98b76fe0d2a194f7106"
+    },
+    {
+      "name": "zstd-1.5.7/doc/images/zstd_cdict_v1_3_5.png",
+      "mode": 436,
+      "size": 93969,
+      "kind": "file",
+      "sha256": "a21715e337f655fc9214888786b458e9a35c9b40c503bc9d3ebd98e57998c555"
+    },
+    {
+      "name": "zstd-1.5.7/doc/images/zstd_logo86.png",
+      "mode": 436,
+      "size": 13069,
+      "kind": "file",
+      "sha256": "ff7bf44b99d38d6c851720829cc8972aa8a364b3728cc7767b7f3e6120998a68"
+    },
+    {
+      "name": "zstd-1.5.7/doc/zstd_compression_format.md",
+      "mode": 436,
+      "size": 77279,
+      "kind": "file",
+      "sha256": "81d08d9af1e3011190cae694d1b775b46db4743728733522a4119a5cb7558bb5"
+    },
+    {
+      "name": "zstd-1.5.7/doc/zstd_manual.html",
+      "mode": 436,
+      "size": 134341,
+      "kind": "file",
+      "sha256": "7e58f1f81bdf34465543cf9e7774e8cc97e4e9c1233833a42089564c0faf848c"
+    },
+    {
+      "name": "zstd-1.5.7/examples",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/examples/.gitignore",
+      "mode": 436,
+      "size": 256,
+      "kind": "file",
+      "sha256": "315b3f50f36c6b89e08abeebc054142fe7457a767b0542ae43969bf2196ecc64"
+    },
+    {
+      "name": "zstd-1.5.7/examples/Makefile",
+      "mode": 436,
+      "size": 2834,
+      "kind": "file",
+      "sha256": "2f7a83ef8f0be325a79e33ac38280630172789b6e2fbb3bf2e18e7f5189b97fd"
+    },
+    {
+      "name": "zstd-1.5.7/examples/README.md",
+      "mode": 436,
+      "size": 1891,
+      "kind": "file",
+      "sha256": "c60fdfb378558cf78535a1433375e8942a6b0c10a375a6cd5febc4570a552c1c"
+    },
+    {
+      "name": "zstd-1.5.7/examples/common.h",
+      "mode": 436,
+      "size": 7444,
+      "kind": "file",
+      "sha256": "8ece2f75edb4e3846564bcf93abb3b498427ec472e9651525eb5705edae4ff63"
+    },
+    {
+      "name": "zstd-1.5.7/examples/dictionary_compression.c",
+      "mode": 436,
+      "size": 3617,
+      "kind": "file",
+      "sha256": "99cb8f9c731ca6c2d967ae2db348848625a93f452917a0fcb6978d3b3bf96b01"
+    },
+    {
+      "name": "zstd-1.5.7/examples/dictionary_decompression.c",
+      "mode": 436,
+      "size": 3752,
+      "kind": "file",
+      "sha256": "d103ae8b3d85eedc01c3ac60ea08f24991826646e48c93f8ea5f2834a2e1b2f6"
+    },
+    {
+      "name": "zstd-1.5.7/examples/multiple_simple_compression.c",
+      "mode": 436,
+      "size": 3780,
+      "kind": "file",
+      "sha256": "a9006b9ad70bc7c584f541038638490acea062738f91f8e36367374f56824b25"
+    },
+    {
+      "name": "zstd-1.5.7/examples/multiple_streaming_compression.c",
+      "mode": 436,
+      "size": 4455,
+      "kind": "file",
+      "sha256": "473a30bc6d2eeed846a428e4056d541ef2e16a04b7c74eac59f7e6b6c34a220a"
+    },
+    {
+      "name": "zstd-1.5.7/examples/simple_compression.c",
+      "mode": 436,
+      "size": 2058,
+      "kind": "file",
+      "sha256": "5d1eb4d0493c8737021dfc71ce9c3bca6140535206ec6f3a8553b4283fe8d5b5"
+    },
+    {
+      "name": "zstd-1.5.7/examples/simple_decompression.c",
+      "mode": 436,
+      "size": 2311,
+      "kind": "file",
+      "sha256": "da7aa186c0b759e762d4c909e75fb72be02fa243110072fd631e5d0d96cbbb67"
+    },
+    {
+      "name": "zstd-1.5.7/examples/streaming_compression.c",
+      "mode": 436,
+      "size": 5383,
+      "kind": "file",
+      "sha256": "59d7564f667fe0a3d5f5fe7a007105a662091577f60ee0ddb9aaf48a88ac292c"
+    },
+    {
+      "name": "zstd-1.5.7/examples/streaming_compression_thread_pool.c",
+      "mode": 436,
+      "size": 6142,
+      "kind": "file",
+      "sha256": "bfe1808b503a9a83aadb023e477765ab97b26abff55958f18f5d41389104b30e"
+    },
+    {
+      "name": "zstd-1.5.7/examples/streaming_decompression.c",
+      "mode": 436,
+      "size": 3650,
+      "kind": "file",
+      "sha256": "757153f470a03fe67b23422604bed70159f1e34de6b058f82237ecaea79215c0"
+    },
+    {
+      "name": "zstd-1.5.7/examples/streaming_memory_usage.c",
+      "mode": 436,
+      "size": 5837,
+      "kind": "file",
+      "sha256": "df16c5136c79331c51bf4e10331a48203ddd7399e62a4467a81604b221f6793d"
+    },
+    {
+      "name": "zstd-1.5.7/lib",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/lib/.gitignore",
+      "mode": 436,
+      "size": 48,
+      "kind": "file",
+      "sha256": "d87b60fa535d8a097547b917bce231ee9cb1fa389bf05759b6fca4a61e7b2a3e"
+    },
+    {
+      "name": "zstd-1.5.7/lib/BUCK",
+      "mode": 436,
+      "size": 4480,
+      "kind": "file",
+      "sha256": "6629e51f4a8ea262df547b179b967068523bb13f75b6415458517328f5c1cbb9"
+    },
+    {
+      "name": "zstd-1.5.7/lib/Makefile",
+      "mode": 436,
+      "size": 12104,
+      "kind": "file",
+      "sha256": "ce4a4c445f3a4a11d5f509567d0ebbd3dec393dc272adf36c7892e7cbd3ccdf6"
+    },
+    {
+      "name": "zstd-1.5.7/lib/README.md",
+      "mode": 436,
+      "size": 12909,
+      "kind": "file",
+      "sha256": "070e59959b0e108c52c6596990f3544edec0fee007d020ae9a1a3c58b9d09cec"
+    },
+    {
+      "name": "zstd-1.5.7/lib/common",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/lib/common/allocations.h",
+      "mode": 436,
+      "size": 1637,
+      "kind": "file",
+      "sha256": "6a718e8edaca112abdc0bdfa7de67edefaa44c8d9e514b79672ab58ab3a9118a"
+    },
+    {
+      "name": "zstd-1.5.7/lib/common/bits.h",
+      "mode": 436,
+      "size": 5956,
+      "kind": "file",
+      "sha256": "5bb7693a35d7ce03f8715c0b1e237062285e052250fdd34f72f38e7e92365090"
+    },
+    {
+      "name": "zstd-1.5.7/lib/common/bitstream.h",
+      "mode": 436,
+      "size": 18727,
+      "kind": "file",
+      "sha256": "a9461685c9add6f609078acc950a08db4c02e6e6a849d550f45182ba2ae38556"
+    },
+    {
+      "name": "zstd-1.5.7/lib/common/compiler.h",
+      "mode": 436,
+      "size": 16644,
+      "kind": "file",
+      "sha256": "d19829705d8039437ffba873df2b58d20d7b876d58da479121d2e515df55cbf7"
+    },
+    {
+      "name": "zstd-1.5.7/lib/common/cpu.h",
+      "mode": 436,
+      "size": 5438,
+      "kind": "file",
+      "sha256": "23d520b536a6f23114e66549d03a967b1f24b15560c5b1ebd47ee392ccee4a1c"
+    },
+    {
+      "name": "zstd-1.5.7/lib/common/debug.c",
+      "mode": 436,
+      "size": 1091,
+      "kind": "file",
+      "sha256": "7ab1ea104acf3243fc1cd4e6d2514046f1dfc1101c7c676145c8da080e8c24ca"
+    },
+    {
+      "name": "zstd-1.5.7/lib/common/debug.h",
+      "mode": 436,
+      "size": 3925,
+      "kind": "file",
+      "sha256": "8260cd5087b8309679c61b772b535688993c61a675a30481b8ae55b45740ba15"
+    },
+    {
+      "name": "zstd-1.5.7/lib/common/entropy_common.c",
+      "mode": 436,
+      "size": 13308,
+      "kind": "file",
+      "sha256": "7dfce29c6bc807645b1f0c373dad94bbb49603b175a84e72d1739bf9df65feb8"
+    },
+    {
+      "name": "zstd-1.5.7/lib/common/error_private.c",
+      "mode": 436,
+      "size": 3905,
+      "kind": "file",
+      "sha256": "3f5873b2626ca1cdf554b7ec7b04ea0ef296fd0f6882d7fad42448b7e2dbb41c"
+    },
+    {
+      "name": "zstd-1.5.7/lib/common/error_private.h",
+      "mode": 436,
+      "size": 6438,
+      "kind": "file",
+      "sha256": "ae077bb433eb150ee247410a0357f910b9c07be839c6a9abe0b2e6b18ceb716d"
+    },
+    {
+      "name": "zstd-1.5.7/lib/common/fse.h",
+      "mode": 436,
+      "size": 30033,
+      "kind": "file",
+      "sha256": "5235ce1e512bf80204d013b1f4cecd776fdaa9effddb48308bce08f6d0b84499"
+    },
+    {
+      "name": "zstd-1.5.7/lib/common/fse_decompress.c",
+      "mode": 436,
+      "size": 12478,
+      "kind": "file",
+      "sha256": "84eba7030a036b36363a5108e760428ce549f1a833bec6464dc755f6ed51a6fb"
+    },
+    {
+      "name": "zstd-1.5.7/lib/common/huf.h",
+      "mode": 436,
+      "size": 14119,
+      "kind": "file",
+      "sha256": "9a83d899c8c9bf03389d482562090ec2443bc0f87f27864a2b891b180333f2d4"
+    },
+    {
+      "name": "zstd-1.5.7/lib/common/mem.h",
+      "mode": 436,
+      "size": 12939,
+      "kind": "file",
+      "sha256": "4dd5fe76fa30a020cd4b3af3134ae143920300a1fe54baac1a5da73297e66783"
+    },
+    {
+      "name": "zstd-1.5.7/lib/common/pool.c",
+      "mode": 436,
+      "size": 11782,
+      "kind": "file",
+      "sha256": "9431e26cf7ca46ffb878f17df31198046664d592ae208dfbe3715e82b87af79d"
+    },
+    {
+      "name": "zstd-1.5.7/lib/common/pool.h",
+      "mode": 436,
+      "size": 2569,
+      "kind": "file",
+      "sha256": "bca19a2408e85f31bad3a13f205de92ac26ecda0c5af96fdd7f213ce03d9fc78"
+    },
+    {
+      "name": "zstd-1.5.7/lib/common/portability_macros.h",
+      "mode": 436,
+      "size": 4916,
+      "kind": "file",
+      "sha256": "75e2b43968b70decc6bd17876833be04894035594ddc1e745cd6b70be8265637"
+    },
+    {
+      "name": "zstd-1.5.7/lib/common/threading.c",
+      "mode": 436,
+      "size": 4886,
+      "kind": "file",
+      "sha256": "50448323b46a8e1bde042ee88ec44fcfc646f3d4aeba8a06be54d26a710ed78d"
+    },
+    {
+      "name": "zstd-1.5.7/lib/common/threading.h",
+      "mode": 436,
+      "size": 5112,
+      "kind": "file",
+      "sha256": "9ca63027ea64046acacccbe056a414d37ea7ea428ce299fe08abe53c204c5c65"
+    },
+    {
+      "name": "zstd-1.5.7/lib/common/xxhash.c",
+      "mode": 436,
+      "size": 607,
+      "kind": "file",
+      "sha256": "8444d064922f434b67b708a987981aa21dfeece735b48c82d31f7027d0ccef03"
+    },
+    {
+      "name": "zstd-1.5.7/lib/common/xxhash.h",
+      "mode": 436,
+      "size": 262488,
+      "kind": "file",
+      "sha256": "8cb837b21a8fe9a6b9dbcd0961ab16e733bfcbfa9e003f3a496ce07ae80aa8ee"
+    },
+    {
+      "name": "zstd-1.5.7/lib/common/zstd_common.c",
+      "mode": 436,
+      "size": 1683,
+      "kind": "file",
+      "sha256": "f49eb8023a90d3de925373bd9ee0d36ed46b26c529840b64220397446cd73795"
+    },
+    {
+      "name": "zstd-1.5.7/lib/common/zstd_deps.h",
+      "mode": 436,
+      "size": 3010,
+      "kind": "file",
+      "sha256": "9c77ea7d0afa8d5c868a7839e178a446a82d88eb75fd56f2fd7d9d96c5ab7c11"
+    },
+    {
+      "name": "zstd-1.5.7/lib/common/zstd_internal.h",
+      "mode": 436,
+      "size": 10911,
+      "kind": "file",
+      "sha256": "ad3d95ce2b81a8c5c6b00cfe6323d8e80cacb690d3b5883725cd0d939f4f576f"
+    },
+    {
+      "name": "zstd-1.5.7/lib/common/zstd_trace.h",
+      "mode": 436,
+      "size": 4562,
+      "kind": "file",
+      "sha256": "17f6daa4c7e97055cd1ed7bcf4d9241a4e79b465f083c5d732fda1df2f0be11e"
+    },
+    {
+      "name": "zstd-1.5.7/lib/compress",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/lib/compress/clevels.h",
+      "mode": 436,
+      "size": 6860,
+      "kind": "file",
+      "sha256": "d764daa89b7a636d26fe96ff3536c5075e9867fb5dddbf8c9d57023a8ff4a155"
+    },
+    {
+      "name": "zstd-1.5.7/lib/compress/fse_compress.c",
+      "mode": 436,
+      "size": 24103,
+      "kind": "file",
+      "sha256": "5070807a489757b87c1e1f50332b099e8ffe22971228218111eef64d3321ae82"
+    },
+    {
+      "name": "zstd-1.5.7/lib/compress/hist.c",
+      "mode": 436,
+      "size": 7650,
+      "kind": "file",
+      "sha256": "1a613082642b9cabdeecd3b5929f7230cbb2f8344a28f5010f3aec12cb647ab8"
+    },
+    {
+      "name": "zstd-1.5.7/lib/compress/hist.h",
+      "mode": 436,
+      "size": 3754,
+      "kind": "file",
+      "sha256": "9e3363e69d5fa35c1f6e8d2970c6c2453c06fd8a8ab3cc516a14c77d07cdea35"
+    },
+    {
+      "name": "zstd-1.5.7/lib/compress/huf_compress.c",
+      "mode": 436,
+      "size": 58546,
+      "kind": "file",
+      "sha256": "0be78471f5175e49bbacb898d8b107bb8f7e13adc84780e0625be5861f016086"
+    },
+    {
+      "name": "zstd-1.5.7/lib/compress/zstd_compress.c",
+      "mode": 436,
+      "size": 345541,
+      "kind": "file",
+      "sha256": "10c315ae609d49b2fc431521aa95908086e69fd917991c5ed9a875af3d1208e8"
+    },
+    {
+      "name": "zstd-1.5.7/lib/compress/zstd_compress_internal.h",
+      "mode": 436,
+      "size": 68505,
+      "kind": "file",
+      "sha256": "ab7754413cef565da559bda7eb738bc2b3708c48877cb9ec37aff767d32c57d1"
+    },
+    {
+      "name": "zstd-1.5.7/lib/compress/zstd_compress_literals.c",
+      "mode": 436,
+      "size": 9155,
+      "kind": "file",
+      "sha256": "a8f25f1bd4c0d2d9dda3355d2103c9dfbd0b7056bfd373e29e923662bfea5596"
+    },
+    {
+      "name": "zstd-1.5.7/lib/compress/zstd_compress_literals.h",
+      "mode": 436,
+      "size": 1613,
+      "kind": "file",
+      "sha256": "02270cd6bc060279217861776a53adb67f8d7e54f47f59d2a4ddcef2e705fe2d"
+    },
+    {
+      "name": "zstd-1.5.7/lib/compress/zstd_compress_sequences.c",
+      "mode": 436,
+      "size": 20004,
+      "kind": "file",
+      "sha256": "3f4334c19ed770c4007bc12df4098026d4eb1a6fbebfbf36df58054e7babc3e9"
+    },
+    {
+      "name": "zstd-1.5.7/lib/compress/zstd_compress_sequences.h",
+      "mode": 436,
+      "size": 2224,
+      "kind": "file",
+      "sha256": "361d108d7d452ed26f0ae4b39964f8e62166ed91d03347a5229e5d228734efc8"
+    },
+    {
+      "name": "zstd-1.5.7/lib/compress/zstd_compress_superblock.c",
+      "mode": 436,
+      "size": 34085,
+      "kind": "file",
+      "sha256": "dd62ed79ee1feec78b2e5bfc63417ccbdcda426f4220d112b0fcd8a9d0c7e667"
+    },
+    {
+      "name": "zstd-1.5.7/lib/compress/zstd_compress_superblock.h",
+      "mode": 436,
+      "size": 1168,
+      "kind": "file",
+      "sha256": "6b097999ea1d91776ca5a12e5ee02c1ed15edfcd31ba07b9ada94b0955195677"
+    },
+    {
+      "name": "zstd-1.5.7/lib/compress/zstd_cwksp.h",
+      "mode": 436,
+      "size": 28892,
+      "kind": "file",
+      "sha256": "ed77c2739b18b9800b97785262526a1dd4f385311ca5c2caa20b6f2a35f3735d"
+    },
+    {
+      "name": "zstd-1.5.7/lib/compress/zstd_double_fast.c",
+      "mode": 436,
+      "size": 35303,
+      "kind": "file",
+      "sha256": "9f6d003c2fe1208737bec685910324220424ba47d0323fa30d9d5f53c50e91da"
+    },
+    {
+      "name": "zstd-1.5.7/lib/compress/zstd_double_fast.h",
+      "mode": 436,
+      "size": 1767,
+      "kind": "file",
+      "sha256": "d9c29c9c004f572532265e12af78d5949c0908f4ef0bb0158977bcf80e1cf92b"
+    },
+    {
+      "name": "zstd-1.5.7/lib/compress/zstd_fast.c",
+      "mode": 436,
+      "size": 38104,
+      "kind": "file",
+      "sha256": "8037320f321836652e73ab6cbf7b8f1f4c97cef38835ac6b4aaf0af716aa398d"
+    },
+    {
+      "name": "zstd-1.5.7/lib/compress/zstd_fast.h",
+      "mode": 436,
+      "size": 1178,
+      "kind": "file",
+      "sha256": "dffdf43fae7ee10a2acc04e6a5eaaf03f7d3572898117a06c330d647eed5591d"
+    },
+    {
+      "name": "zstd-1.5.7/lib/compress/zstd_lazy.c",
+      "mode": 436,
+      "size": 102821,
+      "kind": "file",
+      "sha256": "dd6ccf357165dc8cb574ea56a34ff1db57b7b31728b32103d0c6b72319fd45b1"
+    },
+    {
+      "name": "zstd-1.5.7/lib/compress/zstd_lazy.h",
+      "mode": 436,
+      "size": 9684,
+      "kind": "file",
+      "sha256": "6f13007fbd6824058a73b097960446defe265e33b22c7c6dc2304dcf53998bbf"
+    },
+    {
+      "name": "zstd-1.5.7/lib/compress/zstd_ldm.c",
+      "mode": 436,
+      "size": 29313,
+      "kind": "file",
+      "sha256": "4a2bef3612ae4a9e15a78a55541a152091fa8ba160410db24d495bd6dd57249e"
+    },
+    {
+      "name": "zstd-1.5.7/lib/compress/zstd_ldm.h",
+      "mode": 436,
+      "size": 4365,
+      "kind": "file",
+      "sha256": "bd0cb86041d3a72fd7846e141a41aadae229c8e331a2117df7f6b70a1b4cb08c"
+    },
+    {
+      "name": "zstd-1.5.7/lib/compress/zstd_ldm_geartab.h",
+      "mode": 436,
+      "size": 6077,
+      "kind": "file",
+      "sha256": "7285ac8ba1f0fa57a8cd8158bd427ded4e70e32a58e73b57c420b83a76e5e6e3"
+    },
+    {
+      "name": "zstd-1.5.7/lib/compress/zstd_opt.c",
+      "mode": 436,
+      "size": 72006,
+      "kind": "file",
+      "sha256": "625936ee3fb02d789abb894c1fbc2918ee47582434094c963b630da13532c876"
+    },
+    {
+      "name": "zstd-1.5.7/lib/compress/zstd_opt.h",
+      "mode": 436,
+      "size": 3046,
+      "kind": "file",
+      "sha256": "9b677efbae28909034d3c24f37dc5c4295d267cf477bf04e14653579f90d8b6e"
+    },
+    {
+      "name": "zstd-1.5.7/lib/compress/zstd_preSplit.c",
+      "mode": 436,
+      "size": 8729,
+      "kind": "file",
+      "sha256": "8d7da15de31318ebb7dfe2f2e2c79f05b0d0563dcb92d4525814d05a279d0d64"
+    },
+    {
+      "name": "zstd-1.5.7/lib/compress/zstd_preSplit.h",
+      "mode": 436,
+      "size": 1175,
+      "kind": "file",
+      "sha256": "910facb2e3442e42a6952c514223c4502d95ed957bf7dc73982b3b03785b361b"
+    },
+    {
+      "name": "zstd-1.5.7/lib/compress/zstdmt_compress.c",
+      "mode": 436,
+      "size": 84098,
+      "kind": "file",
+      "sha256": "c83db699b4041bf4db89c5558db490dd295635f1eeefd60b643fbc862bbac7b5"
+    },
+    {
+      "name": "zstd-1.5.7/lib/compress/zstdmt_compress.h",
+      "mode": 436,
+      "size": 4574,
+      "kind": "file",
+      "sha256": "033fb25d96b4295c3d0158edf4d1bd4067f42aac39427706754e6c034b20f80f"
+    },
+    {
+      "name": "zstd-1.5.7/lib/decompress",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/lib/decompress/huf_decompress.c",
+      "mode": 436,
+      "size": 76910,
+      "kind": "file",
+      "sha256": "710a88d877d5dc5c83a4f839392996f337ec81cf38006c4a5be6042de5b54828"
+    },
+    {
+      "name": "zstd-1.5.7/lib/decompress/huf_decompress_amd64.S",
+      "mode": 436,
+      "size": 15150,
+      "kind": "file",
+      "sha256": "7fe53316261517a8f877b793f3bfba8305a3f9ff05c5947f1d709aaff346f1dc"
+    },
+    {
+      "name": "zstd-1.5.7/lib/decompress/zstd_ddict.c",
+      "mode": 436,
+      "size": 9182,
+      "kind": "file",
+      "sha256": "38bf812283d61f4cd1f6aea30f84b43317418257c4e6fc198b09b436bd484397"
+    },
+    {
+      "name": "zstd-1.5.7/lib/decompress/zstd_ddict.h",
+      "mode": 436,
+      "size": 1319,
+      "kind": "file",
+      "sha256": "a97a250fd2f956e3ae419ddde68ae1f9fe4025bc0373254058d31bbd352fa71c"
+    },
+    {
+      "name": "zstd-1.5.7/lib/decompress/zstd_decompress.c",
+      "mode": 436,
+      "size": 102400,
+      "kind": "file",
+      "sha256": "029580818b7e9cd38d9d07c63516b00ceaa943ffcfbd099fc5ccbe3628fa362f"
+    },
+    {
+      "name": "zstd-1.5.7/lib/decompress/zstd_decompress_block.c",
+      "mode": 436,
+      "size": 101467,
+      "kind": "file",
+      "sha256": "9cb8bcb07aeb87e4717a9c8a86d20832dc525dde2c1b72efdaaab7c937f43b87"
+    },
+    {
+      "name": "zstd-1.5.7/lib/decompress/zstd_decompress_block.h",
+      "mode": 436,
+      "size": 2682,
+      "kind": "file",
+      "sha256": "62ee0c6ae3f7353020538397f436b59743da8acb922068841b346f480f7078ac"
+    },
+    {
+      "name": "zstd-1.5.7/lib/decompress/zstd_decompress_internal.h",
+      "mode": 436,
+      "size": 9683,
+      "kind": "file",
+      "sha256": "73217b49a644c0fcf567b70677cae31449ba9f50a235ef3b681001c3f36dc56d"
+    },
+    {
+      "name": "zstd-1.5.7/lib/deprecated",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/lib/deprecated/zbuff.h",
+      "mode": 436,
+      "size": 11501,
+      "kind": "file",
+      "sha256": "fcd83d7f05dc7bc6e52da6200878e05d7dc4906cf2ccfa70ce4c753e1fdc2422"
+    },
+    {
+      "name": "zstd-1.5.7/lib/deprecated/zbuff_common.c",
+      "mode": 436,
+      "size": 1008,
+      "kind": "file",
+      "sha256": "9c2f0f5debd0632ea52d8776eff332227a90396bfec079159b3c29340e018215"
+    },
+    {
+      "name": "zstd-1.5.7/lib/deprecated/zbuff_compress.c",
+      "mode": 436,
+      "size": 6770,
+      "kind": "file",
+      "sha256": "b31a0a39d6546639b1d3e68c28632d0dd2651c2a7dba34a5a522cc6def43a842"
+    },
+    {
+      "name": "zstd-1.5.7/lib/deprecated/zbuff_decompress.c",
+      "mode": 436,
+      "size": 2082,
+      "kind": "file",
+      "sha256": "d567f0df10c98c6751accc2d71338437e77682b1492aab6e8e4ed09d75df572c"
+    },
+    {
+      "name": "zstd-1.5.7/lib/dictBuilder",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/lib/dictBuilder/cover.c",
+      "mode": 436,
+      "size": 44541,
+      "kind": "file",
+      "sha256": "2419631b20b0f4867d0f3c178fc4a3006d05f58e8ce3ce6657133f85ed40d683"
+    },
+    {
+      "name": "zstd-1.5.7/lib/dictBuilder/cover.h",
+      "mode": 436,
+      "size": 4828,
+      "kind": "file",
+      "sha256": "6e2906e7e5c486a5b7f479f60210ff67d068b2c58744ad6a936ba5a9f4a23755"
+    },
+    {
+      "name": "zstd-1.5.7/lib/dictBuilder/divsufsort.c",
+      "mode": 436,
+      "size": 54649,
+      "kind": "file",
+      "sha256": "2081acb08865f623857d2c0dcb0e79fce9489f01416528c30cfee7097915c616"
+    },
+    {
+      "name": "zstd-1.5.7/lib/dictBuilder/divsufsort.h",
+      "mode": 436,
+      "size": 2295,
+      "kind": "file",
+      "sha256": "14c16c2f67019875a2ea6cd07a4e803adfadce448e0b80351c51e5f910230d38"
+    },
+    {
+      "name": "zstd-1.5.7/lib/dictBuilder/fastcover.c",
+      "mode": 436,
+      "size": 28575,
+      "kind": "file",
+      "sha256": "0b8b511e6370e89cb257d1a4b4d8e77add5537ffb999cfe5e7e59e454c93f38f"
+    },
+    {
+      "name": "zstd-1.5.7/lib/dictBuilder/zdict.c",
+      "mode": 436,
+      "size": 44432,
+      "kind": "file",
+      "sha256": "dbe57910c9d446bbf2195f31bdba5cffef2c80b93c0325e9df8c9ffa744b0aa3"
+    },
+    {
+      "name": "zstd-1.5.7/lib/dll",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/lib/dll/example",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/lib/dll/example/Makefile",
+      "mode": 436,
+      "size": 1473,
+      "kind": "file",
+      "sha256": "e148160ca8dc220f5c6037f042380ef2eebee516497e23673289c87e2c96e264"
+    },
+    {
+      "name": "zstd-1.5.7/lib/dll/example/README.md",
+      "mode": 436,
+      "size": 2956,
+      "kind": "file",
+      "sha256": "48a9e1287c1c0921909b6306e96abd1a5d733b4a53fc1c3e346d05701cedff33"
+    },
+    {
+      "name": "zstd-1.5.7/lib/dll/example/build_package.bat",
+      "mode": 436,
+      "size": 784,
+      "kind": "file",
+      "sha256": "34509ff536dd9303475f8a1de32bab856f67d0ab9c48eefc939bc8b672c88221"
+    },
+    {
+      "name": "zstd-1.5.7/lib/dll/example/fullbench-dll.sln",
+      "mode": 436,
+      "size": 1269,
+      "kind": "file",
+      "sha256": "af0c9152e1109cea3e7a997e59dc435f032526c238e95681741e2a2f12ad0a74"
+    },
+    {
+      "name": "zstd-1.5.7/lib/dll/example/fullbench-dll.vcxproj",
+      "mode": 436,
+      "size": 10105,
+      "kind": "file",
+      "sha256": "4f932405a188a42bf7d8d525d72f62c24e0145092fab1f313331e1c637572d6f"
+    },
+    {
+      "name": "zstd-1.5.7/lib/legacy",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/lib/legacy/zstd_legacy.h",
+      "mode": 436,
+      "size": 15026,
+      "kind": "file",
+      "sha256": "90ecc3816d28da0e0537c610fe99209fb9603b1ecdb764bd1228a5226f5c7484"
+    },
+    {
+      "name": "zstd-1.5.7/lib/legacy/zstd_v01.c",
+      "mode": 436,
+      "size": 69547,
+      "kind": "file",
+      "sha256": "8f439ec4d83f13caaa4ee86d8de74660a38cade89b48bedf3943a9315b98e167"
+    },
+    {
+      "name": "zstd-1.5.7/lib/legacy/zstd_v01.h",
+      "mode": 436,
+      "size": 3815,
+      "kind": "file",
+      "sha256": "51e06e92b87abe35f617d9e65c6f26b4b1b50485cda6bf34f5b23bb6e1727b13"
+    },
+    {
+      "name": "zstd-1.5.7/lib/legacy/zstd_v02.c",
+      "mode": 436,
+      "size": 125199,
+      "kind": "file",
+      "sha256": "ffedd2b0e4dae744b8592656050f2c56eb4c8ccad1795fb3efeceb7924808712"
+    },
+    {
+      "name": "zstd-1.5.7/lib/legacy/zstd_v02.h",
+      "mode": 436,
+      "size": 3724,
+      "kind": "file",
+      "sha256": "341dd36148b7080eae742bb21196740482c4d94a97024f47ad1e7c0f2bb20e6b"
+    },
+    {
+      "name": "zstd-1.5.7/lib/legacy/zstd_v03.c",
+      "mode": 436,
+      "size": 111309,
+      "kind": "file",
+      "sha256": "1d69626197b9c76d28012b78fc66bcc3077bf8d796ff6f82457666d3271e7f3d"
+    },
+    {
+      "name": "zstd-1.5.7/lib/legacy/zstd_v03.h",
+      "mode": 436,
+      "size": 3736,
+      "kind": "file",
+      "sha256": "e9d7ccc971055129a14e3b81f0e9494a638e3d9c0b4b36413252d6b3adc90cf2"
+    },
+    {
+      "name": "zstd-1.5.7/lib/legacy/zstd_v04.c",
+      "mode": 436,
+      "size": 132468,
+      "kind": "file",
+      "sha256": "a80d9591ff3fc387a05e8e075713af9ad34596dc5c8681666346a716013a6e14"
+    },
+    {
+      "name": "zstd-1.5.7/lib/legacy/zstd_v04.h",
+      "mode": 436,
+      "size": 6454,
+      "kind": "file",
+      "sha256": "c8c31b9db45c1b559688738f280331a5f3bce5b275cf4c71e8a41282f406134e"
+    },
+    {
+      "name": "zstd-1.5.7/lib/legacy/zstd_v05.c",
+      "mode": 436,
+      "size": 153712,
+      "kind": "file",
+      "sha256": "62170472e18505b3347e563cdb1eba439312bb53385663730ac58cd92f3c4678"
+    },
+    {
+      "name": "zstd-1.5.7/lib/legacy/zstd_v05.h",
+      "mode": 436,
+      "size": 7552,
+      "kind": "file",
+      "sha256": "6fb3be7f31544cee69cfb421d5bc6e34e72f4e2612b38cb38d47032a8531acdf"
+    },
+    {
+      "name": "zstd-1.5.7/lib/legacy/zstd_v06.c",
+      "mode": 436,
+      "size": 163487,
+      "kind": "file",
+      "sha256": "d2cadc9e2906fe50e9c9564bdcb291582532060fdcec9c4bc5f0ee4370182b75"
+    },
+    {
+      "name": "zstd-1.5.7/lib/legacy/zstd_v06.h",
+      "mode": 436,
+      "size": 8090,
+      "kind": "file",
+      "sha256": "138728fdc9de7ebd5c7ffdf471b8b324cafa8e0ab638c6f4d9c048296cfe23ab"
+    },
+    {
+      "name": "zstd-1.5.7/lib/legacy/zstd_v07.c",
+      "mode": 436,
+      "size": 182177,
+      "kind": "file",
+      "sha256": "ae9f3c0a440b0f61d0ce44b06ee7ed3d256e10f3cb7dbbd9834d6c13625ac944"
+    },
+    {
+      "name": "zstd-1.5.7/lib/legacy/zstd_v07.h",
+      "mode": 436,
+      "size": 8733,
+      "kind": "file",
+      "sha256": "b682d3dffc64564fdf6f19d67baece362a1b7075c0140a80ce54e17f79961b49"
+    },
+    {
+      "name": "zstd-1.5.7/lib/libzstd.mk",
+      "mode": 436,
+      "size": 8730,
+      "kind": "file",
+      "sha256": "d4dd36a428b41793f565c4f4754bc31c9085506d95f50ea3e93ef9688b7b5868"
+    },
+    {
+      "name": "zstd-1.5.7/lib/libzstd.pc.in",
+      "mode": 436,
+      "size": 479,
+      "kind": "file",
+      "sha256": "fda15eeb137a13714a64cfc517fc50e6e0dea9e5c965cfcde993055b2611c95e"
+    },
+    {
+      "name": "zstd-1.5.7/lib/module.modulemap",
+      "mode": 436,
+      "size": 887,
+      "kind": "file",
+      "sha256": "9057c3276d68fbbef0c140ec3f5431222fb5f450b0608c09fb2756c7e99f59f4"
+    },
+    {
+      "name": "zstd-1.5.7/lib/zdict.h",
+      "mode": 436,
+      "size": 26516,
+      "kind": "file",
+      "sha256": "abacadb94e3f79e591f4b1648e839b0160fbf4291211fd01bdba1380269b245c"
+    },
+    {
+      "name": "zstd-1.5.7/lib/zstd.h",
+      "mode": 436,
+      "size": 181748,
+      "kind": "file",
+      "sha256": "9b4bc8245565c98ccfc61c07749928b57e7c0f6fddb0530c4f6aa1971893d88b"
+    },
+    {
+      "name": "zstd-1.5.7/lib/zstd_errors.h",
+      "mode": 436,
+      "size": 4278,
+      "kind": "file",
+      "sha256": "66a8c3f71d12ea6e797e4f622f31f3f8f81c41b36f48cad4f5de7d8bfb6aac0a"
+    },
+    {
+      "name": "zstd-1.5.7/programs",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/programs/.gitignore",
+      "mode": 436,
+      "size": 387,
+      "kind": "file",
+      "sha256": "2cee7243c9d29f5e7ca4e856669309e761abcb86fd1f76409011b4d61fb620d0"
+    },
+    {
+      "name": "zstd-1.5.7/programs/BUCK",
+      "mode": 436,
+      "size": 920,
+      "kind": "file",
+      "sha256": "2c5d02ea149c4e170c66ae38691cf8e0c7a82a8893a1be627be702985d710ef7"
+    },
+    {
+      "name": "zstd-1.5.7/programs/Makefile",
+      "mode": 436,
+      "size": 15519,
+      "kind": "file",
+      "sha256": "73ca5f6c8e5023a38127689c9d235897edb161ce0fbc11df1b920cd5ef06f991"
+    },
+    {
+      "name": "zstd-1.5.7/programs/README.md",
+      "mode": 436,
+      "size": 20646,
+      "kind": "file",
+      "sha256": "530daf5c81f5c5ad32dcf0f3b7da0a7dde4ab86fe5f18f2c3e941d8eacd19a19"
+    },
+    {
+      "name": "zstd-1.5.7/programs/benchfn.c",
+      "mode": 436,
+      "size": 9863,
+      "kind": "file",
+      "sha256": "42ef48caa46a0e696d9ff8ddf000fc3f29f738590ae7bc7d806ffed1ee8aef75"
+    },
+    {
+      "name": "zstd-1.5.7/programs/benchfn.h",
+      "mode": 436,
+      "size": 8636,
+      "kind": "file",
+      "sha256": "0a427ae84e49f9c7b75caecfa28dd426230757e0545656834843ea009843645b"
+    },
+    {
+      "name": "zstd-1.5.7/programs/benchzstd.c",
+      "mode": 436,
+      "size": 43627,
+      "kind": "file",
+      "sha256": "02ab0e6dcfaddb77fff9906c84c4b21e3bd6a30608c4b9bae7cf8e33720fe2e6"
+    },
+    {
+      "name": "zstd-1.5.7/programs/benchzstd.h",
+      "mode": 436,
+      "size": 7896,
+      "kind": "file",
+      "sha256": "e9aeea0ebf17db11687a62623d2117f68f21756657c5792df0d9c87f8d5ab6a2"
+    },
+    {
+      "name": "zstd-1.5.7/programs/datagen.c",
+      "mode": 436,
+      "size": 6191,
+      "kind": "file",
+      "sha256": "fdc1e21f374f7ce3d45f26702583ed2c606f9b5b7124c673bb3a4cbb09a62397"
+    },
+    {
+      "name": "zstd-1.5.7/programs/datagen.h",
+      "mode": 436,
+      "size": 1296,
+      "kind": "file",
+      "sha256": "fce55139b80280516108ca2a0377b43239389c2e7a927a1c804f9e01d10a715c"
+    },
+    {
+      "name": "zstd-1.5.7/programs/dibio.c",
+      "mode": 436,
+      "size": 18095,
+      "kind": "file",
+      "sha256": "dd1285b9ec8efaf55b233cb3c1e000f9032041aee6d4f5255af5d28ba8f809e2"
+    },
+    {
+      "name": "zstd-1.5.7/programs/dibio.h",
+      "mode": 436,
+      "size": 1511,
+      "kind": "file",
+      "sha256": "22d3ecdae128f6468f87645809761f8355f5351fd0dc206598c25c0c0c37cb2a"
+    },
+    {
+      "name": "zstd-1.5.7/programs/fileio.c",
+      "mode": 436,
+      "size": 135017,
+      "kind": "file",
+      "sha256": "612ab03945989514c8f4285623451902ff2ebc8453b82970b4ab4efca3d8246a"
+    },
+    {
+      "name": "zstd-1.5.7/programs/fileio.h",
+      "mode": 436,
+      "size": 7288,
+      "kind": "file",
+      "sha256": "ae03c391eae248420c4d7d71e2388836d58902cee7c0c745e07ff7d3da420245"
+    },
+    {
+      "name": "zstd-1.5.7/programs/fileio_asyncio.c",
+      "mode": 436,
+      "size": 25307,
+      "kind": "file",
+      "sha256": "c3913e85c2221a5c94f0ce8d4a898e75cdc87ca27e77b2d34fff99bd3a953ce8"
+    },
+    {
+      "name": "zstd-1.5.7/programs/fileio_asyncio.h",
+      "mode": 436,
+      "size": 7774,
+      "kind": "file",
+      "sha256": "a11b98fab53f76c72183ecb770a7fef12d159505b17fb73c123f107e7dc76f37"
+    },
+    {
+      "name": "zstd-1.5.7/programs/fileio_common.h",
+      "mode": 436,
+      "size": 5024,
+      "kind": "file",
+      "sha256": "ca97d7e0ff1e07f84e899efe3625628e5128cb81684cbba46fa02309574c9e9f"
+    },
+    {
+      "name": "zstd-1.5.7/programs/fileio_types.h",
+      "mode": 436,
+      "size": 2452,
+      "kind": "file",
+      "sha256": "8c2d9ee12cfa6f7654f5550a0a542219d0ac9a57042c52c25701d8abacf7a7b9"
+    },
+    {
+      "name": "zstd-1.5.7/programs/lorem.c",
+      "mode": 436,
+      "size": 10640,
+      "kind": "file",
+      "sha256": "d0f7bfbc9dc4f906532e71cbe7500324e02d8947eb8d4d99ae9ad3638e86b5d5"
+    },
+    {
+      "name": "zstd-1.5.7/programs/lorem.h",
+      "mode": 436,
+      "size": 1040,
+      "kind": "file",
+      "sha256": "d8b192c9974247059a4b69d428ccf559d8f7e333d840c3dbb8ac7d6fbde03b5a"
+    },
+    {
+      "name": "zstd-1.5.7/programs/platform.h",
+      "mode": 436,
+      "size": 8799,
+      "kind": "file",
+      "sha256": "217865d01abb759c9338de44c23b5b4b3cd2b7381c7ebd8867ed3cbfbe62bcf7"
+    },
+    {
+      "name": "zstd-1.5.7/programs/timefn.c",
+      "mode": 436,
+      "size": 4578,
+      "kind": "file",
+      "sha256": "74424ffd67f879dd4ec9b6f6777f9730ce812ceae0dee087b98a676ea18aeec5"
+    },
+    {
+      "name": "zstd-1.5.7/programs/timefn.h",
+      "mode": 436,
+      "size": 2095,
+      "kind": "file",
+      "sha256": "2c2147a5e5f6e78ba9d85e05095d0288d983c40928f695219d3ab462d9a7f1b5"
+    },
+    {
+      "name": "zstd-1.5.7/programs/util.c",
+      "mode": 436,
+      "size": 49732,
+      "kind": "file",
+      "sha256": "1c8a61fb91c2a9c989382df44a4da0eaf23114a4b5da49b39f48971034f3c319"
+    },
+    {
+      "name": "zstd-1.5.7/programs/util.h",
+      "mode": 436,
+      "size": 13072,
+      "kind": "file",
+      "sha256": "198dc23f623ccb9936a0d5d3068f45afb8c50d37d4e5623763c3b224999155b6"
+    },
+    {
+      "name": "zstd-1.5.7/programs/windres",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/programs/windres/verrsrc.h",
+      "mode": 436,
+      "size": 667,
+      "kind": "file",
+      "sha256": "0827c5ac312268cd50a4517831cf28df55a681081b7a9459c27ea72aef26e875"
+    },
+    {
+      "name": "zstd-1.5.7/programs/windres/zstd.rc",
+      "mode": 436,
+      "size": 1455,
+      "kind": "file",
+      "sha256": "00e18d6b05ebccfb6e0eb7649c8e19341193e8fbff73a175c3b0d39354bba6f0"
+    },
+    {
+      "name": "zstd-1.5.7/programs/windres/zstd32.res",
+      "mode": 436,
+      "size": 1044,
+      "kind": "file",
+      "sha256": "2f41fd8ea13d8549ed168f76759b51b51fc720878938982f9f82944c69a574fd"
+    },
+    {
+      "name": "zstd-1.5.7/programs/windres/zstd64.res",
+      "mode": 436,
+      "size": 1044,
+      "kind": "file",
+      "sha256": "9a81815b19c9f4fa1972ce8cfc7b04d1ed7904a585bf5216c39e87db6bf39c18"
+    },
+    {
+      "name": "zstd-1.5.7/programs/zstd.1",
+      "mode": 436,
+      "size": 35622,
+      "kind": "file",
+      "sha256": "f3b554a8686f19266ed0a0de2b08d21f4fe278777e60aa1ab7f5abbe14be9220"
+    },
+    {
+      "name": "zstd-1.5.7/programs/zstd.1.md",
+      "mode": 436,
+      "size": 34504,
+      "kind": "file",
+      "sha256": "c661300a953f8aaeea048b5ece3bd0b719f13e9a71f6b723707f182e571367bb"
+    },
+    {
+      "name": "zstd-1.5.7/programs/zstdcli.c",
+      "mode": 436,
+      "size": 78430,
+      "kind": "file",
+      "sha256": "7865c42b7fbe79bc586d603e9dbd90f99a41de5070e59b6798fb36acd07269c7"
+    },
+    {
+      "name": "zstd-1.5.7/programs/zstdcli_trace.c",
+      "mode": 436,
+      "size": 4938,
+      "kind": "file",
+      "sha256": "d40d43c65f9a21d7e7f4ad56f9077a9c258eaf0d9df64d59e8f9ebda95d1fdbe"
+    },
+    {
+      "name": "zstd-1.5.7/programs/zstdcli_trace.h",
+      "mode": 436,
+      "size": 617,
+      "kind": "file",
+      "sha256": "ce8cf46a929cea154baed72369116930e2c823e418bdb28c4c1939311e1a3938"
+    },
+    {
+      "name": "zstd-1.5.7/programs/zstdgrep",
+      "mode": 509,
+      "size": 3869,
+      "kind": "file",
+      "sha256": "9bc769b26542ef2efa14ae29b3178b7f10639cd95544207691cb258fe06bbe17"
+    },
+    {
+      "name": "zstd-1.5.7/programs/zstdgrep.1",
+      "mode": 436,
+      "size": 1131,
+      "kind": "file",
+      "sha256": "48f849487660645500f3082c9371984b6248772b6e3af2650be59c7f30bc549d"
+    },
+    {
+      "name": "zstd-1.5.7/programs/zstdgrep.1.md",
+      "mode": 436,
+      "size": 1033,
+      "kind": "file",
+      "sha256": "34d801ed7f7c6fe21235463fed8e6e0eb70683937c793e7d222fbd55f50ed9c4"
+    },
+    {
+      "name": "zstd-1.5.7/programs/zstdless",
+      "mode": 509,
+      "size": 197,
+      "kind": "file",
+      "sha256": "60e767b7d41a7eee6204fe34285b47e2b706797cd6ca35ca25989639f1c13159"
+    },
+    {
+      "name": "zstd-1.5.7/programs/zstdless.1",
+      "mode": 436,
+      "size": 382,
+      "kind": "file",
+      "sha256": "38166f9eb8d93b36e29eb795ca6fa514d6ddddec78e3744b3ee6f1e6c413468c"
+    },
+    {
+      "name": "zstd-1.5.7/programs/zstdless.1.md",
+      "mode": 436,
+      "size": 354,
+      "kind": "file",
+      "sha256": "d4dad3c4b56ab182251c7c096f176c06b81c7790a6a82e4515d1d45878b0a36a"
+    },
+    {
+      "name": "zstd-1.5.7/tests",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/tests/.gitignore",
+      "mode": 436,
+      "size": 747,
+      "kind": "file",
+      "sha256": "d75554cc8910294cc6d30c238ea5b8bab6531d861ce1bebbdf5e49779f1b315c"
+    },
+    {
+      "name": "zstd-1.5.7/tests/DEPRECATED-test-zstd-speed.py",
+      "mode": 509,
+      "size": 18188,
+      "kind": "file",
+      "sha256": "577038d556a9918d2ece8a388afe83c446c80bbb7f5cc0f10ed3fa66751c0217"
+    },
+    {
+      "name": "zstd-1.5.7/tests/Makefile",
+      "mode": 436,
+      "size": 16292,
+      "kind": "file",
+      "sha256": "7addc97a2ff5bb28db5c0774389749e06f92b54f5cd48e2ff329e070a5f376b1"
+    },
+    {
+      "name": "zstd-1.5.7/tests/README.md",
+      "mode": 436,
+      "size": 9619,
+      "kind": "file",
+      "sha256": "c1ec46da2fe71e6177de4dfbf3b3259ef63977f127d94cd002f74ebfdf97b520"
+    },
+    {
+      "name": "zstd-1.5.7/tests/automated_benchmarking.py",
+      "mode": 436,
+      "size": 13302,
+      "kind": "file",
+      "sha256": "3f6848838d4a7046d8e46ddbe61860702213a6a073f5c3e33d6bc487f1a10ebd"
+    },
+    {
+      "name": "zstd-1.5.7/tests/bigdict.c",
+      "mode": 436,
+      "size": 4158,
+      "kind": "file",
+      "sha256": "0e92053c564a1326ebf90496ae3d831c3d097ba1fcd7586f42b7b24c3be6e096"
+    },
+    {
+      "name": "zstd-1.5.7/tests/checkTag.c",
+      "mode": 436,
+      "size": 2003,
+      "kind": "file",
+      "sha256": "c1da7b0fcc26550286adeba28270127e8a114357e5d8146ac79131911151bad3"
+    },
+    {
+      "name": "zstd-1.5.7/tests/check_size.py",
+      "mode": 509,
+      "size": 922,
+      "kind": "file",
+      "sha256": "65242d4479da77e0cfd4bc0029b4fe75eb22df406aaa7908851b3892b5df15d5"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/.gitignore",
+      "mode": 436,
+      "size": 47,
+      "kind": "file",
+      "sha256": "f42bcefeff01e9353596fef6620223c100ada91eba44abd59319efbc79736d45"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/README.md",
+      "mode": 436,
+      "size": 7252,
+      "kind": "file",
+      "sha256": "0ca32c118270c05bea678101010555f42fccd20d2f2d38f45aa52d1dedeb11dc"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/basic",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/basic/args.sh",
+      "mode": 509,
+      "size": 277,
+      "kind": "file",
+      "sha256": "7b1798969ef1c54bfaaeca2f0a0687a83bf04dd9b5c1bfd36cfb0be7bd42084d"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/basic/args.sh.exit",
+      "mode": 436,
+      "size": 2,
+      "kind": "file",
+      "sha256": "4355a46b19d348dc2f57c046f8ef63d4538ebb936000f3c9ee954a27460dd865"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/basic/args.sh.stderr.glob",
+      "mode": 436,
+      "size": 383,
+      "kind": "file",
+      "sha256": "b200e84ece37d3dddc2c298c8da26bbc8c8328d06573507fa3a7f1d2f52b30d2"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/basic/help.sh",
+      "mode": 509,
+      "size": 111,
+      "kind": "file",
+      "sha256": "350047e5420c5cfda8003c10640123177b000a7947b1db2ffc1a4b2356420dae"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/basic/help.sh.stdout.glob",
+      "mode": 436,
+      "size": 1436,
+      "kind": "file",
+      "sha256": "6bea686f09990c5ee38a790f5726d28909c49547c2d2f8c77ec6669b6520c78d"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/basic/memlimit.sh",
+      "mode": 509,
+      "size": 1607,
+      "kind": "file",
+      "sha256": "b3415e952ecb5c34457bd965307004bb7719b7915b82b32943f670dd15eae074"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/basic/memlimit.sh.stderr.exact",
+      "mode": 436,
+      "size": 874,
+      "kind": "file",
+      "sha256": "6c00c9decf204def2e3f6d2d45c06367b82abea995cc81d6ba25a3bb5c08cca5"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/basic/memlimit.sh.stdout.exact",
+      "mode": 436,
+      "size": 341,
+      "kind": "file",
+      "sha256": "7f1976d4c8dcacc48d69f259a7fe9d3118cc84ddc0146820603089e72b1785dc"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/basic/output_dir.sh",
+      "mode": 509,
+      "size": 262,
+      "kind": "file",
+      "sha256": "10b5cff906994f7e65ef1f5336677bebccf0ff92a25dfa51e6d0518f2b281c18"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/basic/output_dir.sh.stderr.exact",
+      "mode": 436,
+      "size": 154,
+      "kind": "file",
+      "sha256": "d60edc041e9b922b2f319f106c7a83ba4af08052fcaa15ef90540212deb607b5"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/basic/output_dir.sh.stdout.exact",
+      "mode": 436,
+      "size": 68,
+      "kind": "file",
+      "sha256": "59306a98e0852690abf9e06a57c839c85eae9105a3eb381f2285335b12818a50"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/basic/version.sh",
+      "mode": 509,
+      "size": 42,
+      "kind": "file",
+      "sha256": "4fb4f09077853e433d0a2fb615f634f8f572f2c230d4e8769d542d5e30c07be8"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/basic/version.sh.stdout.glob",
+      "mode": 436,
+      "size": 106,
+      "kind": "file",
+      "sha256": "36b3f89d01794fb0963147bfce7051522bd683c8973a1f909a543737848a0e66"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/bin",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/bin/cmp_size",
+      "mode": 509,
+      "size": 705,
+      "kind": "file",
+      "sha256": "268085ccb917a9a8eddb396313af7ce840d56bcbeeaff09deb417d48101e3bf2"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/bin/datagen",
+      "mode": 509,
+      "size": 29,
+      "kind": "file",
+      "sha256": "627d36e327fb58a5c61591c6c280254140d627e14ee69d519e51e6d956f8f242"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/bin/die",
+      "mode": 509,
+      "size": 38,
+      "kind": "file",
+      "sha256": "9a708a9687a82a076469a8332ec5af55810201102b8f27b9b79ad8b48849fff8"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/bin/println",
+      "mode": 509,
+      "size": 31,
+      "kind": "file",
+      "sha256": "71de438cd1dbf49ac5f6e3f1294ce54e3d20240a8353afaf1a42e6fe10c7d963"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/bin/unzstd",
+      "mode": 511,
+      "size": 0,
+      "kind": "symlink",
+      "target": "zstd"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/bin/zstd",
+      "mode": 509,
+      "size": 162,
+      "kind": "file",
+      "sha256": "808cc561268e42dd3ca2dcb1f39874661e19a568cc05374a1bff3d9d440e5022"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/bin/zstdcat",
+      "mode": 511,
+      "size": 0,
+      "kind": "symlink",
+      "target": "zstd"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/bin/zstdgrep",
+      "mode": 509,
+      "size": 29,
+      "kind": "file",
+      "sha256": "09b99f30d50191f71968eed60313adc6a9cdadf68f1a0aa46914f77e01ae045a"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/bin/zstdless",
+      "mode": 509,
+      "size": 29,
+      "kind": "file",
+      "sha256": "226120f3a420f6e8fed7bb0db62cb94227e8dde2f7fdcd9a2a2fa65ab4c2864c"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/cltools",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/cltools/setup",
+      "mode": 509,
+      "size": 48,
+      "kind": "file",
+      "sha256": "cd1805847d68e6b20f4a173eaad3fb46ae2d074d7145a0405e60720364f1c1a7"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/cltools/zstdgrep.sh",
+      "mode": 509,
+      "size": 116,
+      "kind": "file",
+      "sha256": "53030829d5d1f68642846651a05f096d07f8c6903136d906cc30bac88ce6803f"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/cltools/zstdgrep.sh.exit",
+      "mode": 436,
+      "size": 1,
+      "kind": "file",
+      "sha256": "6b86b273ff34fce19d6b804eff5a3f5747ada4eaa22f1d49c01e52ddb7875b4b"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/cltools/zstdgrep.sh.stderr.exact",
+      "mode": 436,
+      "size": 65,
+      "kind": "file",
+      "sha256": "f720b29b8bef2d7a84b3a78d797a331cd2752480b8097b34c555fe577ec47339"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/cltools/zstdgrep.sh.stdout.glob",
+      "mode": 436,
+      "size": 47,
+      "kind": "file",
+      "sha256": "00ffef682497e792520e28f90ddcd2e01d9f2b2329099febc6bdf4e5f20feb45"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/cltools/zstdless.sh",
+      "mode": 509,
+      "size": 269,
+      "kind": "file",
+      "sha256": "5861da963c6e180747f7d8212a022572e46b388694a5e26747d39432202a5f70"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/cltools/zstdless.sh.stderr.exact",
+      "mode": 436,
+      "size": 100,
+      "kind": "file",
+      "sha256": "4d5a2857f64646c9035647650268d51596d994dd0aba8947088b6fe03357c5c1"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/cltools/zstdless.sh.stdout.glob",
+      "mode": 436,
+      "size": 51,
+      "kind": "file",
+      "sha256": "38bb4fe52c3d90d63a21438e86ce6b3c377ff3e1b96285674f0f3adf00769cb4"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/common",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/common/format.sh",
+      "mode": 436,
+      "size": 243,
+      "kind": "file",
+      "sha256": "12ab3ede5a24459e944eb76a3878ae916b200f4be05aea7a631bab2e0517c19f"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/common/mtime.sh",
+      "mode": 436,
+      "size": 309,
+      "kind": "file",
+      "sha256": "965c9dce94c55a57cf7de028f5d19fb0de0c1ba6118cb1f4dbd43d7c57e62dcf"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/common/permissions.sh",
+      "mode": 436,
+      "size": 489,
+      "kind": "file",
+      "sha256": "271cf278133329411669842b43b0873c829806eb292ad291da48ba8df0aba273"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/common/platform.sh",
+      "mode": 436,
+      "size": 567,
+      "kind": "file",
+      "sha256": "b66bb06c9a056c5d903cba5a07efdd37e7d7074825a3ac9a0d29a3f7c1e781e5"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/compression",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/compression/adapt.sh",
+      "mode": 509,
+      "size": 444,
+      "kind": "file",
+      "sha256": "f0176161716d6626b6577361dac00565e86e4b47a0c03ba0495c0a6429ee6937"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/compression/basic.sh",
+      "mode": 509,
+      "size": 1052,
+      "kind": "file",
+      "sha256": "a7860bb84104604256eceae1a50b567c0574d24b2609f559711330db9db7849b"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/compression/compress-literals.sh",
+      "mode": 509,
+      "size": 326,
+      "kind": "file",
+      "sha256": "57d314c5ae156b89c3476c91ac15d33458ae387030ed2e1b4daa76b6c0981c2f"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/compression/format.sh",
+      "mode": 509,
+      "size": 324,
+      "kind": "file",
+      "sha256": "02d094da794aee3d94e19b63d662a35c44fd2c50a4d5de7a114f661b62c6b78d"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/compression/golden.sh",
+      "mode": 509,
+      "size": 456,
+      "kind": "file",
+      "sha256": "e47f55225ce6412a80adb623722207337905dc7751061f74601d53dc1ca0ef85"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/compression/gzip-compat.sh",
+      "mode": 509,
+      "size": 653,
+      "kind": "file",
+      "sha256": "7cd384bb46512db25f68cbf2562a9851e0833ef3b92935aac4a2c4261e3d7af1"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/compression/levels.sh",
+      "mode": 509,
+      "size": 2851,
+      "kind": "file",
+      "sha256": "b3529c7ddb77a1ed5663d9b85c242912ae1325c67ccf97bcf486ef151e220297"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/compression/levels.sh.stderr.exact",
+      "mode": 436,
+      "size": 3534,
+      "kind": "file",
+      "sha256": "bc790403419e64c8b9f7627ebd18f0ae4e0d6e84c1745389b23e152c21dc5dfe"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/compression/long-distance-matcher.sh",
+      "mode": 509,
+      "size": 115,
+      "kind": "file",
+      "sha256": "810e7389f8f366e75e5d70112887adeed78b3bf502f8810d3c354fc606dd6c2f"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/compression/multi-threaded.sh",
+      "mode": 509,
+      "size": 631,
+      "kind": "file",
+      "sha256": "aab66168dcb5e6650201765516510df4a5813894355cc3cc16381d90ab958236"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/compression/multi-threaded.sh.stderr.exact",
+      "mode": 436,
+      "size": 407,
+      "kind": "file",
+      "sha256": "a9b519018c2920045071b900064466a29a5c34de66f23e92e32833d99bee42fb"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/compression/multiple-files.sh",
+      "mode": 509,
+      "size": 456,
+      "kind": "file",
+      "sha256": "770f21bf61416f8ed50dcb39838d2f4d43e11156121fa669c963879f89ef4a0d"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/compression/multiple-files.sh.stdout.exact",
+      "mode": 436,
+      "size": 152,
+      "kind": "file",
+      "sha256": "270d7eb5a1ed6828fad0add0089cc3ec5b0d17ad9bb6ec8c715d565f7dadc082"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/compression/row-match-finder.sh",
+      "mode": 509,
+      "size": 119,
+      "kind": "file",
+      "sha256": "cbedbb90d50ca5a15bd307f9c27eb4cf08439fca939f1f0b650495b4dfc91649"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/compression/setup",
+      "mode": 509,
+      "size": 66,
+      "kind": "file",
+      "sha256": "e76ef9e918d0c388f64cbb041c53e39daf516fb5387036d2f9e4c3cdfee5036c"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/compression/stream-size.sh",
+      "mode": 509,
+      "size": 147,
+      "kind": "file",
+      "sha256": "42f287cec6ec63dc45e6ab7b103789efeb37f2670e69acbdc745d2367f36bf4a"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/compression/verbose-wlog.sh",
+      "mode": 509,
+      "size": 180,
+      "kind": "file",
+      "sha256": "a5ae963f8d495866a5e2762386950fcec51f93e6d2278d204161cf0321dd033f"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/compression/verbose-wlog.sh.stderr.glob",
+      "mode": 436,
+      "size": 32,
+      "kind": "file",
+      "sha256": "a1f6fe5e79fa63f7854306396dfdf36d78302988a670132b5da16459d32c5a42"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/compression/verbose-wlog.sh.stdout.glob",
+      "mode": 436,
+      "size": 64,
+      "kind": "file",
+      "sha256": "a839f17f5e21ca6b32f98711a5eaedad9ce4bbdf72296ab8aed97c6b0b07c374"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/compression/window-resize.sh",
+      "mode": 509,
+      "size": 244,
+      "kind": "file",
+      "sha256": "3d22c5c9fab64ea60e3b70fc596000bcf600fa0779a502779c867d980b5ee1c6"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/compression/window-resize.sh.stderr.ignore",
+      "mode": 436,
+      "size": 0,
+      "kind": "file",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/compression/window-resize.sh.stdout.glob",
+      "mode": 436,
+      "size": 46,
+      "kind": "file",
+      "sha256": "eff71becbde28294f7b8643e91c2b4c420ab609264193ae9447e5659610c9708"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/decompression",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/decompression/detectErrors.sh",
+      "mode": 509,
+      "size": 185,
+      "kind": "file",
+      "sha256": "c383c50ac6212946f43c83cd191482059ae5a68988e4df8d59cdb6e248f9e7af"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/decompression/golden.sh",
+      "mode": 509,
+      "size": 101,
+      "kind": "file",
+      "sha256": "005f48c9b6ca92ff71f732feea8da99396c100f29cfc24a9f5538ee3dd9f4074"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/decompression/pass-through.sh",
+      "mode": 509,
+      "size": 1425,
+      "kind": "file",
+      "sha256": "02f2dcf364d2d37ecc21487ea7370a12053c08dfa77032457a84f315ee9b1967"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/decompression/pass-through.sh.stderr.exact",
+      "mode": 436,
+      "size": 401,
+      "kind": "file",
+      "sha256": "f94ad09d7717bea6bfda5e9cae4c560b6c5b23a08a577a2704d068e791b010f7"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/decompression/pass-through.sh.stdout.exact",
+      "mode": 436,
+      "size": 245,
+      "kind": "file",
+      "sha256": "b4de28182de7593dcf2be3dc0a9ed880e9c8e5c9db28b280fd31bb3a6c32b201"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/dict-builder",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/dict-builder/empty-input.sh",
+      "mode": 509,
+      "size": 119,
+      "kind": "file",
+      "sha256": "76ce8fbf10f89ab035de0b73d396394e10ea200c002ec818ee7a3e86e6e0ca78"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/dict-builder/empty-input.sh.stderr.exact",
+      "mode": 436,
+      "size": 28,
+      "kind": "file",
+      "sha256": "b9998971ffc9b94191b2d33acf39aeb9a20d65fde6d66ad508ebe496567de930"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/dict-builder/no-inputs.sh",
+      "mode": 509,
+      "size": 30,
+      "kind": "file",
+      "sha256": "ff69faa0ff1ea3ccaebe4afbd74c3a19bac634a97d9de40f21b45067bcc006aa"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/dict-builder/no-inputs.sh.exit",
+      "mode": 436,
+      "size": 3,
+      "kind": "file",
+      "sha256": "9a92adbc0cee38ef658c71ce1b1bf8c65668f166bfb213644c895ccb1ad07a25"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/dict-builder/no-inputs.sh.stderr.exact",
+      "mode": 436,
+      "size": 238,
+      "kind": "file",
+      "sha256": "dd951c65cc75edf0c60f294980774b0f89901c7bed7c3db30499a19480b07c1d"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/dictionaries",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/dictionaries/dictionary-mismatch.sh",
+      "mode": 509,
+      "size": 570,
+      "kind": "file",
+      "sha256": "d04b24296045fb3f292ee641b2dfb8f83d6b4cedfa124a152f9652f9528bbeb7"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/dictionaries/dictionary-mismatch.sh.stderr.exact",
+      "mode": 436,
+      "size": 314,
+      "kind": "file",
+      "sha256": "64caf09d5b9b432708e1f57ab627af6eea5ef764185a5c630460a72a8b7c9910"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/dictionaries/golden.sh",
+      "mode": 509,
+      "size": 293,
+      "kind": "file",
+      "sha256": "aedcba193dbfe953fa0623af988bddfe6a07966a3c5f6b8f8d65beedcb1a6295"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/dictionaries/setup",
+      "mode": 509,
+      "size": 53,
+      "kind": "file",
+      "sha256": "0fe12888d0677bb895020e09e3b73e0d9b50456a4259e17df89ffb6b9ee9d2ab"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/dictionaries/setup_once",
+      "mode": 509,
+      "size": 370,
+      "kind": "file",
+      "sha256": "a993188a54c7d6c5d15ba65ae9e5cac269a956cd1b132e4edfe4836e7af4a393"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/file-handling",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/file-handling/directory-mirror.sh",
+      "mode": 509,
+      "size": 1068,
+      "kind": "file",
+      "sha256": "b0113f84e7174d12e153819e4e11ff3b2f98629ca2907c71822776e7823d3566"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/file-handling/directory-mirror.sh.stderr.exact",
+      "mode": 436,
+      "size": 0,
+      "kind": "file",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/file-handling/directory-mirror.sh.stdout.exact",
+      "mode": 436,
+      "size": 0,
+      "kind": "file",
+      "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/file-stat",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/file-stat/compress-file-to-dir-without-write-perm.sh",
+      "mode": 509,
+      "size": 163,
+      "kind": "file",
+      "sha256": "fe0b436ed1a3b6f855eadd505cbd5f16c864485ec1da394104f94194aff5359b"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/file-stat/compress-file-to-dir-without-write-perm.sh.stderr.exact",
+      "mode": 436,
+      "size": 855,
+      "kind": "file",
+      "sha256": "a6d12f818960635250336e3d3f12ea1f049ad60fa2d671aef6c2bed83a326a0f"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/file-stat/compress-file-to-file.sh",
+      "mode": 509,
+      "size": 111,
+      "kind": "file",
+      "sha256": "c6af5bda4a1c243f7c7a1c3037b5cd82f6af26d0eddf4e9a3567f949030bbde5"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/file-stat/compress-file-to-file.sh.stderr.exact",
+      "mode": 436,
+      "size": 1301,
+      "kind": "file",
+      "sha256": "213ef096cffc0291a7e1e30f158a078ceb628636db930502ed5cb51af015062d"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/file-stat/compress-file-to-stdout.sh",
+      "mode": 509,
+      "size": 96,
+      "kind": "file",
+      "sha256": "2e074b5662d2437d1fb1474258bb5508d89e403c1aef0030a9e4c0b36a04a6fd"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/file-stat/compress-file-to-stdout.sh.stderr.exact",
+      "mode": 436,
+      "size": 730,
+      "kind": "file",
+      "sha256": "0c5fbf9fe1101151b7cde3a36aa27d0322606597da34f26e948193546ed1b7de"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/file-stat/compress-stdin-to-file.sh",
+      "mode": 509,
+      "size": 98,
+      "kind": "file",
+      "sha256": "2802b83b36bc7b120b130aad5a379d77d85c31bcfa726fbc2caf9d1e86c44d30"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/file-stat/compress-stdin-to-file.sh.stderr.exact",
+      "mode": 436,
+      "size": 778,
+      "kind": "file",
+      "sha256": "91f36d9720853ea276f10fa97e9ee943da30495958ceb6e24967dee3d0ac8f4b"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/file-stat/compress-stdin-to-stdout.sh",
+      "mode": 509,
+      "size": 98,
+      "kind": "file",
+      "sha256": "99f1714b60d84519ae9c4e76dc07de9d1fcd311c1ae7e31660c93f5b30bb69bf"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/file-stat/compress-stdin-to-stdout.sh.stderr.exact",
+      "mode": 436,
+      "size": 567,
+      "kind": "file",
+      "sha256": "741cf0d65c9f85f83d79696abc9564f6950913ecf42839cf4914d06a31d1ff4f"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/file-stat/decompress-file-to-file.sh",
+      "mode": 509,
+      "size": 104,
+      "kind": "file",
+      "sha256": "9334198dc3c723ae0cc74727234b9ae8b6393d8ee511226327bbc26d406aba28"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/file-stat/decompress-file-to-file.sh.stderr.exact",
+      "mode": 436,
+      "size": 1156,
+      "kind": "file",
+      "sha256": "3c3802ba1d768ec4627c988fbbabb36e1adc3e50a6f3e31e5ccc18cfe27cfe6d"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/file-stat/decompress-file-to-stdout.sh",
+      "mode": 509,
+      "size": 93,
+      "kind": "file",
+      "sha256": "604b49d3a4bc5b398bdfa99def145dab4f6679a3298203195135fe1b82436d74"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/file-stat/decompress-file-to-stdout.sh.stderr.exact",
+      "mode": 436,
+      "size": 561,
+      "kind": "file",
+      "sha256": "5b0ed4b4b05c411385c156dc78fce242cdc95cf853d0988ae2c3760d85b3a4f9"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/file-stat/decompress-stdin-to-file.sh",
+      "mode": 509,
+      "size": 96,
+      "kind": "file",
+      "sha256": "b4669283eaa61a1d53b6b986ea51d7ffef286800268beaa54a1e6b5684c7f509"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/file-stat/decompress-stdin-to-file.sh.stderr.exact",
+      "mode": 436,
+      "size": 625,
+      "kind": "file",
+      "sha256": "1493dfedd717bfdb94d2d8a66058e473a9951045b82860211b13c24b83a1b92c"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/file-stat/decompress-stdin-to-stdout.sh",
+      "mode": 509,
+      "size": 95,
+      "kind": "file",
+      "sha256": "845b4e54b82afed06b286e73c7a245cda4a9a4b12f0e7fb66aaaee0a5893e030"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/file-stat/decompress-stdin-to-stdout.sh.stderr.exact",
+      "mode": 436,
+      "size": 434,
+      "kind": "file",
+      "sha256": "15f2976e8d06d32b91422a362532104045f43b23e7c579e1450c1ea0e141963f"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/progress",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/progress/no-progress.sh",
+      "mode": 509,
+      "size": 1130,
+      "kind": "file",
+      "sha256": "7f39fea1368298a7e76f7428cdc32026d46216001d88c27efee227fc9fd8a28d"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/progress/no-progress.sh.stderr.glob",
+      "mode": 436,
+      "size": 1904,
+      "kind": "file",
+      "sha256": "90356248bfaaaa30f469a7f84b7a60180b18a77742260998785adade059ed81d"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/progress/progress.sh",
+      "mode": 509,
+      "size": 1031,
+      "kind": "file",
+      "sha256": "24536be7a65b9f32c3d1d420b6412ec194c59b75a9b09848ed1252a29cfd2dac"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/progress/progress.sh.stderr.glob",
+      "mode": 436,
+      "size": 1400,
+      "kind": "file",
+      "sha256": "3eaa41132abe3d7b0e0fea4bd55ca849cf10c5038edfb072b9eddb00a5fc3eea"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/run.py",
+      "mode": 509,
+      "size": 25458,
+      "kind": "file",
+      "sha256": "e13b66761ad24e06f63370c7b53d11ddb654d6706c7e2396a7611bca05ecf1b4"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/zstd-symlinks",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/zstd-symlinks/setup",
+      "mode": 509,
+      "size": 83,
+      "kind": "file",
+      "sha256": "7e36e85b48a98384db28a1b786381e288a444b55f811ab958fd10fb18810cbb3"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/zstd-symlinks/zstdcat.sh",
+      "mode": 509,
+      "size": 223,
+      "kind": "file",
+      "sha256": "641c039061f4bd02e6ae68b4954359043af2265e11e1e1965e781ad1ebfcbe5c"
+    },
+    {
+      "name": "zstd-1.5.7/tests/cli-tests/zstd-symlinks/zstdcat.sh.stdout.exact",
+      "mode": 436,
+      "size": 48,
+      "kind": "file",
+      "sha256": "93ba32740ec5b73cd3ebc287f2102d31a86dabe291f4d5f80be19f523156c113"
+    },
+    {
+      "name": "zstd-1.5.7/tests/datagencli.c",
+      "mode": 436,
+      "size": 5315,
+      "kind": "file",
+      "sha256": "11efdbbb60b6e38ef282056f46feee4e256f1dfed527647c8c18c313accff01f"
+    },
+    {
+      "name": "zstd-1.5.7/tests/decodecorpus.c",
+      "mode": 436,
+      "size": 73231,
+      "kind": "file",
+      "sha256": "8c9c86d7f520f832242e734ebb5992c109a9496a495b8b89c36593903a824cb7"
+    },
+    {
+      "name": "zstd-1.5.7/tests/dict-files",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/tests/dict-files/zero-weight-dict",
+      "mode": 436,
+      "size": 153,
+      "kind": "file",
+      "sha256": "3ff9faaae704c6a365224c8a8b4f75e55ad3231b1d696c64bcb19653f8d89bb9"
+    },
+    {
+      "name": "zstd-1.5.7/tests/external_matchfinder.c",
+      "mode": 436,
+      "size": 4289,
+      "kind": "file",
+      "sha256": "10989910b0c0908f7e87a851d726f8c35235e62932edc98c6b5a8e39160ec6c6"
+    },
+    {
+      "name": "zstd-1.5.7/tests/external_matchfinder.h",
+      "mode": 436,
+      "size": 1092,
+      "kind": "file",
+      "sha256": "0945bcbeabae114aeb10c11c881ad3c7512a87a2c30c534e38820e4d80d5d5a0"
+    },
+    {
+      "name": "zstd-1.5.7/tests/fullbench.c",
+      "mode": 436,
+      "size": 46910,
+      "kind": "file",
+      "sha256": "aa7fc63e8b590871a682344562ea138e0c9192d7d25a1f6f70798a4e01547c68"
+    },
+    {
+      "name": "zstd-1.5.7/tests/fuzz",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/tests/fuzz/.gitignore",
+      "mode": 436,
+      "size": 496,
+      "kind": "file",
+      "sha256": "502770b68467c18206f0fd8f8e1fa5af901db2689d6aba6d548f6ed55dd1a1d0"
+    },
+    {
+      "name": "zstd-1.5.7/tests/fuzz/Makefile",
+      "mode": 436,
+      "size": 12003,
+      "kind": "file",
+      "sha256": "27df0569533abbb81b54f08f685d881a942cd6fe1a46c6f792a9b759e67483a2"
+    },
+    {
+      "name": "zstd-1.5.7/tests/fuzz/README.md",
+      "mode": 436,
+      "size": 5621,
+      "kind": "file",
+      "sha256": "f97aa927f8f6009da6e2e1b4d1b2598dd9ab3578ed6e87a141cc2a429d2dbc5f"
+    },
+    {
+      "name": "zstd-1.5.7/tests/fuzz/block_decompress.c",
+      "mode": 436,
+      "size": 1508,
+      "kind": "file",
+      "sha256": "98da103ab3557996eaa3e616a5609a89516b92d6838f17a5e2c670271c88ef55"
+    },
+    {
+      "name": "zstd-1.5.7/tests/fuzz/block_round_trip.c",
+      "mode": 436,
+      "size": 3272,
+      "kind": "file",
+      "sha256": "99579bfcd8feb2fe82299601c56d1c6ae03a208102e67589985eb9c449188ff3"
+    },
+    {
+      "name": "zstd-1.5.7/tests/fuzz/decompress_cross_format.c",
+      "mode": 436,
+      "size": 5404,
+      "kind": "file",
+      "sha256": "8d0015bbe923020aa1a78ca6d380cac892757ec88905275e989361f51e8f4e4d"
+    },
+    {
+      "name": "zstd-1.5.7/tests/fuzz/decompress_dstSize_tooSmall.c",
+      "mode": 436,
+      "size": 2317,
+      "kind": "file",
+      "sha256": "d82c60f7fa7661d4be5ac0fbf519711281059177c71362626e28cb7419cf6e14"
+    },
+    {
+      "name": "zstd-1.5.7/tests/fuzz/dictionary_decompress.c",
+      "mode": 436,
+      "size": 2599,
+      "kind": "file",
+      "sha256": "e6ecb0ef9e689c0a563555fc00899f87b173ec78065d9101d5cf461ce04abe74"
+    },
+    {
+      "name": "zstd-1.5.7/tests/fuzz/dictionary_loader.c",
+      "mode": 436,
+      "size": 3903,
+      "kind": "file",
+      "sha256": "958cce92648bf175f6e560df150851eb5f66fd02202de959cd1a0ca85239337c"
+    },
+    {
+      "name": "zstd-1.5.7/tests/fuzz/dictionary_round_trip.c",
+      "mode": 436,
+      "size": 5863,
+      "kind": "file",
+      "sha256": "374c0ab4314bb104a9e29b35f528fff8a2ce19b597f05aec724f9da804efe8b5"
+    },
+    {
+      "name": "zstd-1.5.7/tests/fuzz/dictionary_stream_round_trip.c",
+      "mode": 436,
+      "size": 7431,
+      "kind": "file",
+      "sha256": "a405de5ac5b31c8f7ca262505c9164e5878899ef8d8b29d3981a6d8ab9b1cd1d"
+    },
+    {
+      "name": "zstd-1.5.7/tests/fuzz/fse_read_ncount.c",
+      "mode": 436,
+      "size": 3500,
+      "kind": "file",
+      "sha256": "084826e95e0280a21cf95091cc5daab018a283a6d99a096a1e356605757a7c96"
+    },
+    {
+      "name": "zstd-1.5.7/tests/fuzz/fuzz.h",
+      "mode": 436,
+      "size": 2176,
+      "kind": "file",
+      "sha256": "d1f23c155ad8c78a09dd36aa3603b2c84e5dfb3d6792a84341dc4df32cd4744f"
+    },
+    {
+      "name": "zstd-1.5.7/tests/fuzz/fuzz.py",
+      "mode": 509,
+      "size": 29844,
+      "kind": "file",
+      "sha256": "551de14e88e1a124956410a6888ddf14b9b7d020aa8cb4cb7626c3f27c4ebfba"
+    },
+    {
+      "name": "zstd-1.5.7/tests/fuzz/fuzz_data_producer.c",
+      "mode": 436,
+      "size": 2840,
+      "kind": "file",
+      "sha256": "9d5b2085b1d56b982659ac931f0c7ce0c154decb0e93b0be4819063fbc370cf6"
+    },
+    {
+      "name": "zstd-1.5.7/tests/fuzz/fuzz_data_producer.h",
+      "mode": 436,
+      "size": 2660,
+      "kind": "file",
+      "sha256": "42ebc1c8e355747f2627daa1998e1823668ae1ce899b3ad36dda105ae03b3da4"
+    },
+    {
+      "name": "zstd-1.5.7/tests/fuzz/fuzz_helpers.c",
+      "mode": 436,
+      "size": 1205,
+      "kind": "file",
+      "sha256": "9425ffd8b57508382442b54cbc5b2c20719952cbd3cbc85d2414d56d096b6055"
+    },
+    {
+      "name": "zstd-1.5.7/tests/fuzz/fuzz_helpers.h",
+      "mode": 436,
+      "size": 2277,
+      "kind": "file",
+      "sha256": "a75575c9f3034569c157ad63adfdc118c219203a583aa3433e64fa393faec4a9"
+    },
+    {
+      "name": "zstd-1.5.7/tests/fuzz/fuzz_third_party_seq_prod.h",
+      "mode": 436,
+      "size": 5290,
+      "kind": "file",
+      "sha256": "4ef3be1931eff8f51c7770efdc47b29f8098dddf3df40a0f8ad322706883955e"
+    },
+    {
+      "name": "zstd-1.5.7/tests/fuzz/generate_sequences.c",
+      "mode": 436,
+      "size": 3196,
+      "kind": "file",
+      "sha256": "2f0d82ad2e5d4439a206aca2ef37c65fec9c0f035a16032a3686f78942446da3"
+    },
+    {
+      "name": "zstd-1.5.7/tests/fuzz/huf_decompress.c",
+      "mode": 436,
+      "size": 2823,
+      "kind": "file",
+      "sha256": "099d43a49a4f07a394ccbe981dd87f95b67a9da211b6a5996dbc799d6d8ae4e0"
+    },
+    {
+      "name": "zstd-1.5.7/tests/fuzz/huf_round_trip.c",
+      "mode": 436,
+      "size": 5120,
+      "kind": "file",
+      "sha256": "fe383918833e6f3b791827d6d828436830c479977d87990b8b5d292f6529ed18"
+    },
+    {
+      "name": "zstd-1.5.7/tests/fuzz/raw_dictionary_round_trip.c",
+      "mode": 436,
+      "size": 4262,
+      "kind": "file",
+      "sha256": "ed4f28e9f0862e7b368705461d62ded06a9ec3f23b47deb8bbf52cd0bbaf70cc"
+    },
+    {
+      "name": "zstd-1.5.7/tests/fuzz/regression_driver.c",
+      "mode": 436,
+      "size": 2706,
+      "kind": "file",
+      "sha256": "72ffb0e0a16ed27346c25f46e15de743dbebfd25ccadb446bac4529e2ddd53b5"
+    },
+    {
+      "name": "zstd-1.5.7/tests/fuzz/seekable_roundtrip.c",
+      "mode": 436,
+      "size": 3405,
+      "kind": "file",
+      "sha256": "028947ccc79c0f8a55d7bce06b79d55f762e7d1a9a603de79cc71c3dc17fe622"
+    },
+    {
+      "name": "zstd-1.5.7/tests/fuzz/seq_prod_fuzz_example",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/tests/fuzz/seq_prod_fuzz_example/Makefile",
+      "mode": 436,
+      "size": 586,
+      "kind": "file",
+      "sha256": "68d385d3eefb25e0148647fe8e7561e0a089772ba0a841406deab3011ce7ccc4"
+    },
+    {
+      "name": "zstd-1.5.7/tests/fuzz/seq_prod_fuzz_example/README.md",
+      "mode": 436,
+      "size": 569,
+      "kind": "file",
+      "sha256": "49d54b7eee91a331a8c271f5d08f52e212b38a2d7502cbe4db4748a3a2ceafa4"
+    },
+    {
+      "name": "zstd-1.5.7/tests/fuzz/seq_prod_fuzz_example/example_seq_prod.c",
+      "mode": 436,
+      "size": 1394,
+      "kind": "file",
+      "sha256": "f03d14e27af3764fd0624af340a90023cbfee6cacb1ab82e260a97fb26f54986"
+    },
+    {
+      "name": "zstd-1.5.7/tests/fuzz/sequence_compression_api.c",
+      "mode": 436,
+      "size": 18648,
+      "kind": "file",
+      "sha256": "a4195ea07bffd9bda0b07543e758ec2bdde6a51b0bcc11735340fe6ee42c8b2f"
+    },
+    {
+      "name": "zstd-1.5.7/tests/fuzz/simple_compress.c",
+      "mode": 436,
+      "size": 1911,
+      "kind": "file",
+      "sha256": "eae2235fd92c5b5d3593ab76efdfd331b9844ac4625d142e3198e17de05861b7"
+    },
+    {
+      "name": "zstd-1.5.7/tests/fuzz/simple_decompress.c",
+      "mode": 436,
+      "size": 1930,
+      "kind": "file",
+      "sha256": "311e6f5dff574cdcb51cb36202af2acada0b6c505115cb35bbd1d4833ab7a61a"
+    },
+    {
+      "name": "zstd-1.5.7/tests/fuzz/simple_round_trip.c",
+      "mode": 436,
+      "size": 7148,
+      "kind": "file",
+      "sha256": "f33eebadcc96ada06f58dd6c1065e9b659612bc59e4706950470503b98515412"
+    },
+    {
+      "name": "zstd-1.5.7/tests/fuzz/stream_decompress.c",
+      "mode": 436,
+      "size": 3339,
+      "kind": "file",
+      "sha256": "482017deccb6afc608529f95e0177d5d8315258ef22c465ae388baa22d53c180"
+    },
+    {
+      "name": "zstd-1.5.7/tests/fuzz/stream_round_trip.c",
+      "mode": 436,
+      "size": 7759,
+      "kind": "file",
+      "sha256": "1e5f96469bd65d8df84c486366975331e3f047051b9b337160b76e0973aa21f8"
+    },
+    {
+      "name": "zstd-1.5.7/tests/fuzz/zstd_frame_info.c",
+      "mode": 436,
+      "size": 1376,
+      "kind": "file",
+      "sha256": "12372e3453678ec1cb86575fdc3b236543ae05324c6e25a3f9c412f10cee5eea"
+    },
+    {
+      "name": "zstd-1.5.7/tests/fuzz/zstd_helpers.c",
+      "mode": 436,
+      "size": 8275,
+      "kind": "file",
+      "sha256": "45431059584f9719d4c7ee2657f85c2b3955755abcdd58c840aeec7e153e780c"
+    },
+    {
+      "name": "zstd-1.5.7/tests/fuzz/zstd_helpers.h",
+      "mode": 436,
+      "size": 1524,
+      "kind": "file",
+      "sha256": "656fa4ef4db701f69fa3f106d9e946e60c770e08a583f2484a55a87aec5e82fb"
+    },
+    {
+      "name": "zstd-1.5.7/tests/fuzzer.c",
+      "mode": 436,
+      "size": 246846,
+      "kind": "file",
+      "sha256": "dedcfca725c18810ccb8fce1d2b9995f14f8fb879c8b277158a8316ac2cf690c"
+    },
+    {
+      "name": "zstd-1.5.7/tests/golden-compression",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/tests/golden-compression/PR-3517-block-splitter-corruption-test",
+      "mode": 436,
+      "size": 262144,
+      "kind": "file",
+      "sha256": "1ca04564ed658653f314ac6847c511a259d3b58d6315a7f7daf0f697a1514942"
+    },
+    {
+      "name": "zstd-1.5.7/tests/golden-compression/http",
+      "mode": 436,
+      "size": 1189,
+      "kind": "file",
+      "sha256": "ff02112301c842932531648f21911d6a47896df1c7bf484e8e2e5fec34fa91be"
+    },
+    {
+      "name": "zstd-1.5.7/tests/golden-compression/huffman-compressed-larger",
+      "mode": 436,
+      "size": 143,
+      "kind": "file",
+      "sha256": "46f9f62efa91681b9bcb5cdd390bbe540fb565c0ed0ab2c65a86eb575116d3fc"
+    },
+    {
+      "name": "zstd-1.5.7/tests/golden-compression/large-literal-and-match-lengths",
+      "mode": 436,
+      "size": 199998,
+      "kind": "file",
+      "sha256": "abadcf3096be26e7df4e6dd18c818606092b5493948050c409bc7104abd02415"
+    },
+    {
+      "name": "zstd-1.5.7/tests/golden-decompression-errors",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/tests/golden-decompression-errors/.gitignore",
+      "mode": 436,
+      "size": 7,
+      "kind": "file",
+      "sha256": "f5974ce7acf4252d465a1de774d6b55a675e0c1962b0f94914771a1c0fc5f012"
+    },
+    {
+      "name": "zstd-1.5.7/tests/golden-decompression-errors/off0.bin.zst",
+      "mode": 436,
+      "size": 17,
+      "kind": "file",
+      "sha256": "144e2f029389c67c361bd3879ac142671592802f01f805a6c0c2b3e564d8022c"
+    },
+    {
+      "name": "zstd-1.5.7/tests/golden-decompression-errors/truncated_huff_state.zst",
+      "mode": 436,
+      "size": 19,
+      "kind": "file",
+      "sha256": "c91a09d8824609d0643291803cbfb04b14213c02c890d5637bc3aed18e8a24f8"
+    },
+    {
+      "name": "zstd-1.5.7/tests/golden-decompression-errors/zeroSeq_extraneous.zst",
+      "mode": 436,
+      "size": 27,
+      "kind": "file",
+      "sha256": "85d7b2010abde2ff96ab8e6798b422d3cb78f8dd2108f83dbdd488da7056a6db"
+    },
+    {
+      "name": "zstd-1.5.7/tests/golden-decompression",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/tests/golden-decompression/block-128k.zst",
+      "mode": 436,
+      "size": 131081,
+      "kind": "file",
+      "sha256": "6a226ab40e6abcfc4a36baa04bf48f7ee56f166b8a26fbe2adb8fe771dceccba"
+    },
+    {
+      "name": "zstd-1.5.7/tests/golden-decompression/empty-block.zst",
+      "mode": 436,
+      "size": 11,
+      "kind": "file",
+      "sha256": "ab5463fa31429bf81ced9f05e99b96b2fe88b1da37235a233f6bc96242332fbc"
+    },
+    {
+      "name": "zstd-1.5.7/tests/golden-decompression/rle-first-block.zst",
+      "mode": 436,
+      "size": 45,
+      "kind": "file",
+      "sha256": "dd31b3fa6bb8601710cbde2c625660763bf38adc5255501e3d3a681cc0e4e1a4"
+    },
+    {
+      "name": "zstd-1.5.7/tests/golden-decompression/zeroSeq_2B.zst",
+      "mode": 436,
+      "size": 25,
+      "kind": "file",
+      "sha256": "8505867ac00fb49eb455da1b1e44e7cba5126f03114a72fb195170f7c95f2ca7"
+    },
+    {
+      "name": "zstd-1.5.7/tests/golden-dictionaries",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/tests/golden-dictionaries/http-dict-missing-symbols",
+      "mode": 436,
+      "size": 1000,
+      "kind": "file",
+      "sha256": "f4c25620fc0fb4fd60b2a9e4834e822772bf795ce5dcaa99b8985315ac24ad8b"
+    },
+    {
+      "name": "zstd-1.5.7/tests/gzip",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/tests/gzip/Makefile",
+      "mode": 436,
+      "size": 1627,
+      "kind": "file",
+      "sha256": "36655c3a7b2f1258ff9a758a0feb25bf4b706dc5a6cdadd02cf2310ac23b9f03"
+    },
+    {
+      "name": "zstd-1.5.7/tests/gzip/gzip-env.sh",
+      "mode": 509,
+      "size": 1448,
+      "kind": "file",
+      "sha256": "dd685261b1fe535f8a6aac10b0d3e04dfb43bd09512bf8fe33b915cf9c1ed950"
+    },
+    {
+      "name": "zstd-1.5.7/tests/gzip/helin-segv.sh",
+      "mode": 436,
+      "size": 1071,
+      "kind": "file",
+      "sha256": "81ffc4dabbde2d2e5086a163a557849deb8ba5008002780b2464f5e9bf8ed395"
+    },
+    {
+      "name": "zstd-1.5.7/tests/gzip/help-version.sh",
+      "mode": 436,
+      "size": 8200,
+      "kind": "file",
+      "sha256": "4412d6781e11e5de6198c386fd80ef99830424049be39a47399b70439ec42b0b"
+    },
+    {
+      "name": "zstd-1.5.7/tests/gzip/hufts-segv.gz",
+      "mode": 436,
+      "size": 425,
+      "kind": "file",
+      "sha256": "f17d507a54c6816698890022e7684ac8800a417959e1a243ce296a29659a291d"
+    },
+    {
+      "name": "zstd-1.5.7/tests/gzip/hufts.sh",
+      "mode": 436,
+      "size": 1157,
+      "kind": "file",
+      "sha256": "4f6f8e19eb7229471038be7c96092168f5808e4b781588e4cc08318ce86d892d"
+    },
+    {
+      "name": "zstd-1.5.7/tests/gzip/init.cfg",
+      "mode": 436,
+      "size": 178,
+      "kind": "file",
+      "sha256": "a3415453444d39dcac38372a6829e7d13e81f267db20de3dfe51e028624cccb4"
+    },
+    {
+      "name": "zstd-1.5.7/tests/gzip/init.sh",
+      "mode": 436,
+      "size": 19983,
+      "kind": "file",
+      "sha256": "0a23778d3cc53f0072417e5de30471b67e6ed5095e866cceb6e403dacccc0f43"
+    },
+    {
+      "name": "zstd-1.5.7/tests/gzip/keep.sh",
+      "mode": 436,
+      "size": 1485,
+      "kind": "file",
+      "sha256": "c229a7b739a779b3bf29977202f3608fb8fa1fa3b337641a9a68b5b710b78d02"
+    },
+    {
+      "name": "zstd-1.5.7/tests/gzip/list.sh",
+      "mode": 436,
+      "size": 1033,
+      "kind": "file",
+      "sha256": "d13b1122c79329977c92f1ba1974c5c170219f34c31ccda76da07f885537d5d6"
+    },
+    {
+      "name": "zstd-1.5.7/tests/gzip/memcpy-abuse.sh",
+      "mode": 436,
+      "size": 1212,
+      "kind": "file",
+      "sha256": "792fd929a5cf13846602b1ac487d00ec4ef2107a8c97705b1a392bdc8a038755"
+    },
+    {
+      "name": "zstd-1.5.7/tests/gzip/mixed.sh",
+      "mode": 436,
+      "size": 2181,
+      "kind": "file",
+      "sha256": "614940442a0d8465888d41da7afe72ee419baf1adc96b3d7448912cc55846f01"
+    },
+    {
+      "name": "zstd-1.5.7/tests/gzip/null-suffix-clobber.sh",
+      "mode": 436,
+      "size": 1192,
+      "kind": "file",
+      "sha256": "f42f14986e0c97adaedb7400e4b87a51019cb7065537efd7dfcbbc88b7057d9f"
+    },
+    {
+      "name": "zstd-1.5.7/tests/gzip/stdin.sh",
+      "mode": 436,
+      "size": 1030,
+      "kind": "file",
+      "sha256": "871bcc2a8e78d95c1f19206d0481f88bf913bf54b655099309ec260a7d672e17"
+    },
+    {
+      "name": "zstd-1.5.7/tests/gzip/test-driver.sh",
+      "mode": 436,
+      "size": 4665,
+      "kind": "file",
+      "sha256": "0f7a9121ea624a8d0dbbda441faf0ce59442a6c0d4f72e1471b261b653b45c83"
+    },
+    {
+      "name": "zstd-1.5.7/tests/gzip/trailing-nul.sh",
+      "mode": 436,
+      "size": 1246,
+      "kind": "file",
+      "sha256": "2f4b088d711f6ad60efe596bcee3513fdd02248b6004782ac928e6490cb5ea85"
+    },
+    {
+      "name": "zstd-1.5.7/tests/gzip/unpack-invalid.sh",
+      "mode": 436,
+      "size": 1490,
+      "kind": "file",
+      "sha256": "7a797ec309da1d0997940b633648d298436183aaf656c8645359ffdac4ad3eb5"
+    },
+    {
+      "name": "zstd-1.5.7/tests/gzip/z-suffix.sh",
+      "mode": 436,
+      "size": 996,
+      "kind": "file",
+      "sha256": "7ef12f324429415c23f93e811f6c21c92be558f5b176fb72d83545c754869940"
+    },
+    {
+      "name": "zstd-1.5.7/tests/gzip/zdiff.sh",
+      "mode": 436,
+      "size": 1258,
+      "kind": "file",
+      "sha256": "7f68e9408d17532243ce225267261fc8370c78c92c1539b3bf32d7c06c969f66"
+    },
+    {
+      "name": "zstd-1.5.7/tests/gzip/zgrep-context.sh",
+      "mode": 436,
+      "size": 1456,
+      "kind": "file",
+      "sha256": "23c7a4a0203d6613b61108d3cc3b8cbac21beb6a693822fce21ea720821bf200"
+    },
+    {
+      "name": "zstd-1.5.7/tests/gzip/zgrep-f.sh",
+      "mode": 436,
+      "size": 1363,
+      "kind": "file",
+      "sha256": "96dd806ffaf26f7e494e4b24e5973c39bb8cee71d78db6ff03496026e29c1a41"
+    },
+    {
+      "name": "zstd-1.5.7/tests/gzip/zgrep-signal.sh",
+      "mode": 436,
+      "size": 2164,
+      "kind": "file",
+      "sha256": "901e32c058d8da47c5bdeafaab340c349d3089ed0e4be707aaaf34b8c23d96a8"
+    },
+    {
+      "name": "zstd-1.5.7/tests/gzip/znew-k.sh",
+      "mode": 436,
+      "size": 1227,
+      "kind": "file",
+      "sha256": "b3f5003eeaa54ca5ce248e983f5b247d190974ec54ee0195179dbc63774f1be0"
+    },
+    {
+      "name": "zstd-1.5.7/tests/invalidDictionaries.c",
+      "mode": 436,
+      "size": 2101,
+      "kind": "file",
+      "sha256": "63e788285258664f3f432a00d1ec9b2d965dc94b6884e5a925ff888f4879c1b8"
+    },
+    {
+      "name": "zstd-1.5.7/tests/largeDictionary.c",
+      "mode": 436,
+      "size": 4069,
+      "kind": "file",
+      "sha256": "7027101a7e743316082952412b5a193aa6da93489bf485598f8a921a6fabeeae"
+    },
+    {
+      "name": "zstd-1.5.7/tests/legacy.c",
+      "mode": 436,
+      "size": 10861,
+      "kind": "file",
+      "sha256": "8777219624109da3b1c1332e2a6dd3f20ed84f64054cbbef144594fae5627e9d"
+    },
+    {
+      "name": "zstd-1.5.7/tests/libzstd_builds.sh",
+      "mode": 509,
+      "size": 3401,
+      "kind": "file",
+      "sha256": "d79c1d3065f7d2dd7ddb03ca620cc344e1eb8d57c5b5e509173409d9e7d35cc6"
+    },
+    {
+      "name": "zstd-1.5.7/tests/longmatch.c",
+      "mode": 436,
+      "size": 3258,
+      "kind": "file",
+      "sha256": "cf401cacc41d77c5384cf33aecc24be62179fbfd19b6fcbb5d2b8363b97c0a70"
+    },
+    {
+      "name": "zstd-1.5.7/tests/loremOut.c",
+      "mode": 436,
+      "size": 1710,
+      "kind": "file",
+      "sha256": "816392e320ff59ecfe0559ad37ad66a5c67e49b82df5aaa74f3c839b0a03bf0f"
+    },
+    {
+      "name": "zstd-1.5.7/tests/loremOut.h",
+      "mode": 436,
+      "size": 555,
+      "kind": "file",
+      "sha256": "b3cbd16c87560efe839e4a8795088ae9d1f976f79ef6617d7fa972a17ab9907d"
+    },
+    {
+      "name": "zstd-1.5.7/tests/paramgrill.c",
+      "mode": 436,
+      "size": 104099,
+      "kind": "file",
+      "sha256": "73164492b8ddafb2954e4829e4bbfa387be62469a291d4548688a27d2d92af81"
+    },
+    {
+      "name": "zstd-1.5.7/tests/playTests.sh",
+      "mode": 509,
+      "size": 70680,
+      "kind": "file",
+      "sha256": "3e5cbc7c81ef12835369fc8236c5a382eaf5306ed9ff8a8a1b7be154b3d7af08"
+    },
+    {
+      "name": "zstd-1.5.7/tests/poolTests.c",
+      "mode": 436,
+      "size": 6819,
+      "kind": "file",
+      "sha256": "42063932f4ea4e8e45b5a1ea84726fd9e0372a735928e0af9145e3fee623dfdf"
+    },
+    {
+      "name": "zstd-1.5.7/tests/rateLimiter.py",
+      "mode": 509,
+      "size": 1179,
+      "kind": "file",
+      "sha256": "3ce2c8046622b270a6c3aeb35887a8d5120e9cd50e2cec2a76c9ef821ab09202"
+    },
+    {
+      "name": "zstd-1.5.7/tests/regression",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/tests/regression/.gitignore",
+      "mode": 436,
+      "size": 50,
+      "kind": "file",
+      "sha256": "e9f0eb2bd0cd61c59ff66156a6ed3b9b1aeeb0eaf75f2b364ad8e452e038236b"
+    },
+    {
+      "name": "zstd-1.5.7/tests/regression/Makefile",
+      "mode": 436,
+      "size": 1972,
+      "kind": "file",
+      "sha256": "49429eee59e9a25f725fd5bb217e9f026f69493ca5dc75d360af3d7435e3d1a7"
+    },
+    {
+      "name": "zstd-1.5.7/tests/regression/README.md",
+      "mode": 436,
+      "size": 895,
+      "kind": "file",
+      "sha256": "45647c87807d4af726843f86d3e32d139b3896fae956edb0bfff8da640245314"
+    },
+    {
+      "name": "zstd-1.5.7/tests/regression/config.c",
+      "mode": 436,
+      "size": 19676,
+      "kind": "file",
+      "sha256": "58229258866012d59607a2c2807d31489ba6cf2775f053b9b3dee1bdfae297b0"
+    },
+    {
+      "name": "zstd-1.5.7/tests/regression/config.h",
+      "mode": 436,
+      "size": 2481,
+      "kind": "file",
+      "sha256": "f7b7bb7ff018bd94a7589dcabff92079a47f3351284b43797075e3c12e1b1162"
+    },
+    {
+      "name": "zstd-1.5.7/tests/regression/data.c",
+      "mode": 436,
+      "size": 16591,
+      "kind": "file",
+      "sha256": "c4b87a4b9a1cd93e15306fbcf42c281e55b1646d097ca87a3e1c800e22548eb0"
+    },
+    {
+      "name": "zstd-1.5.7/tests/regression/data.h",
+      "mode": 436,
+      "size": 3069,
+      "kind": "file",
+      "sha256": "beba40d6f1c335f9cbaea42a4d1043683df683121c4a31b0a28ef5862df3b9e9"
+    },
+    {
+      "name": "zstd-1.5.7/tests/regression/levels.h",
+      "mode": 436,
+      "size": 1338,
+      "kind": "file",
+      "sha256": "7e20398295393b01444ef1db32b76040670b88c018d998bbde17f4f283e6cb95"
+    },
+    {
+      "name": "zstd-1.5.7/tests/regression/method.c",
+      "mode": 436,
+      "size": 21707,
+      "kind": "file",
+      "sha256": "affd3b16d2baafb748110aafbb0f70dcac9e631201bc984cce17598be693d446"
+    },
+    {
+      "name": "zstd-1.5.7/tests/regression/method.h",
+      "mode": 436,
+      "size": 1794,
+      "kind": "file",
+      "sha256": "e3d6e5a303c0e3707f629a40cc6a3b7704cdc2b01f729f146500d2090aaef449"
+    },
+    {
+      "name": "zstd-1.5.7/tests/regression/result.c",
+      "mode": 436,
+      "size": 1009,
+      "kind": "file",
+      "sha256": "fc78497906f7154e5c74b6fd8c3ef0fe0b885064670d2c9383ce95a476a1dd74"
+    },
+    {
+      "name": "zstd-1.5.7/tests/regression/result.h",
+      "mode": 436,
+      "size": 2648,
+      "kind": "file",
+      "sha256": "ba68d6ae79d7aea83a890350e9354d7f87d221d6f0accfb609098937b0ff4559"
+    },
+    {
+      "name": "zstd-1.5.7/tests/regression/results.csv",
+      "mode": 436,
+      "size": 169712,
+      "kind": "file",
+      "sha256": "9d969895d144dc0ae82b94136b5d13b2406f9dd1aab4d9b0552e52369c52cad4"
+    },
+    {
+      "name": "zstd-1.5.7/tests/regression/test.c",
+      "mode": 436,
+      "size": 11052,
+      "kind": "file",
+      "sha256": "0f68f9094e435a89e307074ac4efde0fd10b23e659021a821675a013513e2193"
+    },
+    {
+      "name": "zstd-1.5.7/tests/roundTripCrash.c",
+      "mode": 436,
+      "size": 7923,
+      "kind": "file",
+      "sha256": "a16fddf17fea95ae10df411935fd743fbad304627556d0526b61be8576c093a9"
+    },
+    {
+      "name": "zstd-1.5.7/tests/seqgen.c",
+      "mode": 436,
+      "size": 8044,
+      "kind": "file",
+      "sha256": "f57190da11bca49821e099be7e516c674974cedab886b95670eabccedcae3a03"
+    },
+    {
+      "name": "zstd-1.5.7/tests/seqgen.h",
+      "mode": 436,
+      "size": 1651,
+      "kind": "file",
+      "sha256": "e85dfeeffecce5d77310a6efecc6a49303f2e5781327f9004cbb231c00220a23"
+    },
+    {
+      "name": "zstd-1.5.7/tests/test-license.py",
+      "mode": 509,
+      "size": 4388,
+      "kind": "file",
+      "sha256": "a0bd1837d89c90e45722ff2c109530f2d280fa8296732b1a86adea2054f08ee9"
+    },
+    {
+      "name": "zstd-1.5.7/tests/test-variants.sh",
+      "mode": 509,
+      "size": 2170,
+      "kind": "file",
+      "sha256": "9fc7d5778afaf0c2205b1528d5010e5516915e7d750ee8d5c01ae406c42abfab"
+    },
+    {
+      "name": "zstd-1.5.7/tests/test-zstd-versions.py",
+      "mode": 509,
+      "size": 11831,
+      "kind": "file",
+      "sha256": "1e32d33d37b74361d85e8947cc427fa4d18ee8542c0ab71fa32f3aff1184dece"
+    },
+    {
+      "name": "zstd-1.5.7/tests/zstreamtest.c",
+      "mode": 436,
+      "size": 167176,
+      "kind": "file",
+      "sha256": "ad409d3017fab12a889320d2de5354f23e0b8a998f44ad37f3b50f14d0e6682a"
+    },
+    {
+      "name": "zstd-1.5.7/zlibWrapper",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/zlibWrapper/.gitignore",
+      "mode": 436,
+      "size": 256,
+      "kind": "file",
+      "sha256": "a75a81130f394fef8fe0fc39e0524910dba93aee80383ea451ec127fa171b124"
+    },
+    {
+      "name": "zstd-1.5.7/zlibWrapper/BUCK",
+      "mode": 436,
+      "size": 433,
+      "kind": "file",
+      "sha256": "7f2c671c89c641374d55b147dddba61fe4db71684faa6ceeef4589f157e2af98"
+    },
+    {
+      "name": "zstd-1.5.7/zlibWrapper/Makefile",
+      "mode": 436,
+      "size": 3945,
+      "kind": "file",
+      "sha256": "326a33efe26497542975aaf2b2dc9d52ed7e3dffde91136bbf38a8559a401882"
+    },
+    {
+      "name": "zstd-1.5.7/zlibWrapper/README.md",
+      "mode": 436,
+      "size": 7892,
+      "kind": "file",
+      "sha256": "0eb13232551fbc37e4d41f7c5a44f7da2b845916b41ebefc0709070b3dc223a6"
+    },
+    {
+      "name": "zstd-1.5.7/zlibWrapper/examples",
+      "mode": 509,
+      "size": 0,
+      "kind": "directory"
+    },
+    {
+      "name": "zstd-1.5.7/zlibWrapper/examples/example.c",
+      "mode": 436,
+      "size": 18033,
+      "kind": "file",
+      "sha256": "5ce81f60842eddf65378eb43dfce36b80ac0ac8c50f03e4904d1887542217484"
+    },
+    {
+      "name": "zstd-1.5.7/zlibWrapper/examples/example_original.c",
+      "mode": 436,
+      "size": 17313,
+      "kind": "file",
+      "sha256": "6091990fa4c8deeb887daf2ef92bf9b4c492ec0f04a0ad080fbda6cedc3fb0fc"
+    },
+    {
+      "name": "zstd-1.5.7/zlibWrapper/examples/fitblk.c",
+      "mode": 436,
+      "size": 10792,
+      "kind": "file",
+      "sha256": "a023e866a55e83dca1b2113dcd2ba80b82c5c7b55197afa7236a98e0837171c2"
+    },
+    {
+      "name": "zstd-1.5.7/zlibWrapper/examples/fitblk_original.c",
+      "mode": 436,
+      "size": 8596,
+      "kind": "file",
+      "sha256": "bec64da6fc0c9a2a37a96722e8b88ca09059148e5be5ecbb486bdba5339e228a"
+    },
+    {
+      "name": "zstd-1.5.7/zlibWrapper/examples/minigzip.c",
+      "mode": 436,
+      "size": 15321,
+      "kind": "file",
+      "sha256": "b703f8160bf9038678beebbe1b42ee1230023664b79088671242c8fae39c6662"
+    },
+    {
+      "name": "zstd-1.5.7/zlibWrapper/examples/zwrapbench.c",
+      "mode": 436,
+      "size": 46330,
+      "kind": "file",
+      "sha256": "d51bd002c7a185eb3430fd1cec524f4e6d96f53e8f009f81d723c91945bc4f5c"
+    },
+    {
+      "name": "zstd-1.5.7/zlibWrapper/gzclose.c",
+      "mode": 436,
+      "size": 840,
+      "kind": "file",
+      "sha256": "803dca9b9e66a5dfe497904f931affcfc8528fb05019d64239dd326ec2eb5d4d"
+    },
+    {
+      "name": "zstd-1.5.7/zlibWrapper/gzcompatibility.h",
+      "mode": 436,
+      "size": 1870,
+      "kind": "file",
+      "sha256": "76941119526c584cc392384c8b68b81482e6949094221ec596e96f1d9037faa8"
+    },
+    {
+      "name": "zstd-1.5.7/zlibWrapper/gzguts.h",
+      "mode": 436,
+      "size": 7170,
+      "kind": "file",
+      "sha256": "037caf8230186cd312de46349ad8467c4a6613069b9aa4f3622371ed4d5d483f"
+    },
+    {
+      "name": "zstd-1.5.7/zlibWrapper/gzlib.c",
+      "mode": 436,
+      "size": 17232,
+      "kind": "file",
+      "sha256": "66850cce911eee16df10f96cca255e1d1496828865e163e1b44f7527a0099754"
+    },
+    {
+      "name": "zstd-1.5.7/zlibWrapper/gzread.c",
+      "mode": 436,
+      "size": 22002,
+      "kind": "file",
+      "sha256": "18447cf352b760ffdd84519e6b82fa376aa96e27dbaa24a2e5fdbf97c0a47050"
+    },
+    {
+      "name": "zstd-1.5.7/zlibWrapper/gzwrite.c",
+      "mode": 436,
+      "size": 20221,
+      "kind": "file",
+      "sha256": "6c3e33b25fb3ee4d9b9b85dfc78aea217817c78a48a29660b8fdf1d3342c5888"
+    },
+    {
+      "name": "zstd-1.5.7/zlibWrapper/zstd_zlibwrapper.c",
+      "mode": 436,
+      "size": 43084,
+      "kind": "file",
+      "sha256": "ff6dfbb4621e716fe9cbfca711de048d5830733a5c7dd5194c2c885fca8bef10"
+    },
+    {
+      "name": "zstd-1.5.7/zlibWrapper/zstd_zlibwrapper.h",
+      "mode": 436,
+      "size": 3672,
+      "kind": "file",
+      "sha256": "2c7171ee7dc56a3fd3840dc359b512dc0dc2184c6304d6763c29fae5a66a24f4"
+    }
+  ]
+}

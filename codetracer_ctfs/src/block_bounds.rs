@@ -42,14 +42,18 @@ impl BlockBound {
     /// captured at open would refuse blocks the writer has since materialised.
     pub(crate) fn of(file: &File, block_size: u32) -> Result<Self, CtfsError> {
         let file_len = file.metadata()?.len();
-        Ok(BlockBound {
+        Ok(Self::from_len(file_len, block_size))
+    }
+
+    pub(crate) fn from_len(file_len: u64, block_size: u32) -> Self {
+        BlockBound {
             // floor, never `+ block_size - 1`: rounding up would make the
             // incomplete final block addressable, which is the one arithmetic
             // §5d forbids.
             whole_blocks: file_len / block_size as u64,
             file_len,
             block_size,
-        })
+        }
     }
 
     /// Refuse a block number at or past the container's whole blocks, **before**

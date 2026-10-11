@@ -211,3 +211,5 @@ mod tests {
         // tracer.store_trace_events(&PathBuf::from("trace.json")).unwrap();
     }
 }
+
+pub mod recorded_entry_identity;

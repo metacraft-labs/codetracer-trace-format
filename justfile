@@ -1,6 +1,6 @@
 # Run all tests
 test:
-  cargo test --verbose
+  python3 tests/run_entry_coupled.py --nim-environment-root ../codetracer-trace-format-nim --direnv "$(command -v direnv)"
 
 # Run the formatting and clippy lint checks.
 #

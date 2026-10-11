@@ -381,6 +381,7 @@ dependencies = [
  "codetracer_trace_types",
  "codetracer_trace_writer",
  "fscommon",
+ "libc",
  "num-traits",
  "ruzstd",
  "serde",

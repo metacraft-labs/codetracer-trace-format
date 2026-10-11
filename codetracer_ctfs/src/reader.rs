@@ -1,5 +1,5 @@
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom};
+use std::io::{Cursor, Read, Seek, SeekFrom};
 use std::path::Path;
 
 use crate::base40::base40_decode;
@@ -10,11 +10,25 @@ use crate::CtfsError;
 
 /// Reader for CTFS containers.
 pub struct CtfsReader {
-    file: File,
+    file: ReaderImage,
     block_size: u32,
     entries: Vec<FileEntry>,
     compression: CompressionMethod,
     encryption: EncryptionMethod,
+}
+
+// File-backed readers retain their existing live semantics. Owned images cannot
+// change between directory decoding, entry validation, and split-stream reads.
+enum ReaderImage { File(File), Owned(Cursor<Vec<u8>>) }
+impl Read for ReaderImage {
+    fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+        match self { Self::File(file) => file.read(bytes), Self::Owned(image) => image.read(bytes) }
+    }
+}
+impl Seek for ReaderImage {
+    fn seek(&mut self, offset: SeekFrom) -> std::io::Result<u64> {
+        match self { Self::File(file) => file.seek(offset), Self::Owned(image) => image.seek(offset) }
+    }
 }
 
 /// Compute the capacity of a single level in the chain.
@@ -29,13 +43,38 @@ impl CtfsReader {
     /// Open an existing CTFS container. Refuses every version but
     /// [`crate::header::VERSION`], naming the one it found.
     pub fn open(path: &Path) -> Result<Self, CtfsError> {
-        let mut file = File::open(path)?;
+        Self::from_image(ReaderImage::File(File::open(path)?))
+    }
+
+    pub fn from_owned_bytes(bytes: Vec<u8>) -> Result<Self, CtfsError> {
+        Self::from_image(ReaderImage::Owned(Cursor::new(bytes)))
+    }
+
+    fn from_image(mut file: ReaderImage) -> Result<Self, CtfsError> {
 
         let header = Header::read_from(&mut file)?;
         let ext_header = ExtendedHeader::read_from(&mut file)?;
 
+        // Shard free lists precede the root directory in the published layout.
+        let first_entry = 16u64 + 42u64 * u64::from(header.max_shards);
+        let image_len = file.seek(SeekFrom::End(0))?;
+        if first_entry > u64::from(ext_header.block_size) {
+            return Err(CtfsError::InvalidBlockSize(ext_header.block_size));
+        }
+        let effective_entries = if ext_header.max_root_entries == 0 {
+            (u64::from(ext_header.block_size) - first_entry) / 24
+        } else {
+            u64::from(ext_header.max_root_entries)
+        };
+        let directory_end = first_entry.checked_add(effective_entries.checked_mul(24)
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "root directory size overflow"))?)
+            .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::InvalidData, "root directory end overflow"))?;
+        if first_entry > image_len || directory_end > image_len {
+            return Err(std::io::Error::new(std::io::ErrorKind::UnexpectedEof, "incomplete CTFS shard prefix or root directory").into());
+        }
+        file.seek(SeekFrom::Start(first_entry))?;
         let mut entries = Vec::new();
-        for _ in 0..ext_header.max_root_entries {
+        for _ in 0..effective_entries {
             let entry = FileEntry::read_from(&mut file)?;
             entries.push(entry);
         }
@@ -47,6 +86,28 @@ impl CtfsReader {
             compression: header.compression,
             encryption: header.encryption,
         })
+    }
+
+    pub fn is_owned_image(&self) -> bool { matches!(self.file, ReaderImage::Owned(_)) }
+
+    /// Copy bytes from this held file/image and parse the resulting immutable
+    /// owned image. This never reopens a mutable pathname.
+    pub fn snapshot_owned(&mut self) -> Result<Self, CtfsError> {
+        let previous = self.file.stream_position()?;
+        self.file.seek(SeekFrom::Start(0))?;
+        let mut bytes = Vec::new();
+        let read = self.file.read_to_end(&mut bytes);
+        let restore = self.file.seek(SeekFrom::Start(previous));
+        read?;
+        restore?;
+        Self::from_owned_bytes(bytes)
+    }
+
+    fn block_bound(&self) -> Result<BlockBound, CtfsError> {
+        match &self.file {
+            ReaderImage::File(file) => BlockBound::of(file, self.block_size),
+            ReaderImage::Owned(image) => Ok(BlockBound::from_len(image.get_ref().len() as u64, self.block_size)),
+        }
     }
 
     /// Get the compression method from the container header.
@@ -94,7 +155,7 @@ impl CtfsReader {
             return Ok(Vec::new());
         }
 
-        let bound = BlockBound::of(&self.file, self.block_size)?;
+        let bound = self.block_bound()?;
         let mut data = Vec::with_capacity(entry.size as usize);
         let bs = self.block_size as u64;
         let num_blocks = entry.size.div_ceil(bs);
@@ -125,7 +186,7 @@ impl CtfsReader {
             return Ok(0);
         }
 
-        let bound = BlockBound::of(&self.file, self.block_size)?;
+        let bound = self.block_bound()?;
         let bs = self.block_size as u64;
         let available = (entry.size - offset) as usize;
         let to_read = buf.len().min(available);

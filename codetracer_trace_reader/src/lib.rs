@@ -64,3 +64,5 @@ pub fn create_trace_reader(format: TraceEventsFileFormat) -> Box<dyn trace_reade
         TraceEventsFileFormat::Ctfs => panic!("CTFS format is not supported on wasm32"),
     }
 }
+
+pub mod recorded_entry_reader;

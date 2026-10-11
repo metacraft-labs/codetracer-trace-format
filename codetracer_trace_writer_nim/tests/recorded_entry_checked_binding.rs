@@ -63,3 +63,45 @@ fn checked_trait_marker_and_reader_preserve_absence_and_refuse_malformed_presenc
     let error = TraceWriter::mark_current_call_as_entry(&mut no_active).unwrap_err().to_string();
     assert!(error.contains("entry.dat"), "actual checked writer error: {error}");
 }
+
+#[test]
+fn owned_bytes_copy_input_and_refresh_transactionally_without_reopening_paths() {
+    let root = tempfile::tempdir().unwrap();
+    let marked_root = root.path().join("marked-source");
+    let unmarked_root = root.path().join("unmarked-source");
+    std::fs::create_dir(&marked_root).unwrap();
+    std::fs::create_dir(&unmarked_root).unwrap();
+    let marked = record(&marked_root, "marked-owned", true);
+    let unmarked = record(&unmarked_root, "unmarked-owned", false);
+    let mut image = std::fs::read(&marked).unwrap();
+    let held_marked = image.clone();
+    let mut reader = NimTraceReaderHandle::from_bytes(&image).unwrap();
+    assert_eq!(reader.recorded_entry().unwrap(), Some((0, 0, 0)));
+    assert_eq!(reader.call_count(), 1);
+    assert_eq!(reader.step_count(), 1);
+    image.fill(0);
+    drop(image);
+    std::fs::remove_file(&marked).unwrap();
+    assert_eq!(reader.recorded_entry().unwrap(), Some((0, 0, 0)));
+    assert_eq!(reader.call_count(), 1);
+    assert_eq!(reader.step_count(), 1);
+
+    assert!(NimTraceReaderHandle::from_bytes(&[]).is_err());
+    assert!(NimTraceReaderHandle::from_bytes(&held_marked[..8]).is_err());
+    assert!(reader.refresh_from_bytes(&[]).is_err());
+    assert!(reader.refresh_from_bytes(&held_marked[..8]).is_err());
+    assert_eq!(reader.recorded_entry().unwrap(), Some((0, 0, 0)));
+    assert_eq!(reader.call_count(), 1);
+    assert_eq!(reader.step_count(), 1);
+
+    let mut replacement = std::fs::read(&unmarked).unwrap();
+    reader.refresh_from_bytes(&replacement).unwrap();
+    replacement.fill(0);
+    drop(replacement);
+    std::fs::remove_file(&unmarked).unwrap();
+    assert_eq!(reader.recorded_entry().unwrap(), None);
+    assert_eq!(reader.call_count(), 1);
+    assert_eq!(reader.step_count(), 1);
+    reader.refresh_from_bytes(&held_marked).unwrap();
+    assert_eq!(reader.recorded_entry().unwrap(), Some((0, 0, 0)));
+}

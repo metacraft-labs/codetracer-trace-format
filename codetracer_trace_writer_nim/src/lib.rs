@@ -415,6 +415,8 @@ extern "C" {
 
     // ----- Trace reader (NewTraceReader) -----
 
+    fn ct_reader_open_bytes(data: *const std::ffi::c_void, length: usize) -> *mut std::ffi::c_void;
+    fn ct_reader_refresh_bytes(h: *mut std::ffi::c_void, data: *const std::ffi::c_void, length: usize) -> i32;
     fn ct_reader_open(path: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
     fn ct_reader_refresh(h: *mut std::ffi::c_void, path: *const std::os::raw::c_char) -> i32;
     fn ct_reader_close(h: *mut std::ffi::c_void);
@@ -3697,6 +3699,29 @@ impl NimTraceReaderHandle {
             Err(last_error().into())
         } else {
             Ok(Self { handle: h })
+        }
+    }
+
+    /// Open a CTFS image through the supplier's checked owned-byte parser.
+    /// The supplier copies the bytes before returning; it never reopens a path.
+    pub fn from_bytes(data: &[u8]) -> Result<Self, Box<dyn Error>> {
+        ensure_nim_initialized();
+        let handle = unsafe { ct_reader_open_bytes(data.as_ptr().cast(), data.len()) };
+        if handle.is_null() {
+            Err(last_error().into())
+        } else {
+            Ok(Self { handle })
+        }
+    }
+
+    /// Replace the owned image only after the complete candidate parses.
+    /// A rejected candidate leaves this handle's previous image intact.
+    pub fn refresh_from_bytes(&mut self, data: &[u8]) -> Result<(), Box<dyn Error>> {
+        let result = unsafe { ct_reader_refresh_bytes(self.handle, data.as_ptr().cast(), data.len()) };
+        if result != 0 {
+            Err(last_error().into())
+        } else {
+            Ok(())
         }
     }
 

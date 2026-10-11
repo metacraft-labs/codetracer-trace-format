@@ -252,17 +252,20 @@ try:
                         '--', str(rust_images)], cwd=root, check=True)
     subprocess.run([str(binary), 'read-rust', str(rust_images)], check=True)
     env = rust_env.copy() if os.name == 'nt' else os.environ.copy()
-    env['ENTRY_NIM_FIXTURE_ROOT'] = str(nim_images)
-    # Preserve the complete original command; required cross-reader and sealed
-    # controls consume this gate's actual producer artifacts in the same run.
+    if args.prepare_only and args.fixture_output is None:
+        raise RuntimeError('Declared fixture output is required')
+    published_root = args.fixture_output if args.prepare_only else root / 'target' / 'entry-fixtures'
+    (root / 'target').mkdir(mode=0o700, exist_ok=True)
+    import importlib.util
+    helper = root / 'tests/publish_entry_fixtures.py'
+    spec = importlib.util.spec_from_file_location('publish_entry_fixtures', helper)
+    module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
+    module.publish(root, nim_images, published_root)
+    env['ENTRY_NIM_FIXTURE_ROOT'] = str(published_root)
+    # Preserve every original consumer command. All branches consume the same
+    # committed three-member producer unit rather than the raw two images.
     if args.prepare_only:
-        if args.fixture_output is None:
-            raise RuntimeError('Declared fixture output is required')
-        import importlib.util
-        helper = root / 'tests/publish_entry_fixtures.py'
-        spec = importlib.util.spec_from_file_location('publish_entry_fixtures', helper)
-        module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
-        module.publish(root, nim_images, args.fixture_output)
+        pass
     elif os.name == 'nt':
         # Additive required entry gate; original Windows workspace Test argv stays intact.
         subprocess.run(['cargo', 'test', '--locked', '-p', 'codetracer_trace_reader',
@@ -286,7 +289,7 @@ try:
         spec = importlib.util.spec_from_file_location('entry_fixture_environment', helper)
         module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
         if not args.prepare_only:
-            module.append_fixture_root(nim_images)
+            module.append_fixture_root(published_root)
         image_holds.close()
 
 finally:

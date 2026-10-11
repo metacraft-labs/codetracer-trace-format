@@ -97,6 +97,11 @@ fn which_direnv() -> Option<PathBuf> {
 /// proving something about the wrong toolchain.
 pub fn run_nim_checker(work: &Path, container: &Path, present: &[(&str, &[u8])], absent: &[&str]) -> (String, bool) {
     let (repo, direnv, home) = nim_checker().expect("caller checked");
+    // Keep the empty-environment toolchain boundary. Only the declared matching
+    // hook constructor is forwarded; the sibling still admits its own compiler.
+    let constructor = PathBuf::from(std::env::var_os("REPROBUILD_REPRO").expect("declared matching hook constructor is required"));
+    let constructor = fs::canonicalize(constructor).expect("declared matching hook constructor is absent");
+    assert!(constructor.is_file(), "declared matching hook constructor is not a regular file");
 
     let mut manifest = String::new();
     for (name, body) in present {
@@ -116,6 +121,7 @@ pub fn run_nim_checker(work: &Path, container: &Path, present: &[(&str, &[u8])],
         .args([
             "-i".into(),
             format!("HOME={}", home.display()),
+            format!("REPROBUILD_REPRO={}", constructor.display()),
             "PATH=/run/current-system/sw/bin:/usr/bin:/bin".into(),
             direnv.display().to_string(),
             "exec".into(),

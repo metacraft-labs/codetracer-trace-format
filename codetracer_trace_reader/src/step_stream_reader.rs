@@ -409,6 +409,19 @@ impl StepStreamReader {
         }
     }
 
+    /// The trace's step count: the number of step records, and no other exec
+    /// record (`trace-events.md` §"Which exec records are steps"). [`Self::count`]
+    /// is the exec-record count, which the other streams are indexed by.
+    pub fn logical_step_count(&mut self) -> Result<u64, String> {
+        let mut n = 0;
+        for i in 0..self.record_count {
+            if self.read(i)?.is_step() {
+                n += 1;
+            }
+        }
+        Ok(n)
+    }
+
     /// Read all execution-stream records (convenience for tests / small traces).
     /// Decodes each chunk once.
     pub fn read_all(&mut self) -> Result<Vec<StepStreamRecord>, String> {

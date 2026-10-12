@@ -1126,6 +1126,7 @@ static int scenario_craft(void) {
 static void read_all(ct_reader_t r) {
     uint64_t steps, calls, events, paths, funcs, types, varnames;
     CALL_U("step_count", steps = ct_reader_step_count(r));
+    CALL_U("logical_step_count", ct_reader_logical_step_count(r));
     CALL_U("call_count", calls = ct_reader_call_count(r));
     CALL_U("event_count", events = ct_reader_event_count(r));
     CALL_U("path_count", paths = ct_reader_path_count(r));
@@ -1349,6 +1350,7 @@ static int scenario_reader_nulls(void) {
     CALL_I("refresh NULL", ct_reader_refresh(NULL, "x"));
     CALL_V("close NULL", ct_reader_close(NULL));
     CALL_U("step_count NULL", ct_reader_step_count(NULL));
+    CALL_U("logical_step_count NULL", ct_reader_logical_step_count(NULL));
     CALL_U("call_count NULL", ct_reader_call_count(NULL));
     CALL_U("event_count NULL", ct_reader_event_count(NULL));
     CALL_U("path_count NULL", ct_reader_path_count(NULL));

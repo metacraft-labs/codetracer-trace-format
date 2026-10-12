@@ -296,7 +296,13 @@ fn a_c_host_gets_the_same_answers_from_both_libraries() {
         if label == "Nim-written" {
             // The read did read: the basic recording's steps, values and calls.
             assert!(
-                tn.contains("== basic.ct\nopen -> handle err=0\nstep_count -> 9 err=0\ncall_count -> 5 err=0"),
+                tn.contains("== basic.ct\nopen -> handle err=0\nstep_count -> 9 err=0\nlogical_step_count -> 9 err=0\ncall_count -> 5 err=0"),
+                "{tn}"
+            );
+            // The threads recording's raise, catch and thread records are
+            // exec records but not steps: four steps among ten records.
+            assert!(
+                tn.contains("== threads.ct\nopen -> handle err=0\nstep_count -> 10 err=0\nlogical_step_count -> 4 err=0"),
                 "{tn}"
             );
             assert!(

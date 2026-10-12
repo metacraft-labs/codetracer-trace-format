@@ -154,6 +154,15 @@ pub enum StepStreamRecord {
     },
 }
 
+impl StepStreamRecord {
+    /// Whether the record is a step (`trace-events.md` §"Which exec records
+    /// are steps"). Only `Step` is; the other records occupy an exec record
+    /// but are not steps.
+    pub fn is_step(&self) -> bool {
+        matches!(self, StepStreamRecord::Step { .. })
+    }
+}
+
 /// Append a `SourceReload` record's payload (without the tag).
 pub fn encode_source_reload_payload(reload_ordinal: u64, changed: &[SourceReloadChange], in_flight_frames: u64, out: &mut Vec<u8>) {
     encode_varint(reload_ordinal, out);

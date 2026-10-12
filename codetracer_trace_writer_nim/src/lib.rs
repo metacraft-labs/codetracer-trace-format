@@ -492,6 +492,7 @@ extern "C" {
     fn ct_reader_close(h: *mut std::ffi::c_void);
 
     fn ct_reader_step_count(h: *mut std::ffi::c_void) -> u64;
+    fn ct_reader_logical_step_count(h: *mut std::ffi::c_void) -> u64;
     fn ct_reader_call_count(h: *mut std::ffi::c_void) -> u64;
     fn ct_reader_event_count(h: *mut std::ffi::c_void) -> u64;
 
@@ -4008,8 +4009,16 @@ impl NimTraceReaderHandle {
 
     // --- Counts ---
 
+    /// The exec-record count, which the value, call and I/O event streams
+    /// are indexed by.
     pub fn step_count(&self) -> u64 {
         unsafe { ct_reader_step_count(self.handle) }
+    }
+
+    /// The trace's step count: the number of step records, without the
+    /// raise, catch, thread, column-only and source-reload records.
+    pub fn logical_step_count(&self) -> u64 {
+        unsafe { ct_reader_logical_step_count(self.handle) }
     }
 
     pub fn call_count(&self) -> u64 {

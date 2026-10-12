@@ -318,6 +318,19 @@ impl ExecReader {
         Ok(r)
     }
 
+    /// The number of step records: the trace's step count.
+    fn logical_step_count(&self) -> Result<u64, String> {
+        let mut n = 0;
+        for index in 0..self.offsets.len() {
+            let chunk = self.decode_chunk(index)?;
+            if let Some(e) = &chunk.decode_error {
+                return Err(e.clone());
+            }
+            n += chunk.events.iter().filter(|e| e.is_step()).count() as u64;
+        }
+        Ok(n)
+    }
+
     fn decode_chunk(&self, index: usize) -> Result<ExecChunk, String> {
         let start = self.offsets[index];
         let end = if index + 1 < self.offsets.len() {
@@ -1163,6 +1176,7 @@ macro_rules! count_fn {
 }
 
 count_fn!(ct_reader_step_count, |r| Ok(r.exec()?.total));
+count_fn!(ct_reader_logical_step_count, |r| r.exec()?.logical_step_count());
 count_fn!(ct_reader_call_count, |r| Ok(r.calls()?.count()));
 count_fn!(ct_reader_event_count, |r| Ok(r.io_events()?.total));
 count_fn!(ct_reader_path_count, |r| Ok(r.paths.count()));

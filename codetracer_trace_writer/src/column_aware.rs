@@ -176,6 +176,16 @@ pub enum StepEvent {
     },
 }
 
+impl StepEvent {
+    /// Whether the record is a step (`trace-events.md` §"Which exec records
+    /// are steps"): only `AbsoluteStep` and `DeltaStep` are. A raise, a catch,
+    /// a thread record, a column-only move and a source-reload marker occupy
+    /// an exec record but are not steps.
+    pub fn is_step(&self) -> bool {
+        matches!(self, StepEvent::AbsoluteStep { .. } | StepEvent::DeltaStep { .. })
+    }
+}
+
 /// Encode one step event. Port of Nim `step_encoding.nim` `encodeStepEvent`.
 pub fn encode_step_event(event: &StepEvent, out: &mut Vec<u8>) {
     match event {

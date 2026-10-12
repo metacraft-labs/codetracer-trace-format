@@ -151,7 +151,7 @@ int32_t ct_correlation_lookup_boundary(const char *path,
 int32_t ct_marker_labels_json(const char *path, uint8_t **out_buf, uintptr_t *out_len);
 
 /**
- * Encode a version 6 `meta.dat` into a buffer the caller releases with
+ * Encode a version 7 `meta.dat` into a buffer the caller releases with
  * [`ct_free_buffer`]. A NULL or empty `recording_id` mints one.
  *
  * # Safety
@@ -1310,7 +1310,7 @@ void ct_assignment(struct TraceWriterHandle *handle,
                    int64_t call_key);
 
 /**
- * `kind` is the event's `EventLogKind` ordinal (0-13); another value is
+ * `kind` is the event's `EventLogKind` ordinal (0-23); another value is
  * refused.
  *
  * # Safety

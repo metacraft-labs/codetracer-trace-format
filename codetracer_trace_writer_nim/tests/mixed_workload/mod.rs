@@ -24,7 +24,7 @@
 //! `steps.dat`'s second chunk (record 4096) opens with a thread record: its
 //! first position must still be an `AbsoluteStep` (`trace-events.md`
 //! §"Encoding Rules"). It is followed by an epilogue that writes one I/O event
-//! of every `EventLogKind` (0-13) and one value event of every value-stream
+//! of every `EventLogKind` (0-23) and one value event of every value-stream
 //! tag (0-9), so neither table can be narrowed by one writer unnoticed.
 //!
 
@@ -67,7 +67,7 @@ pub const RECORDING_ID: &str = "01949fcc-7d92-7e9c-aaaa-bbbbbbbbbbbb";
 const FIRST_THREAD: u64 = 9;
 
 /// Every `EventLogKind`, in ordinal order.
-const ALL_KINDS: [EventLogKind; 14] = [
+const ALL_KINDS: [EventLogKind; 24] = [
     EventLogKind::Write,
     EventLogKind::WriteFile,
     EventLogKind::WriteOther,
@@ -82,6 +82,16 @@ const ALL_KINDS: [EventLogKind; 14] = [
     EventLogKind::Error,
     EventLogKind::TraceLogEvent,
     EventLogKind::EvmEvent,
+    EventLogKind::WriteStderr,
+    EventLogKind::Exec,
+    EventLogKind::ReadEnv,
+    EventLogKind::WriteEnv,
+    EventLogKind::Stat,
+    EventLogKind::CreateDir,
+    EventLogKind::RemoveDir,
+    EventLogKind::RemoveFile,
+    EventLogKind::Rename,
+    EventLogKind::ChangeDir,
 ];
 
 #[derive(Clone, Copy, Debug, PartialEq)]

@@ -1,5 +1,5 @@
 //! An `events.dat` record's kind byte is the recorder's exact `EventLogKind`
-//! ordinal, 0-13 (`trace-events.md` §"EventLogKind (u8 enum)"):
+//! ordinal, 0-23 (`trace-events.md` §"EventLogKind (u8 enum)"):
 //!
 //! * every kind round-trips exactly, through the writer, the seekable
 //!   `IoEventStreamReader` and the split-stream event assembly;
@@ -19,7 +19,7 @@ use codetracer_trace_writer::ctfs_writer::CtfsTraceWriter;
 use codetracer_trace_writer::event_stream::{IoEventRecord, encode_io_event_stream};
 use codetracer_trace_writer::trace_writer::TraceWriter;
 
-const ALL: [EventLogKind; 14] = [
+const ALL: [EventLogKind; 24] = [
     EventLogKind::Write,
     EventLogKind::WriteFile,
     EventLogKind::WriteOther,
@@ -34,6 +34,16 @@ const ALL: [EventLogKind; 14] = [
     EventLogKind::Error,
     EventLogKind::TraceLogEvent,
     EventLogKind::EvmEvent,
+    EventLogKind::WriteStderr,
+    EventLogKind::Exec,
+    EventLogKind::ReadEnv,
+    EventLogKind::WriteEnv,
+    EventLogKind::Stat,
+    EventLogKind::CreateDir,
+    EventLogKind::RemoveDir,
+    EventLogKind::RemoveFile,
+    EventLogKind::Rename,
+    EventLogKind::ChangeDir,
 ];
 
 #[test]
@@ -54,7 +64,7 @@ fn every_kind_round_trips_exactly() {
     let mut r = codetracer_ctfs::CtfsReader::open(&ct).unwrap();
     let mut io = IoEventStreamReader::open(&mut r).unwrap().expect("events.dat");
     let kinds: Vec<u8> = (0..io.count()).map(|i| io.read(i).unwrap().kind).collect();
-    assert_eq!(kinds, (0..14u8).collect::<Vec<_>>(), "the kind byte is the EventLogKind ordinal");
+    assert_eq!(kinds, (0..24u8).collect::<Vec<_>>(), "the kind byte is the EventLogKind ordinal");
 
     let mut reader = codetracer_trace_reader::create_trace_reader(codetracer_trace_reader::TraceEventsFileFormat::Ctfs);
     let events = reader.load_trace_events(&ct).unwrap();
@@ -76,16 +86,16 @@ fn a_writer_refuses_an_unassigned_kind() {
         metadata: vec![],
         content: vec![],
     };
-    assert!(encode_io_event_stream(&[rec(13)], 64, 3).is_ok(), "control: 13 is EvmEvent");
-    let err = encode_io_event_stream(&[rec(13), rec(14)], 64, 3).err().expect("14 is unassigned");
-    assert!(err.contains("14"), "{err}");
+    assert!(encode_io_event_stream(&[rec(23)], 64, 3).is_ok(), "control: 23 is ChangeDir");
+    let err = encode_io_event_stream(&[rec(23), rec(24)], 64, 3).err().expect("24 is unassigned");
+    assert!(err.contains("24"), "{err}");
 }
 
 #[test]
 fn a_reader_refuses_an_unassigned_kind_by_name() {
-    let err = IoEventRecord::decode(&[14, 0, 0, 0]).expect_err("14 is unassigned");
-    assert!(err.contains("14") && err.contains("EventLogKind"), "{err}");
-    assert_eq!(IoEventRecord::decode(&[13, 0, 0, 0]).unwrap().kind, 13, "control");
+    let err = IoEventRecord::decode(&[24, 0, 0, 0]).expect_err("24 is unassigned");
+    assert!(err.contains("24") && err.contains("EventLogKind"), "{err}");
+    assert_eq!(IoEventRecord::decode(&[23, 0, 0, 0]).unwrap().kind, 23, "control");
 
     // The same record inside a container, through the seekable reader.
     let dir = tempfile::tempdir().unwrap();
@@ -107,4 +117,33 @@ fn a_reader_refuses_an_unassigned_kind_by_name() {
         Ok(None) => panic!("events.dat vanished"),
     };
     assert!(err.contains("200"), "{err}");
+}
+
+/// The ten kinds `meta.dat` version 7 allocates keep the ordinals and names
+/// `trace-events.md` §"EventLogKind (u8 enum)" gives them, spelled out so that
+/// a reordering of the enum fails here instead of relabelling recordings.
+#[test]
+fn the_version_7_kinds_have_the_spec_ordinals_and_names() {
+    let table: [(u8, EventLogKind, &str); 10] = [
+        (14, EventLogKind::WriteStderr, "WriteStderr"),
+        (15, EventLogKind::Exec, "Exec"),
+        (16, EventLogKind::ReadEnv, "ReadEnv"),
+        (17, EventLogKind::WriteEnv, "WriteEnv"),
+        (18, EventLogKind::Stat, "Stat"),
+        (19, EventLogKind::CreateDir, "CreateDir"),
+        (20, EventLogKind::RemoveDir, "RemoveDir"),
+        (21, EventLogKind::RemoveFile, "RemoveFile"),
+        (22, EventLogKind::Rename, "Rename"),
+        (23, EventLogKind::ChangeDir, "ChangeDir"),
+    ];
+    for (ord, kind, name) in table {
+        assert_eq!(kind as u8, ord, "{name}'s ordinal");
+        assert_eq!(EventLogKind::from_ordinal(ord), Some(kind), "{ord} names {name}");
+        assert_eq!(kind.name(), name, "{ord}'s name");
+    }
+    assert_eq!(EventLogKind::from_ordinal(24), None, "24 is unassigned");
+    assert_eq!(EventLogKind::ALL.len(), 24);
+    for (i, k) in EventLogKind::ALL.iter().enumerate() {
+        assert_eq!(*k as usize, i, "ALL is in ordinal order");
+    }
 }

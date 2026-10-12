@@ -989,23 +989,6 @@ fn call_json(c: &CallStreamRecord) -> String {
     )
 }
 
-const EVENT_KIND_NAMES: [&str; 14] = [
-    "Write",
-    "WriteFile",
-    "WriteOther",
-    "Read",
-    "ReadFile",
-    "ReadOther",
-    "ReadDir",
-    "OpenDir",
-    "CloseDir",
-    "Socket",
-    "Open",
-    "Error",
-    "TraceLogEvent",
-    "EvmEvent",
-];
-
 // ---------------------------------------------------------------------------
 // Handing results out
 // ---------------------------------------------------------------------------
@@ -1295,9 +1278,9 @@ pub unsafe extern "C" fn ct_reader_call_for_step(h: *mut TraceReader, step_id: u
 pub unsafe extern "C" fn ct_reader_event(h: *mut TraceReader, index: u64, out_len: *mut usize) -> *mut u8 {
     json_fn("ct_reader_event", h, out_len, |r| {
         let ev = r.io_event(index)?;
-        let kind = EVENT_KIND_NAMES
-            .get(ev.kind as usize)
-            .ok_or_else(|| format!("event kind {} is not an assigned EventLogKind (0-13)", ev.kind))?;
+        let kind = codetracer_trace_types::EventLogKind::from_ordinal(ev.kind)
+            .ok_or_else(|| format!("event kind {} is not an assigned EventLogKind (0-23)", ev.kind))?
+            .name();
         Ok(format!(
             "{{\"kind\":\"{kind}\",\"step_id\":{},\"data\":{}}}",
             ev.step_id,

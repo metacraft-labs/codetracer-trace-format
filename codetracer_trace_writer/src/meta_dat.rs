@@ -7,7 +7,7 @@
 //! new `has_call_stream` capability flag (bit 8) can be carried in the canonical
 //! place, and read that flag back in the Rust reader.
 //!
-//! Layout (version 6), per `codetracer-trace-format-spec/internal-files.md`
+//! Layout (version 7), per `codetracer-trace-format-spec/internal-files.md`
 //! §"Metadata (meta.dat)":
 //!
 //! ```text
@@ -65,7 +65,7 @@ pub const META_DAT_MAGIC: [u8; 4] = [0x43, 0x54, 0x4D, 0x44];
 /// [`encode_meta_dat`] stamps it, and [`read_meta_dat_flags`] — the reader
 /// every `meta_dat_has_*` helper and [`decode_meta_dat`] go through — refuses
 /// every other version, naming it.
-pub const META_DAT_VERSION: u16 = 6;
+pub const META_DAT_VERSION: u16 = 7;
 
 /// The header length: magic, version, `flags` and `flags_ext`.
 pub const META_DAT_HEADER_SIZE: usize = 12;
@@ -131,7 +131,8 @@ fn check_meta_dat_header(data: &[u8]) -> Result<(), String> {
             return Err(format!(
                 "meta.dat: schema version {version} is not read; this reader reads version {META_DAT_VERSION} \
                  only, whose 12-byte header always carries flags_ext and whose body ends at recorder_id \
-                 (at version 5 and below a path list followed it). Re-record the trace with a current recorder"
+                 (at version 5 and below a path list followed it, and version 6 predates the 24-kind \
+                 EventLogKind table). Re-record the trace with a current recorder"
             ));
         }
     }
@@ -371,7 +372,7 @@ pub fn encode_meta_dat(recording_id: &str, program: &str, args: &[String], workd
     encode_meta_dat_ext(recording_id, program, args, workdir, recorder_id, flags, 0)
 }
 
-/// Serialize a version 6 `meta.dat` byte buffer, `flags_ext` included, with
+/// Serialize a version 7 `meta.dat` byte buffer, `flags_ext` included, with
 /// no block after `recorder_id`.
 pub fn encode_meta_dat_ext(
     recording_id: &str,
@@ -394,7 +395,7 @@ pub fn encode_meta_dat_ext(
     )
 }
 
-/// Serialize a version 6 `meta.dat` byte buffer with the given blocks after
+/// Serialize a version 7 `meta.dat` byte buffer with the given blocks after
 /// `recorder_id`. Each block's flag bit is taken from `blocks`, whatever
 /// `flags` says of it: a bit without its block, or a block without its bit,
 /// is a header no reader can parse.
@@ -890,14 +891,14 @@ mod tests {
         0x65, 0x76, 0x2F, 0x70, 0x72, 0x6F, 0x62, 0x65, 0x2E, 0x67, 0x64,
     ];
 
-    /// `internal-files.md` §"Metadata (meta.dat)": a version 6 header is
+    /// `internal-files.md` §"Metadata (meta.dat)": a version 7 header is
     /// always 12 bytes, `flags_ext` included, and `recorder_id` is the last
     /// field when no flag-gated block follows — there is no path list.
     #[test]
-    fn the_encoder_writes_version_6_with_flags_ext_and_no_path_list() {
+    fn the_encoder_writes_version_7_with_flags_ext_and_no_path_list() {
         let buf = encode_meta_dat(RID, "prog", &["a".to_string()], "/wd", "rec", FLAG_HAS_STEP_STREAM);
         assert_eq!(&buf[0..4], b"CTMD");
-        assert_eq!(u16::from_le_bytes([buf[4], buf[5]]), 6);
+        assert_eq!(u16::from_le_bytes([buf[4], buf[5]]), 7);
         assert_eq!(u16::from_le_bytes([buf[6], buf[7]]), FLAG_HAS_STEP_STREAM);
         assert_eq!(&buf[8..12], &[0, 0, 0, 0], "flags_ext is present and zero");
         let mut want = buf[..12].to_vec();
@@ -914,21 +915,23 @@ mod tests {
         assert_eq!(buf, want, "the body ends with recorder_id");
 
         let ext = encode_meta_dat_ext(RID, "prog", &[], "/wd", "rec", 0, FLAG_EXT_HAS_SOURCE_RELOAD);
-        assert_eq!(u16::from_le_bytes([ext[4], ext[5]]), 6, "an extended flag does not change the version");
+        assert_eq!(u16::from_le_bytes([ext[4], ext[5]]), 7, "an extended flag does not change the version");
         assert_eq!(read_meta_dat_ext_flags(&ext), Ok(FLAG_EXT_HAS_SOURCE_RELOAD));
         assert_eq!(meta_dat_body_offset(&ext), 12);
     }
 
-    /// Every version but 6 is refused, naming it: the bytes after
-    /// `recorder_id` mean something else at version 5 and below.
+    /// Every version but 7 is refused, naming it: the bytes after
+    /// `recorder_id` mean something else at version 5 and below, and a
+    /// version 6 trace was written against the fourteen-kind `EventLogKind`
+    /// table, so a version 7 reader does not claim it.
     #[test]
-    fn every_version_but_6_is_refused_by_name() {
+    fn every_version_but_7_is_refused_by_name() {
         let buf = encode_meta_dat(RID, "prog", &[], "/wd", "rec", 0);
-        for v in [1u16, 2, 3, 4, 5, 7, 0xffff] {
+        for v in [1u16, 2, 3, 4, 5, 6, 8, 0xffff] {
             let mut old = buf.clone();
             old[4..6].copy_from_slice(&v.to_le_bytes());
             let err = read_meta_dat_flags(&old).expect_err("must refuse");
-            assert!(err.contains(&format!("version {v}")) && err.contains('6'), "{v}: {err}");
+            assert!(err.contains(&format!("version {v}")) && err.contains('7'), "{v}: {err}");
             assert!(decode_meta_dat(&old).is_err(), "decode must refuse version {v} too");
         }
         let err = decode_meta_dat(NIM_WRITTEN_V5_META_DAT).expect_err("a real v5 header is refused");

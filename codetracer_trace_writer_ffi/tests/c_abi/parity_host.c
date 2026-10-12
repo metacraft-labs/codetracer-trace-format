@@ -982,7 +982,7 @@ static void meta_member(member_t* m, uint32_t ext_flags) {
     m->name = "meta.dat";
     m->data.n = 0;
     put(&m->data, "CTMD", 4);
-    put8(&m->data, 6); put8(&m->data, 0);
+    put8(&m->data, 7); put8(&m->data, 0);
     put8(&m->data, 0x00); put8(&m->data, 0x1f);
     put32(&m->data, ext_flags);
     putv(&m->data, strlen(RID)); put(&m->data, RID, strlen(RID));

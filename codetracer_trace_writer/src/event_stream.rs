@@ -286,31 +286,12 @@ fn event_log_kind_ord(kind: EventLogKind) -> u8 {
     kind as u8
 }
 
-/// The `EventLogKind` an `events.dat` kind byte names, exactly. Values 14-255
+/// The `EventLogKind` an `events.dat` kind byte names, exactly. Values 24-255
 /// are unassigned and refused, naming the value: a reader never substitutes a
 /// kind for one it does not know.
 pub fn event_log_kind(ordinal: u8) -> Result<EventLogKind, String> {
-    Ok(match ordinal {
-        0 => EventLogKind::Write,
-        1 => EventLogKind::WriteFile,
-        2 => EventLogKind::WriteOther,
-        3 => EventLogKind::Read,
-        4 => EventLogKind::ReadFile,
-        5 => EventLogKind::ReadOther,
-        6 => EventLogKind::ReadDir,
-        7 => EventLogKind::OpenDir,
-        8 => EventLogKind::CloseDir,
-        9 => EventLogKind::Socket,
-        10 => EventLogKind::Open,
-        11 => EventLogKind::Error,
-        12 => EventLogKind::TraceLogEvent,
-        13 => EventLogKind::EvmEvent,
-        other => {
-            return Err(format!(
-                "events.dat: record kind {other} is not an assigned EventLogKind (0-13 are; 14-255 are unassigned)"
-            ));
-        }
-    })
+    EventLogKind::from_ordinal(ordinal)
+        .ok_or_else(|| format!("events.dat: record kind {ordinal} is not an assigned EventLogKind (0-23 are; 24-255 are unassigned)"))
 }
 
 /// The encoded `events.dat` stream plus its companion `events.idx`.

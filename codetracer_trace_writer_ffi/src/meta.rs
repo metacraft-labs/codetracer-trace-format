@@ -31,7 +31,7 @@ pub(crate) fn validate_recording_id(id: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Encode a version 6 `meta.dat` into a buffer the caller releases with
+/// Encode a version 7 `meta.dat` into a buffer the caller releases with
 /// [`ct_free_buffer`]. A NULL or empty `recording_id` mints one.
 ///
 /// # Safety

@@ -108,6 +108,16 @@ impl From<trace::EventLogKind> for codetracer_trace_types::EventLogKind {
             trace::EventLogKind::Error => codetracer_trace_types::EventLogKind::Error,
             trace::EventLogKind::TraceLogEvent => codetracer_trace_types::EventLogKind::TraceLogEvent,
             trace::EventLogKind::EvmEvent => codetracer_trace_types::EventLogKind::EvmEvent,
+            trace::EventLogKind::WriteStderr => codetracer_trace_types::EventLogKind::WriteStderr,
+            trace::EventLogKind::Exec => codetracer_trace_types::EventLogKind::Exec,
+            trace::EventLogKind::ReadEnv => codetracer_trace_types::EventLogKind::ReadEnv,
+            trace::EventLogKind::WriteEnv => codetracer_trace_types::EventLogKind::WriteEnv,
+            trace::EventLogKind::Stat => codetracer_trace_types::EventLogKind::Stat,
+            trace::EventLogKind::CreateDir => codetracer_trace_types::EventLogKind::CreateDir,
+            trace::EventLogKind::RemoveDir => codetracer_trace_types::EventLogKind::RemoveDir,
+            trace::EventLogKind::RemoveFile => codetracer_trace_types::EventLogKind::RemoveFile,
+            trace::EventLogKind::Rename => codetracer_trace_types::EventLogKind::Rename,
+            trace::EventLogKind::ChangeDir => codetracer_trace_types::EventLogKind::ChangeDir,
         }
     }
 }
@@ -129,6 +139,16 @@ impl From<codetracer_trace_types::EventLogKind> for trace::EventLogKind {
             codetracer_trace_types::EventLogKind::Error => trace::EventLogKind::Error,
             codetracer_trace_types::EventLogKind::TraceLogEvent => trace::EventLogKind::TraceLogEvent,
             codetracer_trace_types::EventLogKind::EvmEvent => trace::EventLogKind::EvmEvent,
+            codetracer_trace_types::EventLogKind::WriteStderr => trace::EventLogKind::WriteStderr,
+            codetracer_trace_types::EventLogKind::Exec => trace::EventLogKind::Exec,
+            codetracer_trace_types::EventLogKind::ReadEnv => trace::EventLogKind::ReadEnv,
+            codetracer_trace_types::EventLogKind::WriteEnv => trace::EventLogKind::WriteEnv,
+            codetracer_trace_types::EventLogKind::Stat => trace::EventLogKind::Stat,
+            codetracer_trace_types::EventLogKind::CreateDir => trace::EventLogKind::CreateDir,
+            codetracer_trace_types::EventLogKind::RemoveDir => trace::EventLogKind::RemoveDir,
+            codetracer_trace_types::EventLogKind::RemoveFile => trace::EventLogKind::RemoveFile,
+            codetracer_trace_types::EventLogKind::Rename => trace::EventLogKind::Rename,
+            codetracer_trace_types::EventLogKind::ChangeDir => trace::EventLogKind::ChangeDir,
         }
     }
 }

@@ -116,7 +116,7 @@ fn assert_containers_match(drive: Drive) {
     assert_eq!(steps(&nim_ct), records, "{drive:?}: the execution streams decode to different records");
     assert_eq!(
         io_kinds(&rust_ct),
-        (0..14u8).collect::<Vec<_>>(),
+        (0..24u8).collect::<Vec<_>>(),
         "{drive:?}: every EventLogKind, in order"
     );
     assert_eq!(value_tags(&rust_ct), (0..10u8).collect::<Vec<_>>(), "{drive:?}: every value-stream tag");

@@ -272,6 +272,16 @@ Example: the default `TypeKind::Seq` has value `0`, `TypeKind::Set` has value `1
 | 11 | Error |
 | 12 | TraceLogEvent |
 | 13 | EvmEvent |
+| 14 | WriteStderr |
+| 15 | Exec |
+| 16 | ReadEnv |
+| 17 | WriteEnv |
+| 18 | Stat |
+| 19 | CreateDir |
+| 20 | RemoveDir |
+| 21 | RemoveFile |
+| 22 | Rename |
+| 23 | ChangeDir |
 
 ## Summary
 

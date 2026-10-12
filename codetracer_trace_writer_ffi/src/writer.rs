@@ -2059,7 +2059,7 @@ pub unsafe extern "C" fn ct_assignment(
 // I/O events, threads, exceptions
 // ---------------------------------------------------------------------------
 
-/// `kind` is the event's `EventLogKind` ordinal (0-13); another value is
+/// `kind` is the event's `EventLogKind` ordinal (0-23); another value is
 /// refused.
 ///
 /// # Safety
@@ -2073,7 +2073,9 @@ pub unsafe extern "C" fn trace_writer_register_special_event(
     content: *const c_char,
 ) {
     with_handle("trace_writer_register_special_event", handle, true, (), (), |h| {
-        let ordinal = u8::try_from(kind).ok().filter(|k| *k <= 13);
+        let ordinal = u8::try_from(kind)
+            .ok()
+            .filter(|k| codetracer_trace_types::EventLogKind::from_ordinal(*k).is_some());
         let pending = h.pending_step.is_some();
         let Some(w) = h.ctfs.as_mut() else {
             return;

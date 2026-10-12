@@ -4426,7 +4426,7 @@ impl NimTraceReaderHandle {
     }
 
     /// Get the fields of an IO event.
-    /// Returns (kind, step_id, data). kind: 0=stdout, 1=stderr, 2=file_op, 3=error.
+    /// Returns (kind, step_id, data); `kind` is the exact `EventLogKind` ordinal.
     pub fn event_fields(&self, index: u64) -> Result<(u8, u64, Vec<u8>), Box<dyn Error>> {
         let mut kind: u8 = 0;
         let mut step_id: u64 = 0;

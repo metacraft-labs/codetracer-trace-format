@@ -218,6 +218,12 @@ jobs:
 
       - name: Build
         run: just build
+      - name: Prepare the declared coupled Unix runtime
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
+        run: bash ci/acquire-entry-runtime.sh
+
       - name: Run tests
         run: just test
 

@@ -1,6 +1,6 @@
 # Run all tests
 test:
-  python3 tests/run_entry_coupled.py --nim-environment-root ../codetracer-trace-format-nim --direnv "$(command -v direnv)" --unix-runtime-authority "${ENTRY_NIM_RUNTIME_AUTHORITY:-}"
+  python3 tests/run_entry_coupled.py --nim-environment-root "${ENTRY_NIM_ENVIRONMENT_ROOT:-../codetracer-trace-format-nim}" --direnv "$(command -v direnv)" --unix-runtime-authority "${ENTRY_NIM_RUNTIME_AUTHORITY:-}"
 
 # Run the formatting and clippy lint checks.
 #

@@ -47,6 +47,8 @@ let
   peerGit = peer.peerGit;
   peerNimbleSource = peer.peerNimbleSource;
 in {
+  constructorNix = pkgs.nix;
+  constructorPython = pkgs.python3;
   entryRuntime = pkgs.writeShellScriptBin "prepare-entry-runtime" ''
     exec ${pkgs.python3}/bin/python3 -B ${./prepare-entry-runtime.py} \
       --python-profile ${pkgs.python3} --direnv-profile ${runtime.direnv} \

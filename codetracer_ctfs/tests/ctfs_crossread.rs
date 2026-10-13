@@ -36,6 +36,8 @@
 //! that is a failure, not a skip — never make a red cross-read go away by
 //! arranging for the skip.
 
+mod nim_adjudicator;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -74,6 +76,9 @@ fn nim_checker() -> Option<(PathBuf, PathBuf, PathBuf)> {
         return None;
     }
     let home = PathBuf::from(std::env::var("HOME").ok()?);
+    if let Some(nim) = nim_adjudicator::declared_runtime_nim() {
+        return Some((fs::canonicalize(&repo).ok()?, nim, home));
+    }
     let direnv = home.join(".nix-profile/bin/direnv");
     let direnv = if direnv.exists() {
         direnv
@@ -132,16 +137,25 @@ fn run_nim_checker(work: &Path, container: &Path, present: &[(&str, &[u8])], abs
     let manifest_path = work.join("manifest.txt");
     fs::write(&manifest_path, &manifest).unwrap();
 
-    let out = Command::new("env")
-        .args([
-            "-i".into(),
+    let mut command = if let Some(nim) = nim_adjudicator::declared_runtime_nim() {
+        // The entry caller forwards the complete, independently verified peer environment.
+        Command::new(nim)
+    } else {
+        let mut command = Command::new("env");
+        command.args([
+            "-i".to_string(),
             format!("HOME={}", home.display()),
             format!("REPROBUILD_REPRO={}", constructor.display()),
-            "PATH=/run/current-system/sw/bin:/usr/bin:/bin".into(),
+            "PATH=/run/current-system/sw/bin:/usr/bin:/bin".to_string(),
             direnv.display().to_string(),
             "exec".into(),
             repo.display().to_string(),
             "nim".into(),
+        ]);
+        command
+    };
+    let out = command
+        .args([
             "c".into(),
             "-r".into(),
             "-d:release".into(),

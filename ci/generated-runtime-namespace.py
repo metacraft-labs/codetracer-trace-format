@@ -53,7 +53,8 @@ def verify_generated_outputs(peer, expected_rc, expected_profile, expected_sourc
             raise RuntimeError('Foreign generated runtime owner')
         if name in expected_bodies:
             if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1 or path.read_bytes() != expected_bodies[name]:
-                raise RuntimeError('Generated runtime body differs from actual constructor')
+                actual_body = path.read_bytes() if stat.S_ISREG(st.st_mode) else None
+                raise RuntimeError('Generated runtime body differs from actual constructor: ' + json.dumps({'member': name, 'kind': stat.S_IFMT(st.st_mode), 'nlink': st.st_nlink, 'expectedSha256': hashlib.sha256(expected_bodies[name]).hexdigest(), 'expectedBytes': len(expected_bodies[name]), 'actualSha256': hashlib.sha256(actual_body).hexdigest() if actual_body is not None else None, 'actualBytes': len(actual_body) if actual_body is not None else None}, sort_keys=True))
             executable = name == 'bin/nix-direnv-reload' or name.startswith('local-flake-overrides/bin/')
             expected_mode = ((0o666 & ~mask) | (0o111 & ~mask)) if executable else (0o666 & ~mask)
             if stat.S_IMODE(st.st_mode) != expected_mode:

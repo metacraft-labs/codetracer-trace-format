@@ -448,11 +448,16 @@ try:
     # Authorize only this already-authenticated tracked file, never a global allow.
     command = [str(direnv_profile / 'bin/direnv'), 'allow', str(envrc)]
     run_child(command, peer, 'authorize-exact-tracked-envrc')
-    exported, diagnostics = run_child([str(direnv_profile / 'bin/direnv'), 'export', 'json'], peer, 'activate-exact-locked-peer')
+    activation_environment = dict(os.environ)
+    activation_environment['PATH'] = str(nix.parent) + os.pathsep + activation_environment.get('PATH', '')
+    activated_nix = shutil.which('nix', path=activation_environment['PATH'])
+    if not activated_nix or Path(activated_nix).resolve(strict=True) != nix.resolve(strict=True) or image(Path(activated_nix)) != image(nix):
+        raise RuntimeError('Declared activation Nix role differs from selected constructor')
+    exported, diagnostics = run_child([str(direnv_profile / 'bin/direnv'), 'export', 'json'], peer, 'activate-exact-locked-peer', activation_environment)
     # Successful export is a delta. An already active environment can return {}.
     # Neither absence of PATH in that delta nor frontend zero proves a fresh shell.
     delta = json.loads(exported)
-    activated, selected = helper_module.apply_activation(delta, diagnostics, os.environ, expected_roles, image)
+    activated, selected = helper_module.apply_activation(delta, diagnostics, activation_environment, expected_roles, image)
     if activated.get('NIMBLE_DIR') != str(peer / '.nimble'):
         raise RuntimeError('Declared Nimble source cache selector differs from owned seed output')
     config_slot = peer / '.pre-commit-config.yaml'

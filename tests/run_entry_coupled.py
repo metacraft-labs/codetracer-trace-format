@@ -5,7 +5,7 @@ private source override is permitted for pre-adoption qualification only; its
 copied .envrc is never activated. Both real producers and readers must execute.
 """
 from pathlib import Path
-import argparse, ctypes, hashlib, json, os, platform, shutil, struct, subprocess, sys, tempfile, tomllib
+import argparse, ctypes, hashlib, json, os, platform, shutil, stat, struct, subprocess, sys, tempfile, tomllib
 from contextlib import ExitStack
 
 # Dynamic producer helpers must not write build cache into tracked source roots.
@@ -15,6 +15,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--nim-environment-root', required=True, type=Path)
 parser.add_argument('--qualification-source', type=Path)
 parser.add_argument('--direnv')
+parser.add_argument('--unix-runtime-authority', type=Path)
 parser.add_argument('--windows-provider', type=Path)
 parser.add_argument('--work-root', type=Path)
 parser.add_argument('--prepare-only', action='store_true')
@@ -38,6 +39,7 @@ head = subprocess.check_output(['git', '-C', str(environment), 'rev-parse', 'HEA
 if head != suppliers[0]['revision']:
     raise RuntimeError('Nim environment differs from the declared supplier revision')
 image_holds = None
+unix_authority_guard = None
 try:
     native_flags = []
     if os.name == 'nt':
@@ -199,11 +201,107 @@ try:
             raise RuntimeError('Required declared Unix direnv selector absent')
         # Capture activation directly and fail closed. direnv exec alone can execute the
         # requested command after a failed activation; no ambient Nim is admitted here.
+        if not args.unix_runtime_authority:
+            raise RuntimeError('Required genuine Unix runtime constructor authority absent')
+        authority_path = args.unix_runtime_authority.absolute()
+        image_holds = ExitStack()
+        authority_parents = []
+        for parent in reversed(authority_path.parents):
+            before = parent.lstat()
+            if not stat.S_ISDIR(before.st_mode) or parent.resolve(strict=True) != parent:
+                raise RuntimeError('Unix authority parent is not its physical directory')
+            descriptor = os.open(parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+            image_holds.callback(os.close, descriptor)
+            held = os.fstat(descriptor)
+            if (before.st_dev, before.st_ino, before.st_mode) != (held.st_dev, held.st_ino, held.st_mode):
+                raise RuntimeError('Unix authority parent changed at open')
+            authority_parents.append((parent, descriptor, before))
+        descriptor = os.open(authority_path, os.O_RDONLY | os.O_NOFOLLOW)
+        image_holds.callback(os.close, descriptor)
+        authority_stat = os.fstat(descriptor)
+        if not stat.S_ISREG(authority_stat.st_mode) or authority_stat.st_uid != os.getuid() or authority_stat.st_nlink != 1:
+            raise RuntimeError('Unix runtime authority physical owner or kind differs')
+        with os.fdopen(os.dup(descriptor), 'rb') as authority_stream:
+            authority_bytes = authority_stream.read()
+        def guard_unix_authority():
+            for parent, held_descriptor, before in authority_parents:
+                now = parent.lstat(); held = os.fstat(held_descriptor)
+                if parent.resolve(strict=True) != parent or (now.st_dev, now.st_ino, now.st_mode) != (before.st_dev, before.st_ino, before.st_mode) or (held.st_dev, held.st_ino, held.st_mode) != (before.st_dev, before.st_ino, before.st_mode):
+                    raise RuntimeError('Held Unix authority parent changed')
+            now = authority_path.lstat()
+            if (now.st_dev, now.st_ino, now.st_mode, now.st_uid, now.st_nlink) != (authority_stat.st_dev, authority_stat.st_ino, authority_stat.st_mode, authority_stat.st_uid, 1) or authority_path.read_bytes() != authority_bytes:
+                raise RuntimeError('Held Unix runtime authority changed')
+        unix_authority_guard = guard_unix_authority
+        unix_authority_guard()
+        if args.unix_runtime_authority.is_symlink() or not stat.S_ISREG(authority_path.lstat().st_mode):
+            raise RuntimeError('Unix runtime authority is not an ordinary source-owned file')
+        def unique_authority(pairs):
+            result = {}
+            for key, value in pairs:
+                if key in result:
+                    raise RuntimeError('Duplicate Unix runtime authority key')
+                result[key] = value
+            return result
+        authority = json.loads(authority_bytes, object_pairs_hook=unique_authority)
+        if authority.get('schema') != 'codetracer-trace-format.unix-runtime-authority.v1' or set(authority.get('expectedSelectedImages', {})) != {'nim', 'nimble', 'git', 'gcc', 'bash'}:
+            raise RuntimeError('Unix runtime authority mandatory role schema differs')
+        image_fields = {'lexical', 'resolved', 'dev', 'ino', 'mode', 'sha256'}
+        role_rows = [authority['selectedDirenvImage'], *authority['expectedSelectedImages'].values()]
+        if any(not isinstance(row, dict) or set(row) != image_fields or not all(isinstance(row[key], str) for key in ['lexical', 'resolved', 'sha256']) or not all(isinstance(row[key], int) and not isinstance(row[key], bool) for key in ['dev', 'ino', 'mode']) for row in role_rows):
+            raise RuntimeError('Unix runtime producer and consumer image field shape differs')
+        if not all(authority.get(key) is True for key in ['finished', 'success', 'finalGuards']):
+            raise RuntimeError('Unix runtime constructor authority incomplete')
+        if authority.get('peerRevision') != head or authority.get('envrcSha256') != hashlib.sha256((environment / '.envrc').read_bytes()).hexdigest() or authority.get('flakeLockSha256') != hashlib.sha256((environment / 'flake.lock').read_bytes()).hexdigest():
+            raise RuntimeError('Unix runtime authority differs from current locked supplier')
+        if authority.get('constructorSourceSha256') != hashlib.sha256((root / 'ci/prepare-cross-reader-runtime.py').read_bytes()).hexdigest():
+            raise RuntimeError('Unix runtime authority producer source differs')
+        def current_role(path):
+            lexical = Path(path); resolved = lexical.resolve(strict=True); physical = resolved.lstat()
+            if not stat.S_ISREG(physical.st_mode):
+                raise RuntimeError('Selected Unix runtime role is not regular')
+            return {'lexical': str(lexical), 'resolved': str(resolved), 'dev': physical.st_dev,
+                    'ino': physical.st_ino, 'mode': stat.S_IMODE(physical.st_mode),
+                    'sha256': hashlib.sha256(resolved.read_bytes()).hexdigest()}
+        if current_role(args.direnv) != authority.get('selectedDirenvImage'):
+            raise RuntimeError('Unix runtime authority selected foreign Direnv')
+        def current_peer_namespace():
+            result = []
+            def walk(path, relative):
+                value = path.lstat()
+                common = [relative, value.st_dev, value.st_ino, stat.S_IMODE(value.st_mode), value.st_uid]
+                if stat.S_ISLNK(value.st_mode):
+                    result.append(common + ['link', os.readlink(path)])
+                elif stat.S_ISREG(value.st_mode):
+                    result.append(common + ['file', hashlib.sha256(path.read_bytes()).hexdigest()])
+                elif stat.S_ISDIR(value.st_mode):
+                    result.append(common + ['dir'])
+                    for child in sorted(path.iterdir()):
+                        if relative == '.' and child.name == '.git': continue
+                        walk(child, child.name if relative == '.' else relative + '/' + child.name)
+                else: raise RuntimeError('Special current peer namespace member')
+            walk(environment, '.')
+            return result
+        declared_generated = {'.direnv', '.nimble', '.pre-commit-config.yaml'}
+        if authority.get('prospectiveGeneratedRoots') != sorted(declared_generated) or not isinstance(authority.get('ordinarySourceNamespace'), list) or not isinstance(authority.get('generatedOutputAfter'), list):
+            raise RuntimeError('Unix runtime authority namespace schema differs')
+        def guard_peer_execution_namespace():
+            rows = current_peer_namespace()
+            if [row for row in rows if row[0].split('/')[0] in declared_generated] != authority['generatedOutputAfter'] or [row for row in rows if row[0].split('/')[0] not in declared_generated] != authority['ordinarySourceNamespace']:
+                raise RuntimeError('Current peer source or generated execution namespace differs')
+        guard_peer_execution_namespace()
+        # Verify source authority before export can execute its admitted RC/cache.
+        unix_authority_guard()
         activation = subprocess.run([args.direnv, 'export', 'json'], cwd=environment,
                                     capture_output=True, text=True)
         if activation.returncode:
             raise RuntimeError('Required declared Nim environment activation failed')
-        exports = json.loads(activation.stdout)
+        # Direnv2.37.1 returns no output when its loaded RC needs no update.
+        # The same empty output also occurs without any RC, so empty export
+        # requires the actual constructor's current loaded-RC association.
+        exports = json.loads(activation.stdout) if activation.stdout.strip() else {}
+        if not activation.stdout.strip():
+            if os.environ.get('DIRENV_DIR') != authority.get('loadedRcDirectory') or authority.get('loadedRcDirectory') != '-' + str(environment):
+                raise RuntimeError('Empty Unix activation lacks its actual current loaded RC')
         if not isinstance(exports, dict):
             raise RuntimeError('Declared Nim activation did not supply its tool PATH')
         nim_env = os.environ.copy()
@@ -212,11 +310,48 @@ try:
                 nim_env.pop(key, None)
             else:
                 nim_env[key] = value
+        def current_loaded_rc():
+            # Exact Direnv2.37.1 cmd_status.go schema; this operation does not source RC.
+            status_result = subprocess.run([args.direnv, 'status', '--json'], cwd=environment,
+                                           env=nim_env, capture_output=True, text=True)
+            if status_result.returncode:
+                raise RuntimeError('Selected Direnv current RC inspection refused')
+            status = json.loads(status_result.stdout, object_pairs_hook=unique_authority)
+            expected = str(environment / '.envrc')
+            for field in ['loadedRC', 'foundRC']:
+                row = status.get('state', {}).get(field)
+                if not isinstance(row, dict) or set(row) != {'path', 'allowed'} or row['path'] != expected or type(row['allowed']) is not int or row['allowed'] != 0:
+                    raise RuntimeError('Selected Direnv lacks current allowed supplier RC')
+            if nim_env.get('DIRENV_FILE') != expected or nim_env.get('DIRENV_DIR') != '-' + str(environment):
+                raise RuntimeError('Selected Direnv RC environment association differs')
+        current_loaded_rc()
         nim = shutil.which('nim', path=nim_env['PATH'])
         if not nim or not Path(nim).resolve(strict=True).is_relative_to('/nix/store'):
             raise RuntimeError('Declared Nim activation did not select its immutable compiler')
+        for role, expected in authority['expectedSelectedImages'].items():
+            actual = shutil.which(role, path=nim_env['PATH'])
+            if not actual or current_role(actual) != expected:
+                raise RuntimeError('Unix activation differs from independently selected constructor role')
+        receipt_guard = unix_authority_guard
+        def guard_current_unix_runtime():
+            receipt_guard()
+            current_loaded_rc()
+            guard_peer_execution_namespace()
+            if hashlib.sha256((environment / '.envrc').read_bytes()).hexdigest() != authority['envrcSha256'] or hashlib.sha256((environment / 'flake.lock').read_bytes()).hexdigest() != authority['flakeLockSha256']:
+                raise RuntimeError('Unix runtime source authority changed')
+            actual_head = subprocess.check_output([authority['expectedSelectedImages']['git']['lexical'], '-C', str(environment), 'rev-parse', 'HEAD'], text=True).strip()
+            if actual_head != authority['peerRevision'] or current_role(args.direnv) != authority['selectedDirenvImage']:
+                raise RuntimeError('Unix runtime source or Direnv role changed')
+            for role, expected in authority['expectedSelectedImages'].items():
+                actual = shutil.which(role, path=nim_env['PATH'])
+                if not actual or current_role(actual) != expected:
+                    raise RuntimeError('Held Unix selected runtime role changed')
+        unix_authority_guard = guard_current_unix_runtime
+        unix_authority_guard()
 
     def nim_run(argv):
+        if unix_authority_guard is not None:
+            unix_authority_guard()
         if argv[0] != 'nim':
             raise RuntimeError('Unsupported declared Nim invocation')
         subprocess.run([nim, argv[1], *native_flags, *argv[2:]], cwd=environment, env=nim_env, check=True)
@@ -293,8 +428,11 @@ try:
         module = importlib.util.module_from_spec(spec); spec.loader.exec_module(module)
         if not args.prepare_only:
             module.append_fixture_root(published_root)
-        image_holds.close()
 
 finally:
-    if image_holds is not None:
-        image_holds.close()
+    try:
+        if unix_authority_guard is not None:
+            unix_authority_guard()
+    finally:
+        if image_holds is not None:
+            image_holds.close()

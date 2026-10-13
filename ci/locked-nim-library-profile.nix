@@ -16,5 +16,8 @@ let
   supplier = builtins.getFlake ("github:metacraft-labs/codetracer-trace-format-nim/" + revision);
   packages = supplier.packages.${system} or (refuse "unsupported native system");
 in {
+  peerGit = packages.ci-checkout-git or (refuse "declared checkout Git constructor absent");
+  peerNimble = packages.ci-nimble or (refuse "declared Nimble runtime constructor absent");
+  peerNimbleSource = packages.ci-nimble-source or (refuse "declared Nimble source constructor absent");
   traceWriterFfi = packages.trace-writer-ffi or (refuse "declared static archive constructor absent");
 }

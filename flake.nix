@@ -42,6 +42,7 @@
           packages.ci-native-gcc = pkgs.stdenv.cc;
           packages.ci-native-zstd = pkgs.zstd;
           packages.ci-cross-reader-python = pkgs.python3;
+          packages.ci-cross-reader-just = pkgs.just;
           packages.ci-cross-reader-direnv = (import ./ci/cross-reader-profiles.nix { inherit pkgs; }).direnv;
 
           devShells.default = pkgs.mkShell {
@@ -62,6 +63,7 @@
 
               # Required coupled entry gate uses the same declared CI providers.
               config.packages.ci-cross-reader-python
+              config.packages.ci-cross-reader-just
               config.packages.ci-cross-reader-direnv
 
               # Development tools

@@ -89,6 +89,7 @@ package codetracer_trace_format:
       "direnv"
       "sh"
       "traceformat_native_env"
+      "traceformat_entry_runtime"
 
     # Cap'n Proto schema compiler — ``codetracer_trace_format_capnp``'s
     # build.rs runs ``capnpc`` over ``src/trace.capnp``.
@@ -203,13 +204,34 @@ package codetracer_trace_format:
       entryProducerArgv.add(["--windows-provider", providerPath])
     else:
       entryProducerArgv.add(["--direnv", "direnv"])
+    let unixRuntimeRoot = ".repro/build/entry-runtime"
+    when not defined(windows):
+      let runtimePreparation = buildAction(
+        id = "codetracer-trace-format.entry-runtime",
+        call = inlineExecCall(@["prepare-entry-runtime", "--root", ".",
+          "--output", unixRuntimeRoot]),
+        deps = @[workspaceBuild.id],
+        inputs = @["repro.lock", "flake.lock", "ci/prepare-entry-runtime.py",
+          "ci/prepare-cross-reader-runtime.py", "ci/generated-runtime-namespace.py",
+          "ci/entry-runtime-profile.nix", "ci/cross-reader-profiles.nix",
+          "ci/locked-nim-library-profile.nix", "../codetracer-trace-format-nim"],
+        outputs = @[unixRuntimeRoot],
+        toolIdentityRefs = @["traceformat_entry_runtime"])
+      entryProducerArgv.add(["--unix-runtime-authority",
+        unixRuntimeRoot / "runtime/peer-runtime-proof.json"])
+      # The source-owned runtime producer creates the exact locked peer.
+      let peerArg = entryProducerArgv.find("--nim-environment-root")
+      if peerArg < 0: raise newException(ValueError, "Declared Nim environment argument absent")
+      entryProducerArgv[peerArg + 1] = unixRuntimeRoot / "codetracer-trace-format-nim"
     let entryFixtures = buildAction(
       id = "codetracer-trace-format.entry-fixtures",
       call = inlineExecCall(entryProducerArgv),
-      deps = @[workspaceBuild.id],
+      deps = (when defined(windows): @[workspaceBuild.id]
+        else: @[workspaceBuild.id, runtimePreparation.id]),
       inputs = workspaceInputs & @["repro.lock", "tests/entry_coupled.nim",
         "tests/run_entry_coupled.py", "tests/publish_entry_fixtures.py",
-        "../codetracer-trace-format-nim"],
+        "../codetracer-trace-format-nim"] & (when defined(windows): @[]
+        else: @[unixRuntimeRoot / "runtime/peer-runtime-proof.json"]),
       outputs = @[entryFixtureRoot / "marked.ct", entryFixtureRoot / "unmarked.ct",
         entryFixtureRoot / ".producer-owner"],
       toolIdentityRefs = (when defined(windows):
@@ -256,3 +278,17 @@ when not defined(windows):
     provisioning:
       nixPackage "nativeEnv", expressionFile = "ci/native-compiler-profiles.nix",
         executablePath = "bin/env", lockIdentity = crossReaderProcessLockIdentity
+
+when not defined(windows):
+  package traceformat_entry_runtime:
+    provisioning:
+      nixPackage "entryRuntime", expressionFile = "ci/entry-runtime-profile.nix",
+        executablePath = "bin/prepare-entry-runtime",
+        lockIdentity = "trace-entry-runtime-source-sha256:" &
+          $nativeCompilerHash.sha256.digest(staticRead("ci/entry-runtime-profile.nix") &
+            staticRead("ci/prepare-entry-runtime.py") &
+            staticRead("ci/prepare-cross-reader-runtime.py") &
+            staticRead("ci/generated-runtime-namespace.py") &
+            staticRead("ci/cross-reader-profiles.nix") &
+            staticRead("ci/locked-nim-library-profile.nix") & staticRead("flake.lock") &
+            staticRead("repro.lock"))

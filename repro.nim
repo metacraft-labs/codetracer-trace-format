@@ -280,15 +280,16 @@ when not defined(windows):
         executablePath = "bin/env", lockIdentity = crossReaderProcessLockIdentity
 
 when not defined(windows):
+  const entryRuntimeSourceIdentity = "trace-entry-runtime-source-sha256:" &
+    $nativeCompilerHash.sha256.digest(staticRead("ci/entry-runtime-profile.nix") &
+      staticRead("ci/prepare-entry-runtime.py") &
+      staticRead("ci/prepare-cross-reader-runtime.py") &
+      staticRead("ci/generated-runtime-namespace.py") &
+      staticRead("ci/cross-reader-profiles.nix") &
+      staticRead("ci/locked-nim-library-profile.nix") & staticRead("flake.lock") &
+      staticRead("repro.lock"))
   package traceformat_entry_runtime:
     provisioning:
       nixPackage "entryRuntime", expressionFile = "ci/entry-runtime-profile.nix",
         executablePath = "bin/prepare-entry-runtime",
-        lockIdentity = "trace-entry-runtime-source-sha256:" &
-          $nativeCompilerHash.sha256.digest(staticRead("ci/entry-runtime-profile.nix") &
-            staticRead("ci/prepare-entry-runtime.py") &
-            staticRead("ci/prepare-cross-reader-runtime.py") &
-            staticRead("ci/generated-runtime-namespace.py") &
-            staticRead("ci/cross-reader-profiles.nix") &
-            staticRead("ci/locked-nim-library-profile.nix") & staticRead("flake.lock") &
-            staticRead("repro.lock"))
+        lockIdentity = entryRuntimeSourceIdentity

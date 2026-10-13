@@ -203,7 +203,7 @@ package codetracer_trace_format:
       discard readDevEnvFile(providerPath)
       entryProducerArgv.add(["--windows-provider", providerPath])
     else:
-      entryProducerArgv.add(["--direnv", "direnv"])
+      entryProducerArgv.add(["--direnv-from-unix-authority"])
     let unixRuntimeRoot = ".repro/build/entry-runtime"
     when not defined(windows):
       let runtimePreparation = buildAction(

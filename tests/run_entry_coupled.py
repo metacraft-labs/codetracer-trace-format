@@ -15,12 +15,15 @@ parser = argparse.ArgumentParser()
 parser.add_argument('--nim-environment-root', required=True, type=Path)
 parser.add_argument('--qualification-source', type=Path)
 parser.add_argument('--direnv')
+parser.add_argument('--direnv-from-unix-authority', action='store_true')
 parser.add_argument('--unix-runtime-authority', type=Path)
 parser.add_argument('--windows-provider', type=Path)
 parser.add_argument('--work-root', type=Path)
 parser.add_argument('--prepare-only', action='store_true')
 parser.add_argument('--fixture-output', type=Path)
 args = parser.parse_args()
+if args.direnv_from_unix_authority and (args.direnv or not args.unix_runtime_authority or os.name == 'nt'):
+    parser.error('Authority-selected Direnv requires sole Unix runtime authority')
 root = Path(__file__).resolve().parent.parent
 environment = args.nim_environment_root.resolve(strict=True)
 source = (args.qualification_source or environment).resolve(strict=True)
@@ -197,7 +200,7 @@ try:
         for dependency in profile['dependencies']:
             native_flags.append('-p:' + dependency['path'])
     else:
-        if not args.direnv:
+        if not args.direnv and not args.direnv_from_unix_authority:
             raise RuntimeError('Required declared Unix direnv selector absent')
         # Capture activation directly and fail closed. direnv exec alone can execute the
         # requested command after a failed activation; no ambient Nim is admitted here.
@@ -262,6 +265,8 @@ try:
             return {'lexical': str(lexical), 'resolved': str(resolved), 'dev': physical.st_dev,
                     'ino': physical.st_ino, 'mode': stat.S_IMODE(physical.st_mode),
                     'sha256': hashlib.sha256(resolved.read_bytes()).hexdigest()}
+        if args.direnv_from_unix_authority:
+            args.direnv = authority['selectedDirenvImage']['lexical']
         if current_role(args.direnv) != authority.get('selectedDirenvImage'):
             raise RuntimeError('Unix runtime authority selected foreign Direnv')
         def current_peer_namespace():

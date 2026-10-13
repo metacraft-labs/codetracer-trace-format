@@ -509,10 +509,11 @@ try:
     drv_json, _ = run_child([str(nix), 'derivation', 'show', drv], peer,
         'actual-metadata-writer-derivation-attributes')
     descriptions = json.loads(drv_json)
-    descriptions = descriptions.get('derivations', descriptions)
-    if set(descriptions) != {Path(drv).name}:
+    if not isinstance(descriptions, dict) or set(descriptions) != {drv}:
         raise RuntimeError('Actual writer derivation inventory differs')
-    attributes = descriptions[Path(drv).name]
+    attributes = descriptions[drv]
+    if not isinstance(attributes.get('outputs'), dict) or set(attributes['outputs']) != {'out'} or attributes['outputs']['out'].get('path') != str(metadata_root):
+        raise RuntimeError('Actual selected writer output role differs')
     source_bytes, _ = run_child([str(nix), 'eval', '--raw', '--offline',
         '--option', 'allow-import-from-derivation', 'false', '--no-write-lock-file',
         '.#ci-nimble-source.outPath'], peer, 'actual-metadata-selected-nimble-source')

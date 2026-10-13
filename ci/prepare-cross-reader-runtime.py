@@ -405,6 +405,7 @@ try:
     proof['constructorSourceSha256'] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     proof['flakeLockSha256'] = hashlib.sha256((peer / 'flake.lock').read_bytes()).hexdigest()
     proof['selectedDirenvImage'] = image(direnv_profile / 'bin/direnv')
+    proof['selectedNixDirenvModuleImage'] = image(module)
     proof['peerRevision'] = revision
     proof['envrcSha256'] = hashlib.sha256(envrc.read_bytes()).hexdigest()
     common_before = Path(os.fsdecode(metadata(peer, 'rev-parse', '--path-format=absolute', '--git-common-dir').rstrip(b'\n')))

@@ -284,11 +284,24 @@ try:
         declared_generated = {'.direnv', '.nimble', '.pre-commit-config.yaml'}
         if authority.get('prospectiveGeneratedRoots') != sorted(declared_generated) or not isinstance(authority.get('ordinarySourceNamespace'), list) or not isinstance(authority.get('generatedOutputAfter'), list):
             raise RuntimeError('Unix runtime authority namespace schema differs')
+        expected_generated = authority['generatedOutputAfter']
+        reload_holds = []
         def guard_peer_execution_namespace():
+            for path, descriptor, expected in reload_holds:
+                now = path.lstat(); held = os.fstat(descriptor)
+                if (now.st_dev, now.st_ino, now.st_mode, now.st_uid, now.st_nlink) != expected or (held.st_dev, held.st_ino, held.st_mode, held.st_uid, held.st_nlink) != expected:
+                    raise RuntimeError('Selected reload output physical identity changed')
             rows = current_peer_namespace()
-            if [row for row in rows if row[0].split('/')[0] in declared_generated] != authority['generatedOutputAfter'] or [row for row in rows if row[0].split('/')[0] not in declared_generated] != authority['ordinarySourceNamespace']:
+            if [row for row in rows if row[0].split('/')[0] in declared_generated] != expected_generated or [row for row in rows if row[0].split('/')[0] not in declared_generated] != authority['ordinarySourceNamespace']:
                 raise RuntimeError('Current peer source or generated execution namespace differs')
         guard_peer_execution_namespace()
+        module_path = Path(args.direnv).parents[1] / 'share/trace-cross-reader/nix-direnvrc'
+        expected_module = authority.get('selectedNixDirenvModuleImage')
+        if current_role(module_path) != expected_module:
+            raise RuntimeError('Selected nix-direnv output constructor differs')
+        reload_before = (environment / '.direnv/bin/nix-direnv-reload').lstat()
+        if not stat.S_ISREG(reload_before.st_mode) or reload_before.st_uid != os.getuid() or reload_before.st_nlink != 1:
+            raise RuntimeError('Initial reload output ownership differs')
         # Verify source authority before export can execute its admitted RC/cache.
         unix_authority_guard()
         activation = subprocess.run([args.direnv, 'export', 'json'], cwd=environment,
@@ -332,10 +345,39 @@ try:
             actual = shutil.which(role, path=nim_env['PATH'])
             if not actual or current_role(actual) != expected:
                 raise RuntimeError('Unix activation differs from independently selected constructor role')
+        # A successful selected activation may recreate this exact nix-direnv output.
+        # Its source/body/mode and every other namespace member remain mandatory.
+        module_path = Path(args.direnv).parents[1] / 'share/trace-cross-reader/nix-direnvrc'
+        expected_module = authority.get('selectedNixDirenvModuleImage')
+        if current_role(module_path) != expected_module:
+            raise RuntimeError('Selected nix-direnv output constructor differs')
+        rows = current_peer_namespace()
+        generated_now = [row for row in rows if row[0].split('/')[0] in declared_generated]
+        if [row for row in rows if row[0].split('/')[0] not in declared_generated] != authority['ordinarySourceNamespace']:
+            raise RuntimeError('Selected activation changed ordinary peer source')
+        prior = {row[0]: row for row in expected_generated}
+        current = {row[0]: row for row in generated_now}
+        reload_name = '.direnv/bin/nix-direnv-reload'
+        if set(prior) != set(current) or any(prior[name] != current[name] for name in prior if name != reload_name):
+            raise RuntimeError('Selected activation changed another generated member')
+        before = prior[reload_name]; after = current[reload_name]
+        if before[:2] + before[3:] != after[:2] + after[3:] or after[5] != 'file' or after[4] != os.getuid():
+            raise RuntimeError('Selected reload constructor body or mode changed')
+        reload_path = environment / reload_name
+        descriptor = os.open(reload_path, os.O_RDONLY | os.O_NOFOLLOW)
+        image_holds.callback(os.close, descriptor)
+        held = os.fstat(descriptor)
+        expected = (held.st_dev, held.st_ino, held.st_mode, held.st_uid, held.st_nlink)
+        if not stat.S_ISREG(held.st_mode) or held.st_nlink != 1 or held.st_uid != os.getuid() or [held.st_dev, held.st_ino, stat.S_IMODE(held.st_mode), held.st_uid] != after[1:5]:
+            raise RuntimeError('Selected reload output ownership changed at open')
+        reload_holds.append((reload_path, descriptor, expected))
+        expected_generated = generated_now
         receipt_guard = unix_authority_guard
         def guard_current_unix_runtime():
             receipt_guard()
             current_loaded_rc()
+            if current_role(module_path) != expected_module:
+                raise RuntimeError('Held nix-direnv output constructor changed')
             guard_peer_execution_namespace()
             if hashlib.sha256((environment / '.envrc').read_bytes()).hexdigest() != authority['envrcSha256'] or hashlib.sha256((environment / 'flake.lock').read_bytes()).hexdigest() != authority['flakeLockSha256']:
                 raise RuntimeError('Unix runtime source authority changed')

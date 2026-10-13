@@ -435,6 +435,22 @@ try:
     env = rust_env.copy() if os.name == 'nt' else nim_env.copy()
     if os.name != 'nt':
         env['ENTRY_NIM_RUNTIME_AUTHORITY'] = str(authority_path)
+        # The sealed producer already resolved and compiled the real requirements.
+        # Use build.rs's prepared-dependency interface without mutating that seed.
+        installed = authority.get('expectedSeedInstalledPackages')
+        if not isinstance(installed, list) or not installed:
+            raise RuntimeError('Prepared Nim dependency inventory is missing')
+        package_paths = []
+        for package in installed:
+            if not isinstance(package, dict) or set(package) != {'name', 'version', 'checksum'}:
+                raise RuntimeError('Prepared Nim dependency inventory differs')
+            path = environment / '.nimble' / 'pkgs2' / (package['name'] + '-' + package['version'] + '-' + package['checksum'])
+            if not path.is_dir() or path.is_symlink():
+                raise RuntimeError('Prepared Nim dependency source is missing')
+            package_paths.append(str(path))
+        guard_peer_execution_namespace()
+        env['CODETRACER_TRACE_FORMAT_NIM_SKIP_NIMBLE_INSTALL'] = '1'
+        env['CODETRACER_TRACE_FORMAT_NIM_EXTRA_PATHS'] = os.pathsep.join(package_paths)
     if args.prepare_only and args.fixture_output is None:
         raise RuntimeError('Declared fixture output is required')
     published_root = args.fixture_output if args.prepare_only else root / 'target' / 'entry-fixtures'

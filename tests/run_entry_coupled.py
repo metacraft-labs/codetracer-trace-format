@@ -399,34 +399,6 @@ try:
             raise RuntimeError('Unsupported declared Nim invocation')
         subprocess.run([nim, argv[1], *native_flags, *argv[2:]], cwd=environment, env=nim_env, check=True)
 
-    if os.name != 'nt':
-        # Build the original source-declared reader required by cross-writer tests.
-        # Only this named output may be added; runtime caches and all source stay exact.
-        unix_authority_guard()
-        reader = environment / 'ct-print'
-        if reader.exists() or reader.is_symlink():
-            raise RuntimeError('Preexisting reader output is not this constructor result')
-        subprocess.run([authority['expectedSelectedImages']['nimble']['lexical'], 'buildCtPrint'],
-                       cwd=environment, env=nim_env, check=True)
-        rows = current_peer_namespace()
-        ordinary_now = [row for row in rows if row[0].split('/')[0] not in declared_generated]
-        reader_rows = [row for row in ordinary_now if row[0] == 'ct-print']
-        if len(reader_rows) != 1 or [row for row in ordinary_now if row[0] != 'ct-print'] != expected_ordinary or [row for row in rows if row[0].split('/')[0] in declared_generated] != expected_generated:
-            raise RuntimeError('Declared reader constructor changed another execution member')
-        descriptor = os.open(reader, os.O_RDONLY | os.O_NOFOLLOW)
-        image_holds.callback(os.close, descriptor)
-        held = os.fstat(descriptor)
-        if not stat.S_ISREG(held.st_mode) or held.st_uid != os.getuid() or held.st_nlink != 1 or not held.st_mode & 0o111:
-            raise RuntimeError('Declared reader output ownership or execution mode differs')
-        if [held.st_dev, held.st_ino, stat.S_IMODE(held.st_mode), held.st_uid] != reader_rows[0][1:5]:
-            raise RuntimeError('Declared reader output changed between enumeration and open')
-        with os.fdopen(os.dup(descriptor), 'rb') as reader_stream:
-            if hashlib.sha256(reader_stream.read()).hexdigest() != reader_rows[0][6]:
-                raise RuntimeError('Declared reader output body changed at open')
-        reload_holds.append((reader, descriptor, (held.st_dev, held.st_ino, held.st_mode, held.st_uid, 1)))
-        expected_ordinary = ordinary_now
-        unix_authority_guard()
-
     # Retain real artifacts for source-bound qualification and diagnosis.
     if args.work_root:
         work = args.work_root.resolve(); work.mkdir(exist_ok=False)

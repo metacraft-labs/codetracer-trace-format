@@ -544,6 +544,54 @@ try:
     if sorted(installed, key=lambda v: (v['name'], v['version'], v['checksum'])) != sorted(expected_installed, key=lambda v: (v['name'], v['version'], v['checksum'])):
         raise RuntimeError('Actual metadata writer inventory differs from independently held complete seed')
     proof['expectedSeedInstalledPackages'] = expected_installed
+    # The original reader task registers dependency reverse edges and produces
+    # its named worktree-local cache before the final runtime authority is sealed.
+    reader_before = namespace(peer)
+    expected_data_bytes, _ = run_child([str(writer), str(peer / '.nimble'),
+        '--expected-reader-data', str(peer)], peer, 'actual-reader-dependency-constructor', activated)
+    expected_reader_data = json.loads(expected_data_bytes)
+    if namespace(peer) != reader_before:
+        raise RuntimeError('Read-only reader dependency constructor changed the peer')
+    reader = peer / 'ct-print'
+    cache_root = '.nimcache/src/codetracer_ct_print_r'
+    if reader.exists() or reader.is_symlink() or (peer / '.nimcache').exists() or (peer / '.nimcache').is_symlink():
+        raise RuntimeError('Preexisting reader/compiler outputs refused')
+    run_child([proof['expectedSelectedImages']['nimble']['lexical'], 'buildCtPrint'],
+        peer, 'actual-source-declared-reader-build', activated)
+    reader_after = namespace(peer)
+    def reader_member(name):
+        return name == 'ct-print' or name in {'.nimcache', '.nimcache/src', cache_root} or name.startswith(cache_root + '/')
+    prior = {row[0]: row for row in reader_before}
+    current = {row[0]: row for row in reader_after}
+    metadata_name = '.nimble/nimbledata2.json'
+    if any(current.get(name) != row for name, row in prior.items() if name != metadata_name) or any(not reader_member(name) for name in current.keys() - prior.keys()):
+        raise RuntimeError('Declared reader changed another execution member')
+    if current[metadata_name][:-1] != prior[metadata_name][:-1]:
+        raise RuntimeError('Declared reader changed metadata physical ownership')
+    # ReverseDependency arrays have set semantics in the actual addRevDep API.
+    def canonical_reverse_data(value):
+        if not isinstance(value, dict) or set(value) != {'version', 'reverseDeps'} or value['version'] != 1 or not isinstance(value['reverseDeps'], dict):
+            raise RuntimeError('Unsupported reader reverse-dependency schema')
+        return {name: {version: {checksum: sorted(json.dumps(row, sort_keys=True) for row in rows)
+                    for checksum, rows in checksums.items()} for version, checksums in versions.items()}
+                    for name, versions in value['reverseDeps'].items()}
+    actual_reader_data = json.loads((peer / metadata_name).read_bytes())
+    if canonical_reverse_data(actual_reader_data) != canonical_reverse_data(expected_reader_data):
+        raise RuntimeError('Reader dependency metadata differs from actual selected Nimble constructor')
+    if not {'ct-print', '.nimcache', '.nimcache/src', cache_root}.issubset(current):
+        raise RuntimeError('Declared reader cache constructor output incomplete')
+    reader_rows = [row for row in reader_after if reader_member(row[0])]
+    if not any(row[0] == 'ct-print' and row[5] == 'file' and row[3] & 0o111 for row in reader_rows):
+        raise RuntimeError('Genuine reader output absent or nonexecutable')
+    for row in reader_rows:
+        path = peer / row[0]; physical = path.lstat()
+        if row[4] != os.getuid() or row[5] not in {'dir', 'file'} or (row[5] == 'file' and physical.st_nlink != 1):
+            raise RuntimeError('Foreign or nonregular reader/compiler output')
+    proof['declaredReaderConstructor'] = {'image': image(reader), 'outputs': reader_rows,
+        'expectedReverseDependencies': expected_reader_data}
+    images.append(image(reader))
+    source_namespace = [row for row in reader_after if row[0].split('/')[0] not in generated_roots]
+    proof['ordinarySourceNamespace'] = source_namespace
     metadata_slots = {}
     for name in ['nimbledata2.json', 'official-nim-releases.json']:
         path = peer / '.nimble' / name

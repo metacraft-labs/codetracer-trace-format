@@ -8,7 +8,10 @@ class Once(argparse.Action):
             parser.error('duplicate runtime constructor argument: ' + option_string)
         setattr(namespace, self.dest, value)
 
+# The source-owned package version selected by repro.lock.
+ENTRY_RUNTIME_VERSION = '1.0.0'
 p = argparse.ArgumentParser()
+p.add_argument('--version', action='version', version='prepare-entry-runtime ' + ENTRY_RUNTIME_VERSION)
 for name in ['root', 'output', 'python-profile', 'direnv-profile', 'just-profile', 'git', 'nix', 'nimble-source']:
     p.add_argument('--' + name, required=True, type=Path, action=Once)
 p.add_argument('--nix-version', required=True, action=Once)

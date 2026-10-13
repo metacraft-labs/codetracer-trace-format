@@ -2,9 +2,16 @@
 from pathlib import Path
 import argparse, ctypes, errno, hashlib, json, os, stat, subprocess, sys, time, tomllib
 sys.dont_write_bytecode = True
+class Once(argparse.Action):
+    def __call__(self, parser, namespace, value, option_string=None):
+        if getattr(namespace, self.dest, None) is not None:
+            parser.error('duplicate runtime constructor argument: ' + option_string)
+        setattr(namespace, self.dest, value)
+
 p = argparse.ArgumentParser()
 for name in ['root', 'output', 'python-profile', 'direnv-profile', 'just-profile', 'git', 'nix', 'nimble-source']:
-    p.add_argument('--' + name, required=True, type=Path)
+    p.add_argument('--' + name, required=True, type=Path, action=Once)
+p.add_argument('--nix-version', required=True, action=Once)
 a = p.parse_args()
 root = a.root.resolve(strict=True)
 out = a.output.absolute()
@@ -269,8 +276,8 @@ try:
     runtime_roots = sorted({str(Path(row[1]).parents[1]) for row in selected_images} | {str(a.nimble_source)})
     if any(not value.startswith('/nix/store/') for value in runtime_roots):
         raise RuntimeError('Selected runtime role is outside declared store closure')
-    if operation('selected-runtime-nix-version', [a.nix, '--version'], root).decode().strip() != 'nix (Nix) 2.32.8':
-        raise RuntimeError('Selected runtime Nix schema version differs')
+    if operation('selected-runtime-nix-version', [a.nix, '--version'], root).decode().strip() != 'nix (Nix) ' + a.nix_version:
+        raise RuntimeError('Selected runtime Nix constructor version differs')
     closure = json.loads(operation('selected-runtime-path-info', [a.nix, 'path-info', '--offline', '--recursive', '--json', *runtime_roots], root))
     if not isinstance(closure, dict) or not closure:
         raise RuntimeError('Selected Nix path-info schema differs')

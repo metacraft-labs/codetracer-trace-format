@@ -449,6 +449,10 @@ try:
     command = [str(direnv_profile / 'bin/direnv'), 'allow', str(envrc)]
     run_child(command, peer, 'authorize-exact-tracked-envrc')
     activation_environment = dict(os.environ)
+    # This newly cloned peer has no prior activation. Do not let the owning
+    # shell's Direnv delta restore its unrelated original PATH in this child.
+    for inherited_role in ['DIRENV_DIFF', 'DIRENV_DIR', 'DIRENV_FILE', 'DIRENV_WATCHES']:
+        activation_environment.pop(inherited_role, None)
     activation_environment['PATH'] = str(nix.parent) + os.pathsep + activation_environment.get('PATH', '')
     activated_nix = shutil.which('nix', path=activation_environment['PATH'])
     if not activated_nix or Path(activated_nix).resolve(strict=True) != nix.resolve(strict=True) or image(Path(activated_nix)) != image(nix):

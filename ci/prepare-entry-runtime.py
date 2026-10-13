@@ -303,6 +303,44 @@ try:
     peer = out / 'codetracer-trace-format-nim'
     operation('clone-locked-peer', [git, '-c', 'init.templateDir=' + str(template), 'clone', '--no-local', '--no-checkout', '--template=' + str(template), str(original), str(peer)], root)
     operation('checkout-locked-peer', [git, '-C', peer, 'checkout', '--detach', supplier['revision']], root)
+    proof['selectedRoleConstructors'] = {}
+    for role, profile in [('python', a.python_profile), ('direnv', a.direnv_profile), ('just', a.just_profile)]:
+        registered = closure.get(str(profile))
+        derivation = registered.get('deriver') if isinstance(registered, dict) else None
+        if not isinstance(derivation, str) or not derivation.startswith('/nix/store/') or not derivation.endswith('.drv'):
+            raise RuntimeError('Selected runtime role has no actual registered deriver')
+        descriptions = json.loads(operation('selected-' + role + '-constructor',
+            [a.nix, 'derivation', 'show', derivation], root))
+        if not isinstance(descriptions, dict) or set(descriptions) != {derivation}:
+            raise RuntimeError('Actual selected role derivation inventory differs')
+        outputs = descriptions[derivation].get('outputs')
+        if not isinstance(outputs, dict) or not outputs:
+            raise RuntimeError('Actual selected role outputs are missing')
+        paths = [value['path'] for value in outputs.values() if isinstance(value, dict) and 'path' in value]
+        if any(not isinstance(value, str) for value in paths) or paths.count(str(profile)) != 1:
+            raise RuntimeError('Actual selected role derivation output differs')
+        body = (json.dumps(descriptions, indent=2) + '\n').encode()
+        name = role + '-derivation.json'
+        descriptor = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=receipts_fd)
+        try:
+            pending = memoryview(body)
+            while pending:
+                written = os.write(descriptor, pending)
+                if written <= 0:
+                    raise RuntimeError('Actual role receipt write refused')
+                pending = pending[written:]
+            os.fsync(descriptor)
+            created = os.fstat(descriptor)
+            stable_fields = ('st_dev', 'st_ino', 'st_mode', 'st_uid', 'st_gid', 'st_nlink', 'st_size', 'st_mtime_ns', 'st_ctime_ns')
+            observed_body = hold_evidence(receipts / name)
+            observed = (receipts / name).lstat()
+            if observed_body != body or any(getattr(observed, key) != getattr(created, key) for key in stable_fields):
+                raise RuntimeError('Actual role constructor receipt changed at publication')
+        finally:
+            os.close(descriptor)
+        proof['selectedRoleConstructors'][role] = {'derivation': derivation, 'output': str(profile),
+            'receiptSha256': hashlib.sha256(body).hexdigest(), 'narHash': registered['narHash']}
+        boundary(); save()
     operation('prepare-real-runtime', [a.python_profile / 'bin/python3', '-B', root / 'ci/prepare-cross-reader-runtime.py', root, receipts, a.python_profile, a.direnv_profile, a.just_profile, git, a.nix, '--peer-root', peer], root)
     authority = json.loads((receipts / 'peer-runtime-proof.json').read_text())
     if not all(authority.get(key) is True for key in ['finished', 'success', 'finalGuards']) or authority.get('peerRevision') != supplier['revision']:

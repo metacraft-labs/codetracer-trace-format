@@ -212,7 +212,7 @@ impl CtfsReader {
         let mut v6_fields = [0u8; compact::V6_HEADER_SIZE - HEADER_SIZE_V5];
         r.read_exact(&mut v6_fields[..header_size - HEADER_SIZE_V5])?;
         let mut entries = Vec::new();
-        for _ in 0..ext_header.max_root_entries {
+        for _ in 0..ext_header.root_entries(header_size) {
             entries.push(FileEntry::read_from(r)?);
         }
         Ok((header, ext_header, entries))

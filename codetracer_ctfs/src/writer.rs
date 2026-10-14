@@ -299,9 +299,14 @@ impl CtfsWriter {
         let ext_header = ExtendedHeader::read_from(&mut file)?;
 
         let entries_offset = (HEADER_SIZE + EXTENDED_HEADER_SIZE) as u64;
+        // A declared `0` is the auto-filled remainder of block 0
+        // (`ctfs-container.md` §1, "Auto-fill"; §5, "Reopening"): the
+        // appender recovers that many slots and may fill the empty ones. The
+        // header itself is not rewritten; it still declares `0`.
+        let root_entries = ext_header.root_entries(HEADER_SIZE + EXTENDED_HEADER_SIZE);
 
         let mut entries = Vec::new();
-        for _ in 0..ext_header.max_root_entries {
+        for _ in 0..root_entries {
             let entry = FileEntry::read_from(&mut file)?;
             entries.push(entry);
         }
@@ -383,7 +388,7 @@ impl CtfsWriter {
         Ok(CtfsWriter {
             writer,
             block_size: ext_header.block_size,
-            max_root_entries: ext_header.max_root_entries,
+            max_root_entries: root_entries,
             allocator,
             files,
             entries_offset,

@@ -4,7 +4,7 @@ use std::path::Path;
 use crate::base40::base40_decode;
 use crate::block_bounds::BlockBound;
 use crate::file_entry::{FileEntry, MemberLayout, FILE_ENTRY_SIZE};
-use crate::header::{EXTENDED_HEADER_SIZE, HEADER_SIZE};
+use crate::header::{root_entry_count, EXTENDED_HEADER_SIZE, HEADER_SIZE};
 use crate::pread_compat::pread_exact;
 use crate::CtfsError;
 
@@ -55,11 +55,14 @@ impl ConcurrentCtfsReader {
         let mut ext_buf = [0u8; EXTENDED_HEADER_SIZE];
         pread_exact(&file, &mut ext_buf, HEADER_SIZE as u64)?;
         let block_size = u32::from_le_bytes(ext_buf[0..4].try_into().unwrap());
-        let max_root_entries = u32::from_le_bytes(ext_buf[4..8].try_into().unwrap());
+        let declared_root_entries = u32::from_le_bytes(ext_buf[4..8].try_into().unwrap());
 
         if block_size != 1024 && block_size != 2048 && block_size != 4096 {
             return Err(CtfsError::InvalidBlockSize(block_size));
         }
+        // A declared `0` is the auto-filled remainder of block 0
+        // (`ctfs-container.md` §1, "Auto-fill"), never "no entries".
+        let max_root_entries = root_entry_count(block_size, declared_root_entries, HEADER_SIZE + EXTENDED_HEADER_SIZE);
 
         // Read file entries
         let mut entries = Vec::with_capacity(max_root_entries as usize);

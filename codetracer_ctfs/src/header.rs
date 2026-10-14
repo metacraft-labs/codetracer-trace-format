@@ -187,6 +187,17 @@ impl ExtendedHeader {
         Ok(())
     }
 
+    /// The number of root-directory slots a reader scans in a full-profile
+    /// container whose header is `header_size` bytes (16 through version 5,
+    /// 24 at version 6): `max_root_entries` as declared, or, for a declared
+    /// `0`, the auto-filled remainder of block 0, `(BlockSize - header_size)
+    /// / 24` -- 170 at version 5 and 169 at version 6 for a 4096-byte block
+    /// (`ctfs-container.md` §1, "Auto-fill", and §1a). A reader that read the
+    /// `0` as "no entries" would read an empty container and report success.
+    pub fn root_entries(&self, header_size: usize) -> u32 {
+        root_entry_count(self.block_size, self.max_root_entries, header_size)
+    }
+
     pub fn read_from<R: Read>(r: &mut R) -> Result<Self, CtfsError> {
         let mut buf = [0u8; 4];
         r.read_exact(&mut buf)?;
@@ -201,4 +212,14 @@ impl ExtendedHeader {
             max_root_entries,
         })
     }
+}
+
+/// [`ExtendedHeader::root_entries`] for a reader that holds the two header
+/// fields rather than an [`ExtendedHeader`]: `declared`, or for `0` the
+/// auto-filled remainder of block 0 after a `header_size`-byte header.
+pub fn root_entry_count(block_size: u32, declared: u32, header_size: usize) -> u32 {
+    if declared != 0 {
+        return declared;
+    }
+    ((block_size as usize).saturating_sub(header_size) / crate::file_entry::FILE_ENTRY_SIZE) as u32
 }

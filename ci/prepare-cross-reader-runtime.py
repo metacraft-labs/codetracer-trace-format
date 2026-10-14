@@ -150,6 +150,23 @@ def declared_peer_config_continuity(peer, before):
     hooks = common / 'hooks'
     return common == peer / '.git' and str(hooks) == hook_transition['path'] and namespace(hooks) == hook_transition['namespace']
 
+def nix_failure_classes(text):
+    """Boolean observations of fixed selected Nix 2.31.2 error formats only."""
+    patterns = {
+        "nixIfdDisabledReported": r"cannot build '[^\n]*' during evaluation because the option 'allow-import-from-derivation' is disabled",
+        "nixSubstitutionDisabledReported": r"dependency '[^\n]*' of '[^\n]*' does not exist, and substitution is disabled",
+        "nixStoreWriteDeniedReported": r"cannot substitute path '[^\n]*' - no write access to the Nix store",
+        "nixMissingDerivationReported": r"cannot build missing derivation '[^\n]*'",
+        "nixInvalidStorePathReported": r"path '[^\n]*' is not valid",
+        "nixHttp401Reported": r"unable to download '[^\n]*': HTTP error 401\b",
+        "nixHttp403Reported": r"unable to download '[^\n]*': HTTP error 403\b",
+        "nixHttp404Reported": r"unable to download '[^\n]*': HTTP error 404\b",
+        "nixHttp429Reported": r"unable to download '[^\n]*': HTTP error 429\b",
+    }
+    return {name: re.search(pattern, text) is not None
+            for name, pattern in patterns.items()}
+
+
 def run_child(command, peer, role, child_env=None):
     child = subprocess.Popen(command, cwd=peer, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                              start_new_session=True, env=child_env)
@@ -207,6 +224,10 @@ def run_child(command, peer, role, child_env=None):
             }.items()},
             'scope': 'Classifier metadata only; no diagnostic/config/export bytes or hashes retained',
         }
+        if role in {"actual-locked-peer-cache-constructor",
+                    "actual-locked-peer-runtime-role-constructor"}:
+            row['nonsecretFailureClassification']['classes'].update(
+                nix_failure_classes(text))
     while True:
         remaining, unknown = [], []
         for proc in Path('/proc').iterdir():

@@ -155,6 +155,53 @@ STAGES = ('activate-exact-locked-peer',
  'verify-initial-native-hook-authority')
 TYPES = {"RuntimeError", "FileNotFoundError", "PermissionError", "ValueError", "KeyError", "TypeError", "OSError", "JSONDecodeError"}
 
+CLASSIFIERS = (
+    'nixIfdDisabledReported',
+    'nixSubstitutionDisabledReported',
+    'nixStoreWriteDeniedReported',
+    'nixMissingDerivationReported',
+    'nixInvalidStorePathReported',
+    'nixHttp401Reported',
+    'nixHttp403Reported',
+    'nixHttp404Reported',
+    'nixHttp429Reported',
+    'permissionDenied',
+    'readOnlyFilesystem',
+    'shellSyntaxError',
+    'commandNotFound',
+    'unboundVariable',
+    'cannotExecute',
+    'blockedEnvrc',
+    'hashMismatch',
+    'fallback',
+)
+
+KNOWN_COMMANDS = (
+    'bash',
+    'python3',
+    'git',
+    'nix',
+    'direnv',
+    'jq',
+    'curl',
+    'dirname',
+    'basename',
+    'readlink',
+    'sort',
+    'sha256sum',
+    'cut',
+    'head',
+    'sed',
+    'grep',
+    'tr',
+    'mkdir',
+    'cp',
+    'chmod',
+    'touch',
+    'printf',
+    'env',
+)
+
 def summarize(value, receipt):
     result = {"receipt": receipt, "available": True}
     if not isinstance(value, dict):
@@ -187,6 +234,20 @@ def summarize(value, receipt):
         checksum = stage.get("stderrSha256")
         if isinstance(checksum, str) and re.fullmatch("[0-9a-f]{64}", checksum):
             row["stderrSha256"] = checksum
+        classification = stage.get("nonsecretFailureClassification")
+        if isinstance(classification, dict):
+            values = classification.get("classes")
+            if isinstance(values, dict):
+                fixed = {key: values[key] for key in CLASSIFIERS
+                         if type(values.get(key)) is bool}
+                if fixed:
+                    row["fixedFailureClasses"] = fixed
+            missing = classification.get("knownMissingCommands")
+            if isinstance(missing, list):
+                known = sorted({item for item in missing
+                                if isinstance(item, str) and item in KNOWN_COMMANDS})
+                if known:
+                    row["knownMissingCommands"] = known
         if row:
             rows.append(row)
     result["stages"] = rows

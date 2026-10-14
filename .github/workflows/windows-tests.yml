@@ -58,6 +58,19 @@ jobs:
       # positive allowlist rather than a list of WINDOWS_DIY_SKIP_* variables
       # for the other twenty-one, because a subtractive list would silently
       # start installing a twenty-third component the day one is added.
+      # The pinned Cap'n Proto constructor builds from source on native ARM64.
+      # Supply its declared CMake prerequisite from exact official archive pins.
+      - name: Provision pinned native CMake
+        shell: pwsh
+        run: |
+          $architecture = switch ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()) {
+            "Arm64" { "arm64" }
+            "X64" { "x64" }
+            default { throw "Unsupported native Windows CMake architecture." }
+          }
+          $destination = Join-Path $env:RUNNER_TEMP ("trace-capnp-cmake-" + [Guid]::NewGuid().ToString("N"))
+          ./ci/ensure-native-cmake.ps1 -Architecture $architecture -Destination $destination
+
       - name: Provision Cap'n Proto from the pinned component
         uses: metacraft-labs/metacraft-github-actions/setup-dev-env@dev
         with:

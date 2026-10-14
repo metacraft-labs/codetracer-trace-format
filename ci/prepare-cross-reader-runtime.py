@@ -166,6 +166,7 @@ def run_child(command, peer, role, child_env=None):
     # outcome metadata, never the raw activation/configuration payload.
     row['stdoutBytes'] = len(stdout)
     row['stderrBytes'] = len(stderr)
+    row['stderrSha256'] = hashlib.sha256(stderr).hexdigest()
     if child.returncode:
         # Diagnostics stay in memory. Emit only fixed classifications and
         # literal refusal prefixes from the already authenticated peer scripts.

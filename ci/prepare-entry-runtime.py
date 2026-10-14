@@ -197,6 +197,7 @@ def operation(name, argv, cwd):
     row['leader'] = process_identity(active.pid); save()
     stdout, stderr = active.communicate(); row['exit'] = active.returncode
     row['stdoutBytes'] = len(stdout); row['stderrBytes'] = len(stderr)
+    row['stderrSha256'] = hashlib.sha256(stderr).hexdigest()
     while True:
         row['drain'] = census(row['leader']['sid']); save()
         if row['drain']['unknown']: raise RuntimeError('Unknown runtime constructor session census')

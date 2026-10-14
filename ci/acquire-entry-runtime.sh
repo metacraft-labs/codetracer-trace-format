@@ -24,7 +24,14 @@ expected_drv=$("$nix_image" eval --raw --file ci/entry-runtime-profile.nix entry
 test "$("$nix_image" path-info --derivation "$profile")" = "$expected_drv"
 "$nix_image" store verify --recursive --no-trust "$profile"
 test "$(sha256sum "$(readlink -f "$nix_image")" | cut -d' ' -f1)" = "$nix_sha"
+set +e
 "$profile/bin/prepare-entry-runtime" --root "$root" --output "$root/.repro/build/entry-runtime"
+runtime_status=$?
+set -e
+if ((runtime_status != 0)); then
+  "$python_package/bin/python3" ci/report-runtime-constructor-failure.py "$root/.repro/build/entry-runtime" || echo "Public constructor diagnostic unavailable"
+  exit "$runtime_status"
+fi
 "$python_package/bin/python3" - "$root" "${GITHUB_ENV:?}" "${GITHUB_PATH:?}" "$python_package/bin" "$nix_package/bin" <<'PYTHON'
 from pathlib import Path
 import json, sys

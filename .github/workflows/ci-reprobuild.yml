@@ -72,6 +72,8 @@ jobs:
       - name: Expose the declared non-SIP shell
         if: runner.os != 'Windows'
         run: |
+          # Expand variables in the selected child shell, never the parent.
+          # shellcheck disable=SC2016
           nix develop --command bash -c '
             shell_path="$(command -v bash)"
             case "$shell_path" in
@@ -79,6 +81,19 @@ jobs:
               *) echo "Expected declared Nix bash, got $shell_path" >&2; exit 1 ;;
             esac
           '
+
+      - name: Capture public SDK build resource baseline
+        # Optional public diagnostics never replace or gate the original SDK build.
+        continue-on-error: true
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python_package="$(nix build --no-link --no-write-lock-file --print-out-paths .#ci-cross-reader-python)"
+          [[ "$python_package" =~ ^/nix/store/[a-z0-9]{32}-python3-[^[:space:]]+$ ]]
+          test "$(nix path-info --derivation "$python_package")" = "$(nix eval --raw .#ci-cross-reader-python.drvPath)"
+          printf 'TRACE_RESOURCE_PYTHON=%s/bin/python3\n' "$python_package" >> "$GITHUB_ENV"
+          "$python_package/bin/python3" ci/capture-sdk-resource-counters.py before --directory "$RUNNER_TEMP/trace-sdk-resources"
 
       - name: Setup dev env (reprobuild flavor)
         # setup-dev-env clones the siblings listed in .github/sibling-repos
@@ -90,6 +105,17 @@ jobs:
           repro-from-source: ${{ runner.os != 'Windows' && 'true' || 'false' }}
           repro-build-pin: "76659f5730ecf698b1963c656494d2cb66eb256d"
           gh-token: ${{ steps.ci_token.outputs.token }}
+
+      - name: Capture public SDK build resource outcome
+        continue-on-error: true
+        if: always() && runner.os == 'Linux'
+        shell: bash
+        run: |
+          if test -n "${TRACE_RESOURCE_PYTHON:-}" && test -f "$RUNNER_TEMP/trace-sdk-resources/before.json"; then
+            "$TRACE_RESOURCE_PYTHON" ci/capture-sdk-resource-counters.py after --directory "$RUNNER_TEMP/trace-sdk-resources"
+          else
+            echo 'SDK resource baseline unavailable; termination cause remains unassigned'
+          fi
 
       - name: Report measured Repro source identity
         if: runner.os != 'Windows'
@@ -123,6 +149,18 @@ jobs:
 
       - name: just test (cross-check)
         run: dev-exec just test
+
+      - name: Report public runtime constructor failure
+        # Diagnostics preserve the original failed action and never expose raw receipts.
+        if: failure() && runner.os == 'Linux'
+        continue-on-error: true
+        shell: bash
+        run: |
+          if test -n "${TRACE_RESOURCE_PYTHON:-}"; then
+            "$TRACE_RESOURCE_PYTHON" ci/report-runtime-constructor-failure.py "$GITHUB_WORKSPACE/.repro/build/entry-runtime"
+          else
+            echo 'Declared diagnostic Python unavailable; inner cause remains unassigned'
+          fi
 
       # Diagnostics on failure. Three things below are load-bearing:
       #

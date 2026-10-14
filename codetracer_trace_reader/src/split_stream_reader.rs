@@ -169,19 +169,21 @@ pub fn read_window(reader: &mut CtfsReader, start_step: u64, max_steps: u64) -> 
 
     // STEP addresses are a different space in a column-aware trace: each
     // `global_position_index` names a `(line, column)` pair, a file with a
-    // per-line table is `sum(line_lengths)` addresses wide and one without is
-    // `DEFAULT_LINES_PER_FILE` (`trace-events.md` §"Source Location
-    // Addressing"). Resolving those through the line space above read a
+    // per-line table is `sum(line_lengths)` addresses wide and one with the
+    // conventional table (`line_count = 0`) 100000 × 1024 (`trace-events.md`
+    // §"Source Location Addressing", `internal-files.md` §"`paths.dat` Layout
+    // A"). Resolving those through the line space above read a
     // column as a line and placed every later file at the wrong base.
     // `funcs.dat` addresses stay line addresses in both modes, so `space`
     // above is still the one functions resolve through.
     let mut step_space = if tables.is_column_aware() {
         let mut ps = codetracer_trace_writer::column_aware::PositionSpace::new(true);
         for path_id in 0..tables.path_count() {
-            let lls = tables
-                .path_line_lengths(path_id as u64)
-                .map_err(|e| format!("split-stream reader: path {path_id}'s line table is unreadable: {e}"))?;
-            ps.push_path(&lls);
+            let table = tables
+                .path_file_table(path_id as u64)
+                .map_err(|e| format!("split-stream reader: path {path_id}'s line table is unreadable: {e}"))?
+                .ok_or_else(|| format!("split-stream reader: path {path_id} has no Layout A table"))?;
+            ps.push_file_table(&table);
         }
         Some(ps)
     } else {
@@ -249,7 +251,7 @@ pub fn read_window(reader: &mut CtfsReader, start_step: u64, max_steps: u64) -> 
                 .read(idx)
                 .map_err(|e| format!("split-stream reader: I/O event {idx} is unreadable: {e}"))?;
             io_by_step.entry(rec.step_id).or_default().push((
-                event_log_kind_from_ordinal(rec.kind),
+                codetracer_trace_writer::event_stream::event_log_kind(rec.kind).map_err(|e| format!("split-stream reader: I/O event {idx}: {e}"))?,
                 String::from_utf8_lossy(&rec.metadata).into_owned(),
                 String::from_utf8_lossy(&rec.content).into_owned(),
             ));
@@ -362,33 +364,6 @@ fn decode_return_value(bytes: &[u8]) -> Result<ValueRecord, String> {
         return Ok(ValueRecord::None { type_id: TypeId(0) });
     }
     Ok(decode_cbor::<ValueRecord>(bytes, "a call's return value")?.unwrap_or(ValueRecord::None { type_id: TypeId(0) }))
-}
-
-fn event_log_kind_from_ordinal(kind: u8) -> EventLogKind {
-    // The ordinals are `EventLogKind`'s declaration order, and they are spelled
-    // out rather than guessed: the first draft of this list omitted the six
-    // unused middle variants (`ReadDir` … `Open`), which shifted `Error` and
-    // `TraceLogEvent` down by six and turned every recorded error into a
-    // `Write`. The test that caught it compares the kind it wrote against the
-    // kind it read back, which is the only reason a silent relabelling of one
-    // enum member onto another was visible at all.
-    match kind {
-        0 => EventLogKind::Write,
-        1 => EventLogKind::WriteFile,
-        2 => EventLogKind::WriteOther,
-        3 => EventLogKind::Read,
-        4 => EventLogKind::ReadFile,
-        5 => EventLogKind::ReadOther,
-        6 => EventLogKind::ReadDir,
-        7 => EventLogKind::OpenDir,
-        8 => EventLogKind::CloseDir,
-        9 => EventLogKind::Socket,
-        10 => EventLogKind::Open,
-        11 => EventLogKind::Error,
-        12 => EventLogKind::TraceLogEvent,
-        13 => EventLogKind::EvmEvent,
-        _ => EventLogKind::Write,
-    }
 }
 
 fn push_value_event(out: &mut Vec<TraceLowLevelEvent>, ev: ValueStreamEvent) -> Result<(), String> {

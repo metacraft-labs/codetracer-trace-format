@@ -31,6 +31,8 @@ ruzstd = "0.8.1"
 workspace = true
 
 [dev-dependencies]
+# Portable held Unix fixture authority, resolved by normal Cargo lock tooling.
+libc = "0.2"
 tempfile = "3"
 # M-REC-1: parse and validate UUIDv7 recording_id in integration tests.
 uuid = { version = "1.10", features = ["v7"] }

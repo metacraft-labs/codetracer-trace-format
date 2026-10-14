@@ -14,34 +14,16 @@ import repro_dsl_stdlib/foreign_env
 ## and the CI sharding the engine grows into per
 ## ``reprobuild-specs/CI-Sharding.md``.
 ##
-## **This repo is a LEAF (Rust virtual workspace).** Every member crate
-## in the root ``Cargo.toml`` ``[workspace] members`` list resolves
-## against another member of the same workspace (``path = "..."`` deps,
-## all in-repo) — there are NO ``../..`` sibling ``path`` deps and no
-## ``git`` deps, so there is no from-source ``uses: "<sibling>"`` edge.
-## The ``uses:`` block is the toolchain floor only. (See the note on
-## ``codetracer_trace_writer_nim`` below for the ONE cross-repo input,
-## which is consumed inside a cargo build.rs, not via reprobuild's
-## library-threading mechanism.)
-##
-## **Cross-repo note — the Nim FFI static library.** The
-## ``codetracer_trace_writer_nim`` member crate's ``build.rs`` compiles
-## the sibling ``codetracer-trace-format-nim`` repo's FFI entry point
-## (``src/codetracer_trace_writer_ffi.nim``) into a native static
-## library via a direct ``nim c --app:staticlib`` call, and resolves
-## that repo at ``../../codetracer-trace-format-nim`` (override:
-## ``CODETRACER_TRACE_FORMAT_NIM_DIR``). Because that ``nim c`` runs
-## INSIDE cargo's build.rs — out of reprobuild's reach — it is NOT a
-## reprobuild ``uses:``-library consumption (the SC-11 develop-mode
-## src-threading only applies to reprobuild's OWN ``nim.c`` edges, and
-## the target isn't in the AVAILABLE landed-sibling set anyway). The
-## build.rs handles its own Nim toolchain needs: it runs ``nimble
-## install --depsOnly`` to fetch the ``.nimble``'s ``stew`` / ``results``
-## requirements into the global nimble store, then invokes ``nim c``.
-## So the toolchain floor for THIS repo mirrors exactly what the
-## downstream recorder repos (evm, cairo, …) already declare for the
-## identical ``codetracer_trace_writer_nim`` dependency: ``nim`` +
-## ``nimble`` + ``capnp`` + ``zstd`` on top of the Rust toolchain.
+## The Rust virtual workspace keeps its in-repo Cargo members and the complete
+## original whole-workspace build/test commands. Its required cross-language
+## fixture producer and Nim FFI now declare the published sibling
+## ``codetracer_trace_format_nim`` library as a source dependency. The owning
+## generated lock binds that supplier; required producer artifacts feed the
+## original Cargo test edge through explicit inputs and fixture environment.
+## The FFI build.rs still compiles the actual sibling FFI entry point with the
+## declared Nim/Nimble/zstd toolchain; the required fixture gate also runs both
+## genuine language producers and readers. Compiler tools alone do not declare
+## this source supplier.
 ##
 ## **Per-test platform gating.** ``just test`` is ``cargo test
 ## --verbose`` — one whole-workspace cargo run. No test FILE in this
@@ -61,6 +43,14 @@ import repro_dsl_stdlib/foreign_env
 ## run with "typed tool provisioning is required for uses declarations".
 
 import repro_project_dsl
+import std/[os, strutils]
+when defined(linux) or defined(macosx):
+  import trace_nim_ffi_contribution
+import nimcrypto/sha2 as nativeCompilerHash
+
+when defined(linux):
+  const nativeCompilerLockIdentity =
+    "trace-native-c-owning-lock-sha256:" & $nativeCompilerHash.sha256.digest(staticRead("flake.lock"))
 
 package codetracer_trace_format:
   devEnv:
@@ -70,6 +60,10 @@ package codetracer_trace_format:
   defaultToolProvisioning "path"
 
   uses:
+    when defined(linux):
+      "traceformat_native_clang"
+      "traceformat_native_gcc"
+
     # Rust toolchain — declared by version so the tarball-direct
     # provisioning entries in repro_dsl_stdlib/packages/cargo.nim /
     # rustc.nim resolve on Windows. On Linux/macOS the nix flake
@@ -87,6 +81,15 @@ package codetracer_trace_format:
     # requirements.
     "nim >=2.2 <3.0"
     "nimble"
+    # Real required cross-language producer source, resolved from its owning library.
+    "codetracer_trace_format_nim"
+    "python3 >=3.11"
+    "git"
+    when not defined(windows):
+      "direnv"
+      "sh"
+      "traceformat_native_env"
+      "traceformat_entry_runtime"
 
     # Cap'n Proto schema compiler — ``codetracer_trace_format_capnp``'s
     # build.rs runs ``capnpc`` over ``src/trace.capnp``.
@@ -135,7 +138,9 @@ package codetracer_trace_format:
     # per-crate at action-end via the makeDepfile dependency policy the
     # cargo package declares).
     let workspaceInputs = @[
-      "Cargo.toml", "Cargo.lock",
+      "Cargo.toml", "Cargo.lock", "repro.lock",
+      "trace_nim_ffi_contribution.nim", "ci/locked-nim-library-profile.nix",
+      "ci/native-compiler-profiles.nix", "ci/cross-reader-profiles.nix", "flake.lock",
       "codetracer_trace_types",
       "codetracer_trace_format_capnp",
       "codetracer_trace_format_cbor_zstd",
@@ -187,10 +192,104 @@ package codetracer_trace_format:
       extraInputs = workspaceInputs,
       extraOutputs = @["target/debug/deps"])
 
+    # Real coupled artifacts are an explicit required test dependency.
+    # The original cargo execute edge consumes them; no missing-fixture skip.
+    let entryFixtureRoot = getCurrentDir() / "target" / "entry-fixtures"
+    var entryProducerArgv = @["python3", "-B", "tests/run_entry_coupled.py",
+      "--nim-environment-root", getCurrentDir().parentDir / "codetracer-trace-format-nim",
+      "--prepare-only", "--fixture-output", entryFixtureRoot]
+    when defined(windows):
+      let providerPath = getCurrentDir() / ".repro" / "entry-native-provider" / "profile.json"
+      discard readDevEnvFile(providerPath)
+      entryProducerArgv.add(["--windows-provider", providerPath])
+    else:
+      entryProducerArgv.add(["--direnv-from-unix-authority"])
+    let unixRuntimeRoot = ".repro/build/entry-runtime"
+    when not defined(windows):
+      let runtimePreparation = buildAction(
+        id = "codetracer-trace-format.entry-runtime",
+        call = inlineExecCall(@["prepare-entry-runtime", "--root", ".",
+          "--output", unixRuntimeRoot]),
+        deps = @[workspaceBuild.id],
+        inputs = @["repro.lock", "flake.lock", "ci/prepare-entry-runtime.py",
+          "ci/prepare-cross-reader-runtime.py", "ci/generated-runtime-namespace.py",
+          "ci/entry-runtime-profile.nix", "ci/cross-reader-profiles.nix",
+          "ci/locked-nim-library-profile.nix", "../codetracer-trace-format-nim"],
+        outputs = @[unixRuntimeRoot],
+        toolIdentityRefs = @["traceformat_entry_runtime"])
+      entryProducerArgv.add(["--unix-runtime-authority",
+        unixRuntimeRoot / "runtime/peer-runtime-proof.json"])
+      # The source-owned runtime producer creates the exact locked peer.
+      let peerArg = entryProducerArgv.find("--nim-environment-root")
+      if peerArg < 0: raise newException(ValueError, "Declared Nim environment argument absent")
+      entryProducerArgv[peerArg + 1] = unixRuntimeRoot / "codetracer-trace-format-nim"
+    let entryFixtures = buildAction(
+      id = "codetracer-trace-format.entry-fixtures",
+      call = inlineExecCall(entryProducerArgv),
+      deps = (when defined(windows): @[workspaceBuild.id]
+        else: @[workspaceBuild.id, runtimePreparation.id]),
+      inputs = workspaceInputs & @["repro.lock", "tests/entry_coupled.nim",
+        "tests/run_entry_coupled.py", "tests/publish_entry_fixtures.py",
+        "../codetracer-trace-format-nim"] & (when defined(windows): @[]
+        else: @[unixRuntimeRoot / "runtime/peer-runtime-proof.json"]),
+      outputs = @[entryFixtureRoot / "marked.ct", entryFixtureRoot / "unmarked.ct",
+        entryFixtureRoot / ".producer-owner"],
+      toolIdentityRefs = (when defined(windows):
+        @["python3", "git", "nim", "nimble", "cargo", "rustc"]
+      else:
+        @["python3", "git", "nim", "nimble", "cargo", "rustc", "direnv"]))
+
     let testsRun = cargo.test(
       locked = true,
       actionId = "codetracer-trace-format.cargo-test-run",
-      after = @[testsBuild.action],
-      extraInputs = workspaceInputs & @["target/debug/deps"])
+      after = @[testsBuild.action, entryFixtures],
+      extraInputs = workspaceInputs & @["target/debug/deps", entryFixtureRoot],
+      extraEnv = @[("ENTRY_NIM_FIXTURE_ROOT", entryFixtureRoot)])
+
+    when defined(linux):
+      for action in [workspaceBuild, testsBuild.action, testsRun.action]:
+        appendRegisteredActionToolIdentityRefs(action.id,
+          ["traceformat_native_clang", "traceformat_native_gcc",
+           "nim", "nimble", "git", "capnp", "zstd", "pkg-config"])
+
+    when not defined(windows):
+      # Original cross-read and durability tests spawn these declared tools.
+      appendRegisteredActionToolIdentityRefs(testsRun.action.id,
+        ["direnv", "sh", "traceformat_native_env"])
 
     discard collect("test", @[testsRun.action])
+
+when defined(linux):
+  package traceformat_native_clang:
+    provisioning:
+      nixPackage "nativeClang", executablePath = "bin/clang",
+        expressionFile = "ci/native-compiler-profiles.nix",
+        lockIdentity = nativeCompilerLockIdentity & ":clang"
+  package traceformat_native_gcc:
+    provisioning:
+      nixPackage "nativeGcc", executablePath = "bin/gcc",
+        expressionFile = "ci/native-compiler-profiles.nix",
+        lockIdentity = nativeCompilerLockIdentity & ":gcc"
+
+when not defined(windows):
+  const crossReaderProcessLockIdentity =
+    "trace-cross-reader-process-owning-lock-sha256:" & $nativeCompilerHash.sha256.digest(staticRead("flake.lock"))
+  package traceformat_native_env:
+    provisioning:
+      nixPackage "nativeEnv", expressionFile = "ci/native-compiler-profiles.nix",
+        executablePath = "bin/env", lockIdentity = crossReaderProcessLockIdentity
+
+when not defined(windows):
+  const entryRuntimeSourceIdentity = "trace-entry-runtime-source-sha256:" &
+    $nativeCompilerHash.sha256.digest(staticRead("ci/entry-runtime-profile.nix") &
+      staticRead("ci/prepare-entry-runtime.py") &
+      staticRead("ci/prepare-cross-reader-runtime.py") &
+      staticRead("ci/generated-runtime-namespace.py") &
+      staticRead("ci/cross-reader-profiles.nix") &
+      staticRead("ci/locked-nim-library-profile.nix") & staticRead("flake.lock") &
+      staticRead("repro.lock"))
+  package traceformat_entry_runtime:
+    provisioning:
+      nixPackage "entryRuntime", expressionFile = "ci/entry-runtime-profile.nix",
+        executablePath = "bin/prepare-entry-runtime",
+        lockIdentity = entryRuntimeSourceIdentity

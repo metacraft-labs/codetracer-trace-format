@@ -133,6 +133,8 @@ fn the_nim_writer_trait_surface_is_callable_and_harmless() {
     let mut writer = CtfsTraceWriter::new_in_memory("example", &[]);
     writer.set_recording_id(RECORDING_ID);
     writer.begin_writing_trace_events(Path::new("ignored")).unwrap();
+    // Before the first record: `meta.dat` is written by it.
+    TraceWriter::set_workdir(&mut writer, Path::new("/src"));
 
     assert!(!writer.dropped_column_awareness(), "nothing has asked for columns yet");
 

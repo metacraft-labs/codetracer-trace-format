@@ -118,15 +118,40 @@ fn decode_varint(data: &[u8], pos: &mut usize) -> Result<u64, String> {
 /// the seekable final-file reader uses, rather than re-implementing the decode —
 /// mirroring [`crate::step_stream_reader::decode_chunk_records`].
 pub fn decode_chunk_records(compressed: &[u8]) -> Result<Vec<ValueRecordEntry>, String> {
+    decode_records(compressed, None)
+}
+
+/// [`decode_chunk_records`] for chunk `chunk` of a stream of `chunk_size`
+/// records per chunk, whose refusals name each record by its index in the
+/// stream.
+pub fn decode_chunk_records_at(compressed: &[u8], chunk: usize, chunk_size: usize) -> Result<Vec<ValueRecordEntry>, String> {
+    decode_records(compressed, Some((chunk, chunk_size)))
+}
+
+/// Every record is framed by its length, and its events must fill the frame
+/// exactly (`trace-events.md` §"Call Stream", "Each record is framed by its
+/// length"): an event that runs past the frame is refused, naming the record.
+fn decode_records(compressed: &[u8], at: Option<(usize, usize)>) -> Result<Vec<ValueRecordEntry>, String> {
     let raw = decode_zstd_chunk(compressed)?;
     let mut records = Vec::new();
     let mut pos = 0usize;
     while pos < raw.len() {
-        let rec_len = decode_varint(&raw, &mut pos)? as usize;
+        let k = records.len();
+        let name = || match at {
+            Some((c, size)) => format!("values.dat record {} (record {k} of chunk {c})", c * size + k),
+            None => format!("values.dat record {k} of its chunk"),
+        };
+        let rec_len = decode_varint(&raw, &mut pos).map_err(|e| format!("{}: {e}", name()))? as usize;
         if pos + rec_len > raw.len() {
-            return Err("values.dat: record length extends past chunk".to_string());
+            return Err(format!("{}: its {rec_len}-byte frame extends past the chunk", name()));
         }
-        let rec = ValueRecordEntry::decode(&raw[pos..pos + rec_len])?;
+        let rec = ValueRecordEntry::decode(&raw[pos..pos + rec_len]).map_err(|e| {
+            format!(
+                "{}: {} — its events do not fill its {rec_len}-byte frame exactly",
+                name(),
+                e.trim_start_matches("values.dat: ")
+            )
+        })?;
         pos += rec_len;
         records.push(rec);
     }
@@ -174,7 +199,7 @@ impl ValueStreamReader {
             if start > end {
                 return Err("values.idx: last chunk offset past end of values.dat".to_string());
             }
-            let last_records = decode_chunk_records(&dat[start..end])?.len();
+            let last_records = decode_chunk_records_at(&dat[start..end], last_chunk, index.chunk_size)?.len();
             (last_chunk * index.chunk_size + last_records) as u64
         };
 
@@ -244,7 +269,7 @@ impl ValueStreamReader {
             if start > end || end > self.dat.len() {
                 return Err("values.dat: chunk offsets out of range".to_string());
             }
-            let records = decode_chunk_records(&self.dat[start..end])?;
+            let records = decode_chunk_records_at(&self.dat[start..end], chunk_number, self.index.chunk_size)?;
             self.cached_chunk = Some((chunk_number, records));
         }
 

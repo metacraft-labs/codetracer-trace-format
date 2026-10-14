@@ -29,8 +29,6 @@ jobs:
 
       - name: Checkout codetracer-trace-format
         uses: actions/checkout@v5
-        with:
-          path: codetracer-trace-format
 
       - name: Check required secrets
         run: |
@@ -57,7 +55,7 @@ jobs:
       # The action clones siblings adjacent to ${{ github.workspace }}
       # (i.e. at ${GITHUB_WORKSPACE}/../<name>); downstream steps below
       # reference them through ${SIBLINGS} accordingly. This repo's own
-      # checkout stays in the `codetracer-trace-format/` subdir.
+      # checkout is the workspace root, where the committed lock is read.
       - name: Setup dev env
         uses: metacraft-labs/metacraft-github-actions/setup-dev-env@dev
         with:
@@ -67,8 +65,8 @@ jobs:
           trusted-public-keys: ${{ vars.ATTIC_TRUSTED_PUBLIC_KEY }}
           siblings: |
             codetracer=${{ github.event.inputs.codetracer_ref }}
-            codetracer-native-recorder=main
-            codetracer-trace-format-nim=main
+            codetracer-native-recorder
+            codetracer-trace-format-nim
 
       # The siblings live at ${GITHUB_WORKSPACE}/../<name>. Expose that
       # parent directory once so the remaining steps can address each
@@ -137,7 +135,7 @@ jobs:
       - name: Replace trace-format submodule with PR code
         run: |
           rm -rf "${SIBLINGS}/codetracer/libs/codetracer-trace-format"
-          cp -r "${GITHUB_WORKSPACE}/codetracer-trace-format" "${SIBLINGS}/codetracer/libs/codetracer-trace-format"
+          cp -r "${GITHUB_WORKSPACE}" "${SIBLINGS}/codetracer/libs/codetracer-trace-format"
           cd "${SIBLINGS}/codetracer"
           git add libs/codetracer-trace-format
           git -c user.name="CI" -c user.email="ci@local" commit --no-gpg-sign -m "CI: use PR trace-format code" || true
@@ -167,6 +165,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: codetracer-integration-logs
-          path: ../codetracer/target/
+          path: ${{ env.SIBLINGS }}/codetracer/target/
           retention-days: 14
           if-no-files-found: ignore

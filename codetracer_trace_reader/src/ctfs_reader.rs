@@ -46,6 +46,13 @@ fn deserialize_cbor(data: &[u8]) -> Result<Vec<TraceLowLevelEvent>, Box<dyn std:
 /// from the `events.fmt` marker file.
 pub fn read_trace_from_ctfs(path: &std::path::Path) -> Result<Vec<TraceLowLevelEvent>, Box<dyn std::error::Error>> {
     let mut reader = CtfsReader::open(path)?;
+    if reader.list_files().iter().any(|name| name == "entry.dat") {
+        reader = reader.snapshot_owned()?;
+        if reader.list_files().iter().filter(|name| *name == "entry.dat").count() != 1 {
+            return Err("entry.dat: member changed during held-image capture".into());
+        }
+    }
+    crate::recorded_entry_reader::RecordedEntryReader::recorded_entry(&mut reader)?;
 
     // A CONFORMANT CONTAINER HAS NO `events.log` and is assembled from the split
     // streams instead.

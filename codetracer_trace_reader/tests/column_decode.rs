@@ -313,3 +313,42 @@ fn decoder_exposes_per_file_metadata_for_consumer_introspection() {
     assert_eq!(decoder.file_size(2), Some(7));
     assert_eq!(decoder.total_positions(), 82);
 }
+
+/// A file with the conventional table — a `paths.dat` record of `line_count =
+/// 0` — is 100000 lines of 1024 positions (`internal-files.md` §"`paths.dat`
+/// Layout A"), resolved by that rule. It is said so explicitly
+/// (`FileTable::Conventional`); the same table spelled out is the same file,
+/// and an empty `Lines` table is still a file of no positions.
+#[test]
+fn a_conventional_file_table_is_resolved_by_its_rule() {
+    use codetracer_trace_reader::global_position_decoder::FileTable;
+    let size = 100_000u64 * 1024;
+    for decoder in [
+        GlobalPositionDecoder::from_file_tables(vec![FileTable::Lines(vec![3]), FileTable::Conventional, FileTable::Lines(vec![2])]),
+        GlobalPositionDecoder::from_line_lengths(vec![vec![3], vec![1024; 100_000], vec![2]]),
+    ] {
+        assert_eq!(decoder.file_size(1), Some(size));
+        assert_eq!(decoder.file_base(2), Some(3 + size));
+        let at = |p: u64| decoder.decode_global_position_index(p).unwrap();
+        assert_eq!(at(3), DecodedPosition { file: 1, line: 1, column: 1 });
+        assert_eq!(
+            at(3 + 41 * 1024 + 1023),
+            DecodedPosition {
+                file: 1,
+                line: 42,
+                column: 1024
+            }
+        );
+        assert_eq!(
+            at(3 + size - 1),
+            DecodedPosition {
+                file: 1,
+                line: 100_000,
+                column: 1024
+            }
+        );
+        assert_eq!(at(3 + size), DecodedPosition { file: 2, line: 1, column: 1 });
+    }
+    let empty = GlobalPositionDecoder::from_line_lengths(vec![vec![3], vec![], vec![2]]);
+    assert_eq!(empty.file_size(1), Some(0), "an empty Vec is not silently the conventional table");
+}

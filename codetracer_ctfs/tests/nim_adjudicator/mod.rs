@@ -34,10 +34,79 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// Reuse only the complete runtime already qualified by the owning entry caller.
+pub fn declared_runtime_nim() -> Option<PathBuf> {
+    use sha2::{Digest, Sha256};
+    let receipt = std::env::var_os("ENTRY_NIM_RUNTIME_AUTHORITY")?;
+    let authority: serde_json::Value =
+        serde_json::from_slice(&fs::read(receipt).expect("declared runtime authority absent")).expect("malformed declared runtime authority");
+    assert_eq!(authority["schema"], "codetracer-trace-format.unix-runtime-authority.v1");
+    for field in ["finished", "success", "finalGuards"] {
+        assert_eq!(authority[field], true, "incomplete declared runtime authority");
+    }
+    let roles = authority["expectedSelectedImages"].as_object().expect("declared runtime roles absent");
+    assert_eq!(roles.len(), 5, "declared runtime role inventory differs");
+    for role in ["nim", "nimble", "git", "gcc", "bash"] {
+        let image = roles.get(role).expect("mandatory declared runtime role absent");
+        let lexical = PathBuf::from(image["lexical"].as_str().expect("declared runtime image path absent"));
+        let search = std::env::var_os("PATH").expect("declared runtime PATH absent");
+        let actual = std::env::split_paths(&search)
+            .map(|directory| directory.join(role))
+            .find(|candidate| {
+                let Ok(metadata) = fs::metadata(candidate) else {
+                    return false;
+                };
+                if !metadata.is_file() {
+                    return false;
+                }
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    metadata.permissions().mode() & 0o111 != 0
+                }
+                #[cfg(not(unix))]
+                {
+                    true
+                }
+            })
+            .expect("mandatory runtime PATH role absent");
+        assert_eq!(actual, lexical, "runtime PATH selected another image");
+        let resolved = fs::canonicalize(&lexical).expect("declared runtime image absent");
+        assert!(resolved.starts_with("/nix/store"), "declared runtime image is mutable");
+        assert_eq!(
+            resolved,
+            PathBuf::from(image["resolved"].as_str().expect("declared resolved image absent"))
+        );
+        let metadata = fs::metadata(&resolved).expect("declared runtime metadata absent");
+        assert!(metadata.is_file(), "declared runtime image is not regular");
+        assert_eq!(
+            format!("{:x}", Sha256::digest(fs::read(&resolved).expect("declared runtime image unreadable"))),
+            image["sha256"].as_str().expect("declared runtime image hash absent")
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            assert_eq!(Some(metadata.dev()), image["dev"].as_u64());
+            assert_eq!(Some(metadata.ino()), image["ino"].as_u64());
+            assert_eq!(Some((metadata.mode() & 0o7777) as u64), image["mode"].as_u64());
+        }
+    }
+    Some(PathBuf::from(roles["nim"]["lexical"].as_str().expect("declared Nim image absent")))
+}
+
+/// The Nim checkout to adjudicate with: the `CODETRACER_TRACE_FORMAT_NIM_DIR`
+/// override `codetracer_trace_writer_nim/build.rs` also honours, or the
+/// sibling repo.
+pub fn nim_repo() -> PathBuf {
+    std::env::var("CODETRACER_TRACE_FORMAT_NIM_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../codetracer-trace-format-nim"))
+}
+
 /// The sibling Nim checkout, the `direnv` that supplies its toolchain, and
 /// `HOME`. `None` means the cross-implementation half cannot run here.
 pub fn nim_checker() -> Option<(PathBuf, PathBuf, PathBuf)> {
-    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../codetracer-trace-format-nim");
+    let repo = nim_repo();
     if !repo.join("tests/check_ctfs_container.nim").exists() {
         eprintln!(
             "SKIP: the sibling codetracer-trace-format-nim checkout has no \
@@ -48,6 +117,9 @@ pub fn nim_checker() -> Option<(PathBuf, PathBuf, PathBuf)> {
         return None;
     }
     let home = PathBuf::from(std::env::var("HOME").ok()?);
+    if let Some(nim) = declared_runtime_nim() {
+        return Some((fs::canonicalize(&repo).ok()?, nim, home));
+    }
     let direnv = home.join(".nix-profile/bin/direnv");
     let direnv = if direnv.exists() {
         direnv
@@ -88,6 +160,11 @@ fn which_direnv() -> Option<PathBuf> {
 /// proving something about the wrong toolchain.
 pub fn run_nim_checker(work: &Path, container: &Path, present: &[(&str, &[u8])], absent: &[&str]) -> (String, bool) {
     let (repo, direnv, home) = nim_checker().expect("caller checked");
+    // Keep the empty-environment toolchain boundary. Only the declared matching
+    // hook constructor is forwarded; the sibling still admits its own compiler.
+    let constructor = PathBuf::from(std::env::var_os("REPROBUILD_REPRO").expect("declared matching hook constructor is required"));
+    let constructor = fs::canonicalize(constructor).expect("declared matching hook constructor is absent");
+    assert!(constructor.is_file(), "declared matching hook constructor is not a regular file");
 
     let mut manifest = String::new();
     for (name, body) in present {
@@ -103,15 +180,25 @@ pub fn run_nim_checker(work: &Path, container: &Path, present: &[(&str, &[u8])],
     let manifest_path = work.join("manifest.txt");
     fs::write(&manifest_path, &manifest).unwrap();
 
-    let out = Command::new("env")
-        .args([
-            "-i".into(),
+    let mut command = if let Some(nim) = declared_runtime_nim() {
+        // The entry caller forwards the complete, independently verified peer environment.
+        Command::new(nim)
+    } else {
+        let mut command = Command::new("env");
+        command.args([
+            "-i".to_string(),
             format!("HOME={}", home.display()),
-            "PATH=/run/current-system/sw/bin:/usr/bin:/bin".into(),
+            format!("REPROBUILD_REPRO={}", constructor.display()),
+            "PATH=/run/current-system/sw/bin:/usr/bin:/bin".to_string(),
             direnv.display().to_string(),
             "exec".into(),
             repo.display().to_string(),
             "nim".into(),
+        ]);
+        command
+    };
+    let out = command
+        .args([
             "c".into(),
             "-r".into(),
             "-d:release".into(),

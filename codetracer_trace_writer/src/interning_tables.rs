@@ -288,57 +288,54 @@ impl InterningTablesBuilder {
         self.varnames.len()
     }
 
+    /// The `paths.dat` record of path `id`, in the trace's layout.
+    pub fn path_record(&self, id: usize) -> Vec<u8> {
+        let raw_path = &self.paths[id];
+        if self.column_aware {
+            let path = String::from_utf8_lossy(raw_path);
+            let empty: Vec<u32> = Vec::new();
+            let lls = self.path_line_lengths.get(id).unwrap_or(&empty);
+            crate::column_aware::encode_path_record_layout_a(&path, lls)
+        } else if self.line_count_table {
+            let mut rec = Vec::with_capacity(raw_path.len() + 12);
+            encode_varint(raw_path.len() as u64, &mut rec);
+            rec.extend_from_slice(raw_path);
+            encode_varint(self.path_line_counts.get(id).copied().unwrap_or(0), &mut rec);
+            rec
+        } else {
+            raw_path.clone()
+        }
+    }
+
+    /// The `funcs.dat` record of function `id`: `global_line_index` + name.
+    pub fn func_record(&self, id: usize) -> Vec<u8> {
+        let (gli, name) = &self.funcs[id];
+        let mut rec = Vec::new();
+        encode_func_record(*gli, name, &mut rec);
+        rec
+    }
+
+    /// The `types.dat` record of type `id`: kind + lang_type + specific_info.
+    pub fn type_record(&self, id: usize) -> Vec<u8> {
+        let (kind, lang_type, specific_info) = &self.types[id];
+        let mut rec = Vec::new();
+        encode_type_record(*kind, lang_type, specific_info, &mut rec);
+        rec
+    }
+
+    /// The `varnames.dat` record of name `id`: its raw bytes.
+    pub fn varname_record(&self, id: usize) -> Vec<u8> {
+        self.varnames[id].clone()
+    }
+
     /// Finalize: encode all four `.dat` data files and their `.off` offset
     /// indices.
     pub fn finish(self) -> EncodedInterningTables {
-        // varnames.dat is a raw-byte table in both modes.
-        let (varnames_dat, varnames_off) = encode_raw_table(&self.varnames);
-
-        // paths.dat is raw bytes in line-only mode and Layout A in
-        // column-aware mode. The `.off` framing is identical either way — only
-        // the record contents change — so a reader that has the flag can parse
-        // and one that does not is required by spec to have refused the trace.
-        let (paths_dat, paths_off) = if self.column_aware {
-            let mut records: Vec<Vec<u8>> = Vec::with_capacity(self.paths.len());
-            for (id, raw_path) in self.paths.iter().enumerate() {
-                let path = String::from_utf8_lossy(raw_path);
-                let empty: Vec<u32> = Vec::new();
-                let lls = self.path_line_lengths.get(id).unwrap_or(&empty);
-                records.push(crate::column_aware::encode_path_record_layout_a(&path, lls));
-            }
-            encode_raw_table(&records)
-        } else if self.line_count_table {
-            let mut records: Vec<Vec<u8>> = Vec::with_capacity(self.paths.len());
-            for (id, raw_path) in self.paths.iter().enumerate() {
-                let mut rec = Vec::with_capacity(raw_path.len() + 12);
-                encode_varint(raw_path.len() as u64, &mut rec);
-                rec.extend_from_slice(raw_path);
-                encode_varint(self.path_line_counts.get(id).copied().unwrap_or(0), &mut rec);
-                records.push(rec);
-            }
-            encode_raw_table(&records)
-        } else {
-            encode_raw_table(&self.paths)
-        };
-
-        // funcs.dat: each record is global_line_index + name.
-        let mut func_records: Vec<Vec<u8>> = Vec::with_capacity(self.funcs.len());
-        for (gli, name) in &self.funcs {
-            let mut rec = Vec::new();
-            encode_func_record(*gli, name, &mut rec);
-            func_records.push(rec);
-        }
-        let (funcs_dat, funcs_off) = encode_raw_table(&func_records);
-
-        // types.dat: each record is kind + lang_type + specific_info.
-        let mut type_records: Vec<Vec<u8>> = Vec::with_capacity(self.types.len());
-        for (kind, lang_type, specific_info) in &self.types {
-            let mut rec = Vec::new();
-            encode_type_record(*kind, lang_type, specific_info, &mut rec);
-            type_records.push(rec);
-        }
-        let (types_dat, types_off) = encode_raw_table(&type_records);
-
+        let table = |n: usize, f: &dyn Fn(usize) -> Vec<u8>| encode_raw_table(&(0..n).map(f).collect::<Vec<_>>());
+        let (paths_dat, paths_off) = table(self.paths.len(), &|i| self.path_record(i));
+        let (funcs_dat, funcs_off) = table(self.funcs.len(), &|i| self.func_record(i));
+        let (types_dat, types_off) = table(self.types.len(), &|i| self.type_record(i));
+        let (varnames_dat, varnames_off) = table(self.varnames.len(), &|i| self.varname_record(i));
         EncodedInterningTables {
             paths_dat,
             paths_off,

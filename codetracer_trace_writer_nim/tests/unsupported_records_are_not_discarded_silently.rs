@@ -7,7 +7,7 @@
 //! [`NimTraceWriter`] operations have no counterpart in the Nim C API —
 //! `drop_variables` and `drop_variable` (both since fixed, see below),
 //! `register_compound_value`, `register_cell_value`, `assign_compound_item`,
-//! `assign_cell`, `register_variable`, `bind_variable`,
+//! `assign_cell`, `register_variable`, `bind_variable` (all since fixed),
 //! `assign` (since fixed, see below), `register_asm`,
 //! `drop_last_step`.  Each was a bare no-op carrying the comment
 //! `// Not exposed in the Nim C API — no-op`.
@@ -26,7 +26,7 @@
 //!    lost it (`discard_is_counted_and_named`).
 //! 2. The `add_event` dispatch path — the one recorders actually use — is
 //!    covered, not just the direct method call
-//!    (`add_event_bind_variable_is_counted_not_swallowed`).
+//!    (`add_event_asm_is_counted_not_swallowed`).
 //! 3. An operation the backend really does support does NOT get counted, so
 //!    the counter cannot pass by over-reporting
 //!    (`supported_operations_are_not_counted_as_discards`).
@@ -52,9 +52,14 @@
 //! tag-2 value-stream events respectively, both asserted by
 //! `tests/drop_variables_reach_the_trace.rs`.
 //!
-//! The tests below therefore use `bind_variable` — still genuinely
-//! unsupported, and in the same variable-lifetime family — as the
-//! representative discard, so they keep testing the discard MECHANISM rather
+//! Nor are the place-model operations (`bind_variable`,
+//! `register_variable`, `register_cell_value`, `register_compound_value`,
+//! `assign_cell`, `assign_compound_item`): value-stream tags 1 and 4-8 have
+//! entry points of their own, and a refusal at one of them is counted with the
+//! reason the Nim side gave.
+//!
+//! The tests below therefore use `register_asm` — still genuinely
+//! unsupported — as the representative discard, so they keep testing the discard MECHANISM rather
 //! than any particular operation's state of repair.  Expect this exemplar to
 //! move again: each entry point that lands retires the one before it, and a
 //! test pinned to a fixed operation would quietly become a test of nothing.
@@ -114,7 +119,7 @@ fn all_bytes_written_under(dir: &Path) -> Vec<u8> {
     out
 }
 
-use codetracer_trace_types::{BindVariableRecord, Line, Place, TraceLowLevelEvent, ValueRecord, VariableId};
+use codetracer_trace_types::{Line, TraceLowLevelEvent, ValueRecord, VariableId};
 use codetracer_trace_writer_nim::{strict_from_env_value, NimTraceWriter, TraceEventsFileFormat};
 
 /// The Nim runtime is **not** thread-safe — its global state lives behind a
@@ -162,47 +167,37 @@ fn discard_is_counted_and_named() {
         "a fresh writer must not claim to have discarded anything"
     );
 
-    writer.bind_variable("a", Place(0));
-    writer.register_variable("c", Place(1));
-    // THE TYPE IS REGISTERED, because a bare `TypeId(0)` is a DANGLING id and
-    // the writer now refuses one by name. There is no auto-registration rule in
-    // the spec, no reserved ids, and no defined behaviour for an id nobody
-    // interned — so this used to work only because the binding invented a
-    // `type_0` name to satisfy a C ABI that had no way to accept an id.
-    let tid = writer.ensure_type_id(codetracer_trace_types::TypeKind::Int, "Int");
-    writer.register_compound_value(Place(0), ValueRecord::Int { i: 1, type_id: tid });
+    writer.register_asm(&["nop".to_string()]);
+    writer.register_asm(&["ret".to_string()]);
+    writer.drop_last_step();
 
     let counts = writer.discarded_record_counts();
     assert_eq!(
-        counts.get("bind_variable").copied(),
-        Some(1),
-        "a `bind_variable` call that persists nothing must be counted; \
+        counts.get("register_asm").copied(),
+        Some(2),
+        "a `register_asm` call that persists nothing must be counted; \
          counts were {counts:?}"
     );
-    assert_eq!(counts.get("register_variable").copied(), Some(1), "{counts:?}");
-    assert_eq!(counts.get("register_compound_value").copied(), Some(1), "{counts:?}");
+    assert_eq!(counts.get("drop_last_step").copied(), Some(1), "{counts:?}");
     assert_eq!(writer.discarded_record_total(), 3);
 }
 
 /// The path recorders actually use.  An `add_event` whose variant dispatches
 /// into an unsupported operation must not be able to vanish.
 #[test]
-fn add_event_bind_variable_is_counted_not_swallowed() {
+fn add_event_asm_is_counted_not_swallowed() {
     let _guard = nim_lock();
     let (_dir, mut writer) = make_writer("discard_add_event");
 
     writer.start(Path::new("/tmp/discard_add_event.rb"), Line(1));
     writer.register_step(Path::new("/tmp/discard_add_event.rb"), Line(2));
 
-    writer.add_event(TraceLowLevelEvent::BindVariable(BindVariableRecord {
-        variable_id: VariableId(0),
-        place: Place(0),
-    }));
+    writer.add_event(TraceLowLevelEvent::Asm(vec!["nop".to_string()]));
 
     assert_eq!(
-        writer.discarded_record_counts().get("bind_variable").copied(),
+        writer.discarded_record_counts().get("register_asm").copied(),
         Some(1),
-        "`add_event(BindVariable)` dispatches into `bind_variable`, which \
+        "`add_event(Asm)` dispatches into `register_asm`, which \
          cannot persist the record.  Before this was counted, the record was \
          dropped and the trace looked complete: counts were {:?}",
         writer.discarded_record_counts()
@@ -335,7 +330,7 @@ fn the_discard_tally_survives_close() {
     let _guard = nim_lock();
     let (_dir, mut writer) = make_writer("discard_survives_close");
 
-    writer.bind_variable("a", Place(0));
+    writer.register_asm(&["nop".to_string()]);
     assert_eq!(writer.discarded_record_total(), 1, "precondition");
 
     writer.finish_writing_trace_events().expect("finish_events");
@@ -350,7 +345,7 @@ fn the_discard_tally_survives_close() {
         writer.discarded_record_counts()
     );
     assert_eq!(
-        writer.discarded_record_counts().get("bind_variable").copied(),
+        writer.discarded_record_counts().get("register_asm").copied(),
         Some(1),
         "the per-operation attribution must survive close() too"
     );
@@ -358,12 +353,12 @@ fn the_discard_tally_survives_close() {
 
 /// Strict mode refuses to produce a knowingly incomplete trace.
 #[test]
-#[should_panic(expected = "cannot persist a `bind_variable` record")]
+#[should_panic(expected = "cannot persist a `register_asm` record")]
 fn strict_mode_refuses_to_produce_an_incomplete_trace() {
     let _guard = nim_lock();
     let (_dir, mut writer) = make_writer("discard_strict");
     writer.set_strict(true);
-    writer.bind_variable("a", Place(0));
+    writer.register_asm(&["nop".to_string()]);
 }
 
 /// The documented spellings, and nothing else, enable strict mode.

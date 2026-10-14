@@ -58,6 +58,19 @@ jobs:
       # positive allowlist rather than a list of WINDOWS_DIY_SKIP_* variables
       # for the other twenty-one, because a subtractive list would silently
       # start installing a twenty-third component the day one is added.
+      # The pinned Cap'n Proto constructor builds from source on native ARM64.
+      # Supply its declared CMake prerequisite from exact official archive pins.
+      - name: Provision pinned native CMake
+        shell: pwsh
+        run: |
+          $architecture = switch ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()) {
+            "Arm64" { "arm64" }
+            "X64" { "x64" }
+            default { throw "Unsupported native Windows CMake architecture." }
+          }
+          $destination = Join-Path $env:RUNNER_TEMP ("trace-capnp-cmake-" + [Guid]::NewGuid().ToString("N"))
+          ./ci/ensure-native-cmake.ps1 -Architecture $architecture -Destination $destination
+
       - name: Provision Cap'n Proto from the pinned component
         uses: metacraft-labs/metacraft-github-actions/setup-dev-env@dev
         with:
@@ -102,6 +115,66 @@ jobs:
           }
           Write-Host "capnp: $($capnp.Source)"
           & $capnp.Source --version
+      - name: Provision the declared native entry-gate Python
+        id: entry_python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: 3.13.16
+          architecture: ${{ matrix.runner == 'eph-win-arm64' && 'arm64' || 'x64' }}
+
+      - name: Select the locked entry-gate Nim supplier
+        id: entry_nim
+        shell: pwsh
+        env:
+          ENTRY_GATE_PYTHON: ${{ steps.entry_python.outputs.python-path }}
+        run: '& $env:ENTRY_GATE_PYTHON -I -B ci/select-entry-nim-supplier.py'
+
+      - name: Materialize the real locked Nim supplier
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: metacraft-labs/codetracer-trace-format-nim
+          ref: ${{ steps.entry_nim.outputs.revision }}
+          token: ${{ steps.ci_token.outputs.token }}
+          path: .ci-entry-nim-supplier
+          persist-credentials: false
+
+      - name: Provision the declared native entry compiler and Zstd
+        shell: pwsh
+        env:
+          ENTRY_GATE_PYTHON: ${{ steps.entry_python.outputs.python-path }}
+        run: |
+          & $env:ENTRY_GATE_PYTHON -I -B ci/native-entry-provider.py --output "$env:RUNNER_TEMP/entry-provider-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.runner }}" --nim-supplier .ci-entry-nim-supplier --nim-revision "${{ steps.entry_nim.outputs.revision }}"
+
+      - name: Provision the matching LLVM Rust target
+        shell: pwsh
+        env:
+          ENTRY_GATE_PYTHON: ${{ steps.entry_python.outputs.python-path }}
+        run: |
+          $machine = & $env:ENTRY_GATE_PYTHON -I -B -c "import platform; print(platform.machine().upper())"
+          if ($LASTEXITCODE -ne 0) { throw 'Declared native Python host probe failed' }
+          $target = switch ($machine.Trim()) { 'ARM64' { 'aarch64-pc-windows-gnullvm' }; 'AMD64' { 'x86_64-pc-windows-gnullvm' }; default { throw 'Unsupported actual native host' } }
+          rustup target add $target
+
+      - name: Run the required native coupled entry and sealed gate
+        shell: pwsh
+        env:
+          ENTRY_GATE_PYTHON: ${{ steps.entry_python.outputs.python-path }}
+        run: |
+          & $env:ENTRY_GATE_PYTHON -I -B tests/run_entry_coupled.py --work-root "$env:RUNNER_TEMP/entry-gate-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.runner }}" --nim-environment-root .ci-entry-nim-supplier --windows-provider "$env:RUNNER_TEMP/entry-provider-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.runner }}/frontend-component.json"
+
+      - name: Preserve native entry-provider evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-entry-provider-${{ matrix.runner }}
+          path: |
+            ${{ runner.temp }}/entry-provider-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.runner }}/**/*.json
+            ${{ runner.temp }}/entry-provider-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.runner }}/*.stdout
+            ${{ runner.temp }}/entry-provider-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.runner }}/*.stderr
+            ${{ runner.temp }}/entry-gate-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.runner }}/nim-images/*.ct
+            ${{ runner.temp }}/entry-gate-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.runner }}/rust-images/*.ct
+          if-no-files-found: error
+
       # Two crates are excluded on Windows:
       #
       # * codetracer_trace_writer_nim: links against libcodetracer_trace_writer.a

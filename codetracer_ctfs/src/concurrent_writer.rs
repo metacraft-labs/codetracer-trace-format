@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::base40::base40_encode;
 use crate::block_alloc::AtomicBlockAllocator;
-use crate::file_entry::FILE_ENTRY_SIZE;
+use crate::file_entry::{MemberLayout, FILE_ENTRY_SIZE};
 use crate::header::{ExtendedHeader, Header, EXTENDED_HEADER_SIZE, HEADER_SIZE};
 use crate::pread_compat::{pread_exact, pwrite_all};
 use crate::CtfsError;
@@ -13,6 +13,7 @@ use crate::CtfsError;
 #[derive(Debug)]
 struct FileEntryState {
     name_encoded: u64,
+    /// The committed `MapBlock` (see [`MemberLayout`]), updated on flush.
     map_block: u64,
     /// The committed size visible to readers (updated on flush).
     size: u64,
@@ -46,31 +47,35 @@ unsafe impl Send for ConcurrentCtfsWriter {}
 unsafe impl Sync for ConcurrentCtfsWriter {}
 
 /// Per-file writer handle. Owned by one thread, NOT shared.
+///
+/// Lays a member out exactly as `CtfsWriter` does (`ctfs-container.md` §2):
+/// empty until written, one direct data block while it fits one block, and a
+/// mapping — claimed before the new data blocks, with the direct block in slot
+/// 0 — once it outgrows it. Blocks are claimed by the append that reaches
+/// them.
 pub struct FileWriter {
     file_index: usize,
     name_encoded: u64,
-    root_block: u64,
-    /// Total data blocks written (full blocks flushed to disk).
+    layout: MemberLayout,
+    /// Data blocks whose bytes are complete on disk.
     data_block_count: u64,
     /// Total logical bytes written.
     size: u64,
-    /// Buffered partial block data.
+    /// Bytes of the partial last block.
     buffer: Vec<u8>,
-    /// The data block a `flush` published the current partial `buffer` into,
-    /// if there has been one since the last complete block.
+    /// The block claimed for logical block `data_block_count`, which `buffer`
+    /// fills.
     ///
     /// A flush has to make the partial block visible to readers, but it must
     /// **not** consume a logical block index: the bytes that arrive next belong
     /// to the same logical block, because every reader resolves logical byte
-    /// `p` to logical block `p / block_size`. So the block is allocated once,
-    /// its pointer is inserted into the mapping chain at the *current*
-    /// `data_block_count`, and `data_block_count` stays put; the block is
-    /// rewritten in place on each further flush and finally handed to
-    /// `flush_data_block` when the buffer fills, which is the point at which
-    /// the index is consumed.
+    /// `p` to logical block `p / block_size`. So the block is claimed once,
+    /// its pointer placed at the *current* `data_block_count`, and the block
+    /// rewritten in place on each further flush until the buffer fills, which
+    /// is the point at which the index is consumed.
     ///
-    /// This mirrors `CtfsWriter::sync_entry` / `pending_block` in `writer.rs`;
-    /// the two writers must lay out the same blocks for the same byte stream.
+    /// This mirrors `CtfsWriter`'s `pending_block` in `writer.rs`; the two
+    /// writers must lay out the same blocks for the same byte stream.
     pending_block: Option<u64>,
     block_size: u32,
 }
@@ -125,11 +130,8 @@ impl ConcurrentCtfsWriter {
         // Build the entire root block in memory and write with pwrite
         let mut root_block = vec![0u8; block_size as usize];
 
-        // THROUGH `Header::write_to`, NOT BY HAND. Bytes 6 and 7 mean different
-        // things per version — compression/encryption under v2/v3, encryption/
-        // max_shards under v4 — so a second open-coded copy of the layout is a
-        // second thing to keep correct, and this one would have gone on writing
-        // the v3 meaning under a v4 version byte.
+        // Through `Header::write_to`, not by hand, so the header layout has
+        // one definition.
         let header = Header::new();
         let mut header_bytes = Vec::with_capacity(crate::header::HEADER_SIZE);
         header.write_to(&mut header_bytes)?;
@@ -166,20 +168,20 @@ impl ConcurrentCtfsWriter {
 
         let file_index = entries.len();
 
-        // Allocate a level-1 mapping block for this file
-        let map_block = self.allocator.allocate();
-        write_zero_block_at(&self.file, map_block, self.block_size)?;
-
+        // Created empty: the name is written and no block is claimed
+        // (`ctfs-container.md` §5, "Creating a File").
         entries.push(FileEntryState {
             name_encoded,
-            map_block,
+            map_block: 0,
             size: 0,
         });
+        let entry_offset = self.entries_offset + (file_index as u64) * FILE_ENTRY_SIZE as u64;
+        pwrite_all(&self.file, &name_encoded.to_le_bytes(), entry_offset + 16)?;
 
         Ok(FileWriter {
             file_index,
             name_encoded,
-            root_block: map_block,
+            layout: MemberLayout::Empty,
             data_block_count: 0,
             size: 0,
             buffer: Vec::new(),
@@ -222,93 +224,83 @@ struct MappingInsert<'a> {
 }
 
 impl FileWriter {
-    /// Write data to this file (appends to end).
+    /// Write data to this file (appends to end), claiming every block the
+    /// appended bytes reach.
     pub fn write(&mut self, parent: &ConcurrentCtfsWriter, data: &[u8]) -> Result<usize, CtfsError> {
         let bs = self.block_size as usize;
         self.buffer.extend_from_slice(data);
         self.size += data.len() as u64;
 
-        // Flush complete blocks
         while self.buffer.len() >= bs {
+            let block = match self.pending_block.take() {
+                Some(b) => b,
+                None => self.claim_data_block(parent)?,
+            };
             let block_data: Vec<u8> = self.buffer.drain(..bs).collect();
-            self.flush_data_block(parent, &block_data)?;
+            write_block_data_at(&parent.file, block, &block_data, self.block_size)?;
+            self.data_block_count += 1;
+        }
+        if !self.buffer.is_empty() && self.pending_block.is_none() {
+            self.pending_block = Some(self.claim_data_block(parent)?);
         }
 
         Ok(data.len())
     }
 
-    /// Flush any buffered data and update the file entry size in the parent.
-    ///
-    /// A partial block is published through a *pending* block that keeps its
-    /// logical index, so writing can continue afterwards. Draining the buffer
-    /// into a fresh block instead — which is what this did before — advanced
-    /// the logical block index by one while the entry's `size` kept counting
-    /// bytes contiguously, so every reader placed the post-flush bytes one
-    /// block too early and served the flushed block's zero padding as content.
+    /// Publish the bytes written so far: the partial block's bytes, then the
+    /// entry's `MapBlock`, then its `Size` (`ctfs-container.md` §6, "Writer
+    /// Protocol"), so a reader that sees the new `Size` sees the layout that
+    /// holds it.
     pub fn flush(&mut self, parent: &ConcurrentCtfsWriter) -> Result<(), CtfsError> {
-        // Publish the partial block without consuming its logical index.
-        if !self.buffer.is_empty() {
-            let bs = self.block_size;
-            let data_block = match self.pending_block {
-                Some(block) => block,
-                None => {
-                    let n = bs as u64 / 8;
-                    let usable = n - 1;
-                    let block_index = self.data_block_count;
-                    let root_block = self.root_block;
-                    let data_block = parent.allocator.allocate();
-                    self.insert_data_block_chain(parent, root_block, block_index, data_block, usable, bs)?;
-                    self.pending_block = Some(data_block);
-                    data_block
-                }
-            };
+        if let Some(block) = self.pending_block {
             // Rewritten whole each time, so stale padding from an earlier
             // flush of the same block cannot survive under later bytes.
-            write_block_data_at(&parent.file, data_block, &self.buffer, bs)?;
+            write_block_data_at(&parent.file, block, &self.buffer, self.block_size)?;
         }
 
-        // Update file entry size in the parent (in-memory)
+        let map_block = self.layout.map_block();
         {
             let mut entries = parent.file_entries.lock().unwrap();
+            entries[self.file_index].map_block = map_block;
             entries[self.file_index].size = self.size;
         }
 
-        // Write the file entry to disk so readers can see the updated size
         let entry_offset = parent.entries_offset + (self.file_index as u64) * FILE_ENTRY_SIZE as u64;
-        let mut buf = [0u8; FILE_ENTRY_SIZE];
-        buf[0..8].copy_from_slice(&self.size.to_le_bytes());
-        buf[8..16].copy_from_slice(&self.root_block.to_le_bytes());
-        buf[16..24].copy_from_slice(&self.name_encoded.to_le_bytes());
-        pwrite_all(&parent.file, &buf, entry_offset)?;
+        pwrite_all(&parent.file, &map_block.to_le_bytes(), entry_offset + 8)?;
+        pwrite_all(&parent.file, &self.size.to_le_bytes(), entry_offset)?;
+        pwrite_all(&parent.file, &self.name_encoded.to_le_bytes(), entry_offset + 16)?;
 
         Ok(())
     }
 
-    /// Flush a single data block into the mapping chain.
-    fn flush_data_block(&mut self, parent: &ConcurrentCtfsWriter, block_data: &[u8]) -> Result<(), CtfsError> {
+    /// Claim the data block for logical block `data_block_count`, moving the
+    /// member to the layout its size now needs: a direct block while it fits
+    /// one block; otherwise a mapping block first (holding the direct block in
+    /// slot 0, if there was one), then the data block.
+    fn claim_data_block(&mut self, parent: &ConcurrentCtfsWriter) -> Result<u64, CtfsError> {
         let bs = self.block_size;
-        let n = bs as u64 / 8;
-        let usable = n - 1;
-
-        // If a `flush` already published this logical block as a pending
-        // block, reuse it: its pointer is in the mapping chain at this very
-        // index, and allocating a second block here is what shifted every
-        // subsequent byte one block forward.
-        let data_block = match self.pending_block.take() {
-            Some(pending) => pending,
-            None => {
-                let data_block = parent.allocator.allocate();
-                let block_index = self.data_block_count;
-                // Navigate the bottom-up chain to insert the data block pointer
-                self.insert_data_block_chain(parent, self.root_block, block_index, data_block, usable, bs)?;
-                data_block
+        let usable = bs as u64 / 8 - 1;
+        let block_index = self.data_block_count;
+        let mapping = match self.layout {
+            MemberLayout::Empty if self.size <= bs as u64 => {
+                let b = parent.allocator.allocate();
+                self.layout = MemberLayout::Direct(b);
+                return Ok(b);
             }
+            MemberLayout::Empty | MemberLayout::Direct(_) => {
+                let m = parent.allocator.allocate();
+                write_zero_block_at(&parent.file, m, bs)?;
+                if let MemberLayout::Direct(b) = self.layout {
+                    write_ptr_at(&parent.file, m, 0, b, bs)?;
+                }
+                m
+            }
+            MemberLayout::Mapped(m) => m,
         };
-        write_block_data_at(&parent.file, data_block, block_data, bs)?;
-
-        self.data_block_count += 1;
-
-        Ok(())
+        self.layout = MemberLayout::Mapped(mapping);
+        let data_block = parent.allocator.allocate();
+        self.insert_data_block_chain(parent, mapping, block_index, data_block, usable, bs)?;
+        Ok(data_block)
     }
 
     /// Insert a data block pointer at the given block_index using the bottom-up chain model.

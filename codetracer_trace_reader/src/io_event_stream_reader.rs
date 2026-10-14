@@ -83,29 +83,45 @@ fn decode_varint(data: &[u8], pos: &mut usize) -> Result<u64, String> {
     Ok(result)
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn decode_zstd_chunk(compressed: &[u8]) -> Result<Vec<u8>, String> {
+    zstd::decode_all(std::io::Cursor::new(compressed)).map_err(|e| format!("events.dat: zstd decode failed: {e}"))
+}
+
+#[cfg(target_arch = "wasm32")]
+fn decode_zstd_chunk(compressed: &[u8]) -> Result<Vec<u8>, String> {
+    use std::io::Read;
+
+    let mut decoder =
+        ruzstd::decoding::StreamingDecoder::new(std::io::Cursor::new(compressed)).map_err(|e| format!("events.dat: zstd decode failed: {e}"))?;
+    let mut raw = Vec::new();
+    decoder
+        .read_to_end(&mut raw)
+        .map_err(|e| format!("events.dat: zstd decode failed: {e}"))?;
+    Ok(raw)
+}
+
 /// Decompress one chunk and decode all of its length-prefixed I/O event records.
-fn decode_chunk_records(compressed: &[u8]) -> Result<Vec<IoEventRecord>, String> {
-    let raw = zstd::decode_all(std::io::Cursor::new(compressed)).map_err(|e| format!("events.dat: zstd decode failed: {e}"))?;
+fn decode_chunk_records(compressed: &[u8], chunk: usize, chunk_size: usize) -> Result<Vec<IoEventRecord>, String> {
+    let raw = decode_zstd_chunk(compressed)?;
     let mut records = Vec::new();
     let mut pos = 0usize;
     while pos < raw.len() {
-        let rec_len = decode_varint(&raw, &mut pos)? as usize;
+        let k = records.len();
+        let name = format!("events.dat record {} (record {k} of chunk {chunk})", chunk * chunk_size + k);
+        let rec_len = decode_varint(&raw, &mut pos).map_err(|e| format!("{name}: {e}"))? as usize;
         if pos + rec_len > raw.len() {
-            return Err("events.dat: record length extends past chunk".to_string());
+            return Err(format!("{name}: its {rec_len}-byte frame extends past the chunk"));
         }
-        let rec = IoEventRecord::decode(&raw[pos..pos + rec_len])?;
+        // `decode` refuses a record whose fields do not consume its frame
+        // exactly (`trace-events.md`, "Each record is framed by its length").
+        let rec = IoEventRecord::decode(&raw[pos..pos + rec_len]).map_err(|e| format!("{name}: {}", e.trim_start_matches("events.dat: ")))?;
         pos += rec_len;
         records.push(rec);
     }
     Ok(records)
 }
 
-/// A seekable, paginated reader over a container's `events.dat` stream.
-///
-/// The index (`events.idx`) and the raw `events.dat` bytes are loaded once; each
-/// `read`/`read_page` decompresses only the chunk(s) the request spans. A simple
-/// last-chunk cache avoids re-decompressing when reads are sequential or
-/// clustered within a chunk.
 pub struct IoEventStreamReader {
     index: EventsIndex,
     dat: Vec<u8>,
@@ -143,7 +159,7 @@ impl IoEventStreamReader {
             if start > end {
                 return Err("events.idx: last chunk offset past end of events.dat".to_string());
             }
-            let last_records = decode_chunk_records(&dat[start..end])?.len();
+            let last_records = decode_chunk_records(&dat[start..end], last_chunk, index.chunk_size)?.len();
             (last_chunk * index.chunk_size + last_records) as u64
         };
 
@@ -189,7 +205,7 @@ impl IoEventStreamReader {
             if start > end || end > self.dat.len() {
                 return Err("events.dat: chunk offsets out of range".to_string());
             }
-            let records = decode_chunk_records(&self.dat[start..end])?;
+            let records = decode_chunk_records(&self.dat[start..end], chunk_number, self.index.chunk_size)?;
             self.cached_chunk = Some((chunk_number, records));
         }
         Ok(())

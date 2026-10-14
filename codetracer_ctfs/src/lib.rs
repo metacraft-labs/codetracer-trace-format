@@ -69,7 +69,12 @@ impl fmt::Display for CtfsError {
         match self {
             CtfsError::Io(e) => write!(f, "I/O error: {}", e),
             CtfsError::InvalidMagic => write!(f, "invalid CTFS magic bytes"),
-            CtfsError::InvalidVersion(v) => write!(f, "unsupported CTFS version: {}", v),
+            CtfsError::InvalidVersion(v) => write!(
+                f,
+                "unsupported CTFS container version {v}: this reader reads version {} only, and a container of any other \
+                 version is re-recorded rather than read (ctfs-container.md §2, \"Older versions are refused\")",
+                header::VERSION
+            ),
             CtfsError::InvalidBlockSize(s) => write!(f, "invalid block size: {}", s),
             CtfsError::FileNotFound(n) => write!(f, "file not found: {}", n),
             CtfsError::TooManyFiles => write!(f, "too many files in container"),
@@ -348,9 +353,9 @@ mod tests {
 
         // Magic bytes
         assert_eq!(&buf[0..5], &[0xC0, 0xDE, 0x72, 0xAC, 0xE2]);
-        // Version 4, which is the value `ctfs-container.md` section 1 states.
-        assert_eq!(buf[5], 4);
-        // Under v4: byte 6 = Encryption (none), byte 7 = MaxShards (0 = not sharded).
+        // Version 5, which is the value `ctfs-container.md` section 1 states.
+        assert_eq!(buf[5], 5);
+        // Byte 6 = Encryption (none), byte 7 = MaxShards (0 = not sharded).
         assert_eq!(&buf[6..8], &[0, 0]);
     }
 
@@ -563,16 +568,13 @@ mod tests {
         }
     }
 
-    /// A v4 header has NO compression field, so asking the writer for Zstd must
-    /// not put a compression tag into byte 6 — which under v4 is Encryption.
-    ///
-    /// This is the hazard that made the version bump more than a constant: the
-    /// old `write_to` serialised `[compression, encryption]` unconditionally, so
-    /// a v4 container built this way would have declared itself AES-256-GCM
+    /// The header has NO compression field, so asking the writer for Zstd must
+    /// not put a compression tag into byte 6 — which is Encryption, and a
+    /// compression tag there would declare the container AES-256-GCM
     /// encrypted. Compression in this format is a per-stream property of the
     /// chunked writer; the container header does not carry it.
     #[test]
-    fn test_ctfs_v4_header_does_not_put_compression_in_the_encryption_byte() {
+    fn test_ctfs_header_does_not_put_compression_in_the_encryption_byte() {
         let tmp = NamedTempFile::new().unwrap();
         let path = tmp.path().to_path_buf();
 
@@ -586,41 +588,34 @@ mod tests {
         f.read_exact(&mut buf).unwrap();
 
         assert_eq!(&buf[0..5], &[0xC0, 0xDE, 0x72, 0xAC, 0xE2]);
-        assert_eq!(buf[5], 4, "ctfs-container.md section 1: header byte 5 is 4");
-        assert_eq!(
-            buf[6], 0,
-            "byte 6 under v4 is Encryption; a compression tag here would read as AES-256-GCM"
-        );
-        assert_eq!(buf[7], 0, "byte 7 under v4 is MaxShards; this container is not sharded");
+        assert_eq!(buf[5], 5, "ctfs-container.md section 1: header byte 5 is 5");
+        assert_eq!(buf[6], 0, "byte 6 is Encryption; a compression tag here would read as AES-256-GCM");
+        assert_eq!(buf[7], 0, "byte 7 is MaxShards; this container is not sharded");
 
         let r = CtfsReader::open(&path).unwrap();
         assert_eq!(r.encryption(), crate::header::EncryptionMethod::None);
     }
 
-    /// Writing v4 must not cost the ability to READ what earlier versions
-    /// produced. The two are separate decisions, and the acceptance list used to
-    /// be spelled in terms of the version written — so moving the writer forward
-    /// silently dropped v3 from it until that was untangled.
+    /// A container of an older version is refused, naming its version, and
+    /// not read under version 5's rules (`ctfs-container.md` §2, "Older
+    /// versions are refused"): version 5 changed what `MapBlock` means, and
+    /// nothing in an older container's bytes says which meaning it carries.
     #[test]
-    fn test_ctfs_reader_still_accepts_a_v3_container() {
+    fn test_ctfs_reader_refuses_a_v3_container() {
         let tmp = NamedTempFile::new().unwrap();
         let path = tmp.path().to_path_buf();
-
-        // Build a v3 container by hand: the writer no longer emits one, so the
-        // only honest way to test v3 reading is to write the v3 bytes.
         {
             let w = CtfsWriter::create(&path, 4096, 31).unwrap();
             w.close().unwrap();
         }
         let mut bytes = std::fs::read(&path).unwrap();
         bytes[5] = 3;
-        bytes[6] = crate::header::CompressionMethod::Zstd as u8; // v3 byte 6 is compression
-        bytes[7] = 0; // v3 byte 7 is encryption
         std::fs::write(&path, &bytes).unwrap();
 
-        let r = CtfsReader::open(&path).expect("a v3 container must still open");
-        assert_eq!(r.compression(), crate::header::CompressionMethod::Zstd);
-        assert_eq!(r.encryption(), crate::header::EncryptionMethod::None);
+        let err = CtfsReader::open(&path).err().expect("a v3 container must be refused");
+        assert!(matches!(err, CtfsError::InvalidVersion(3)), "{err:?}");
+        let msg = err.to_string();
+        assert!(msg.contains("version 3") && msg.contains("version 5"), "{msg}");
     }
 
     #[test]
@@ -703,9 +698,8 @@ mod tests {
     }
 
     #[test]
-    fn test_ctfs_v3_backward_compat_v2() {
-        // Create a v2 file by manually writing the header, then verify
-        // that the v3 reader can open it.
+    fn test_ctfs_reader_refuses_a_v2_container() {
+        // A v2 header written by hand: no current writer produces one.
         let tmp = NamedTempFile::new().unwrap();
         let path = tmp.path().to_path_buf();
 
@@ -732,10 +726,10 @@ mod tests {
             }
         }
 
-        // v3 reader should accept v2 file
-        let r = CtfsReader::open(&path).unwrap();
-        assert_eq!(r.compression(), crate::header::CompressionMethod::None);
-        assert_eq!(r.encryption(), crate::header::EncryptionMethod::None);
+        let err = CtfsReader::open(&path).err().expect("a v2 container must be refused");
+        assert!(matches!(err, CtfsError::InvalidVersion(2)), "{err:?}");
+        let err = ConcurrentCtfsReader::open(&path).err().expect("a v2 container must be refused");
+        assert!(matches!(err, CtfsError::InvalidVersion(2)), "{err:?}");
     }
 
     #[test]

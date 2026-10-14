@@ -217,8 +217,8 @@ fn test_ctfs_container_has_expected_files() {
         parsed_id.get_version_num()
     );
 
-    // meta.dat carries the registered paths.
-    assert!(!meta.paths.is_empty(), "Expected at least one path registered");
+    // meta.dat carries no path list; nothing follows recorder_id.
+    assert!(meta.trailing.is_empty(), "meta.dat has bytes after recorder_id: {:?}", meta.trailing);
 }
 
 // ---- Split Binary format tests ----

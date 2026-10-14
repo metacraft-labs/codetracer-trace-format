@@ -246,6 +246,27 @@ def summarize(value, receipt):
                          if type(values.get(key)) is bool}
                 if fixed:
                     row["fixedFailureClasses"] = fixed
+            structured = classification.get("nixStructuredObservation")
+            if isinstance(structured, dict):
+                safe = {}
+                for key in ("jsonRecords", "malformedRecords", "errorMessages",
+                            "errorsWithPosition", "errorsWithTrace"):
+                    if type(structured.get(key)) is int and 0 <= structured[key] <= 1000000:
+                        safe[key] = structured[key]
+                for key, allowed in (
+                    ("activitiesObserved", ("copyPath", "fileTransfer", "realise", "copyPaths",
+                                            "builds", "build", "optimiseStore", "verifyPaths",
+                                            "substitute", "queryPathInfo", "postBuildHook",
+                                            "buildWaiting", "fetchTree")),
+                    ("resultsObserved", ("fileLinked", "buildLogLine", "untrustedPath",
+                                         "corruptedPath", "setPhase", "progress", "setExpected",
+                                         "postBuildLogLine", "fetchStatus")),
+                ):
+                    items = structured.get(key)
+                    if isinstance(items, list):
+                        safe[key] = sorted({item for item in items
+                                            if isinstance(item, str) and item in allowed})
+                row["nixStructuredObservation"] = safe
             missing = classification.get("knownMissingCommands")
             if isinstance(missing, list):
                 known = sorted({item for item in missing

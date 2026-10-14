@@ -172,6 +172,57 @@ def nix_failure_classes(text):
             for name, pattern in patterns.items()}
 
 
+
+ACTIVITIES = {
+    100: "copyPath", 101: "fileTransfer", 102: "realise", 103: "copyPaths",
+    104: "builds", 105: "build", 106: "optimiseStore", 107: "verifyPaths",
+    108: "substitute", 109: "queryPathInfo", 110: "postBuildHook",
+    111: "buildWaiting", 112: "fetchTree",
+}
+RESULTS = {
+    100: "fileLinked", 101: "buildLogLine", 102: "untrustedPath",
+    103: "corruptedPath", 104: "setPhase", 105: "progress",
+    106: "setExpected", 107: "postBuildLogLine", 108: "fetchStatus",
+}
+
+def nix_structured_observation(text):
+    if not isinstance(text, str):
+        raise TypeError("Expected diagnostic text")
+    result = {
+        "jsonRecords": 0, "malformedRecords": 0, "errorMessages": 0,
+        "errorsWithPosition": 0, "errorsWithTrace": 0,
+        "activitiesObserved": [], "resultsObserved": [],
+    }
+    activities, results = set(), set()
+    for line in text.splitlines():
+        if not line.startswith("@nix "):
+            continue
+        try:
+            value = json.loads(line[5:])
+        except (json.JSONDecodeError, ValueError):
+            result["malformedRecords"] += 1
+            continue
+        if not isinstance(value, dict):
+            result["malformedRecords"] += 1
+            continue
+        result["jsonRecords"] += 1
+        kind = value.get("action")
+        code = value.get("type")
+        if kind == "start" and type(code) is int and code in ACTIVITIES:
+            activities.add(ACTIVITIES[code])
+        elif kind == "result" and type(code) is int and code in RESULTS:
+            results.add(RESULTS[code])
+        elif kind == "msg" and type(value.get("level")) is int and value["level"] == 0:
+            result["errorMessages"] += 1
+            if (type(value.get("line")) is int and value["line"] > 0
+                    and type(value.get("column")) is int and value["column"] > 0):
+                result["errorsWithPosition"] += 1
+            if isinstance(value.get("trace"), list) and value["trace"]:
+                result["errorsWithTrace"] += 1
+    result["activitiesObserved"] = sorted(activities)
+    result["resultsObserved"] = sorted(results)
+    return result
+
 def run_child(command, peer, role, child_env=None):
     child = subprocess.Popen(command, cwd=peer, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                              start_new_session=True, env=child_env)
@@ -231,8 +282,26 @@ def run_child(command, peer, role, child_env=None):
         }
         if role in {"actual-locked-peer-cache-constructor",
                     "actual-locked-peer-runtime-role-constructor"}:
-            row['nonsecretFailureClassification']['classes'].update(
-                nix_failure_classes(text))
+            # JSON logging escapes messages. Decode only in memory so the existing
+            # grounded predicates retain their behavior; never emit message bodies.
+            fixed_classes = nix_failure_classes(text)
+            for line in text.splitlines():
+                if not line.startswith("@nix "):
+                    continue
+                try:
+                    record = json.loads(line[5:])
+                except (json.JSONDecodeError, ValueError):
+                    continue
+                if not isinstance(record, dict) or record.get("action") != "msg":
+                    continue
+                for field in ("msg", "raw_msg"):
+                    message = record.get(field)
+                    if isinstance(message, str):
+                        for name, matched in nix_failure_classes(message).items():
+                            fixed_classes[name] = fixed_classes[name] or matched
+            row['nonsecretFailureClassification']['classes'].update(fixed_classes)
+            row['nonsecretFailureClassification']['nixStructuredObservation'] = (
+                nix_structured_observation(text))
     while True:
         remaining, unknown = [], []
         for proc in Path('/proc').iterdir():
@@ -341,9 +410,9 @@ try:
     expected_profile_slot = receipts / 'expected-nim-env-profile'
     if expected_profile_slot.exists() or expected_profile_slot.is_symlink():
         raise RuntimeError('Occupied expected runtime profile output')
-    expected_rc, _ = run_child([str(nix), 'print-dev-env', '--profile', str(expected_profile_slot), '--offline', '--option', 'allow-import-from-derivation', 'false', '--no-write-lock-file', '.'], peer, 'actual-locked-peer-cache-constructor')
+    expected_rc, _ = run_child([str(nix), '--log-format', 'internal-json', 'print-dev-env', '--profile', str(expected_profile_slot), '--offline', '--option', 'allow-import-from-derivation', 'false', '--no-write-lock-file', '.'], peer, 'actual-locked-peer-cache-constructor')
     expected_rc = expected_rc.rstrip(b'\n') + b'\n'
-    expected_json, _ = run_child([str(nix), 'print-dev-env', '--json', '--offline', '--option', 'allow-import-from-derivation', 'false', '--no-write-lock-file', '.'], peer, 'actual-locked-peer-runtime-role-constructor')
+    expected_json, _ = run_child([str(nix), '--log-format', 'internal-json', 'print-dev-env', '--json', '--offline', '--option', 'allow-import-from-derivation', 'false', '--no-write-lock-file', '.'], peer, 'actual-locked-peer-runtime-role-constructor')
     expected_environment = json.loads(expected_json)
     variables = expected_environment['variables']
     if not isinstance(variables, dict) or variables['PATH']['type'] != 'exported' or not isinstance(variables['PATH']['value'], str):

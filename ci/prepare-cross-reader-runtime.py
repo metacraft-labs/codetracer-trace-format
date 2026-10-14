@@ -153,6 +153,11 @@ def declared_peer_config_continuity(peer, before):
 def nix_failure_classes(text):
     """Boolean observations of fixed selected Nix 2.31.2 error formats only."""
     patterns = {
+        'nixFileOpenReported': "opening file '[^\\n]*'",
+        'nixShowUnsupportedInputReported': "cannot show unsupported input '[^\\n]*'",
+        'nixPathStatusReported': "getting status of '[^\\n]*'",
+        'nixUnsupportedInputReported': "cannot fetch unsupported input '[^\\n]*'",
+
         "nixIfdDisabledReported": r"cannot build '[^\n]*' during evaluation because the option 'allow-import-from-derivation' is disabled",
         "nixSubstitutionDisabledReported": r"dependency '[^\n]*' of '[^\n]*' does not exist, and substitution is disabled",
         "nixStoreWriteDeniedReported": r"cannot substitute path '[^\n]*' - no write access to the Nix store",

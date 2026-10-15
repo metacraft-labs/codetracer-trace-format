@@ -2,11 +2,13 @@ use std::path::Path;
 
 use crate::fmt_trace_cmd::FmtTraceCommand;
 use crate::inspect_ctfs_cmd::InspectCtfsCommand;
+use crate::verify_trace_cmd::VerifyTraceCommand;
 use clap::{Args, Parser, Subcommand};
 use codetracer_trace_reader::create_trace_reader;
 use codetracer_trace_writer::{create_trace_writer, trace_writer::TraceWriter};
 mod fmt_trace_cmd;
 mod inspect_ctfs_cmd;
+mod verify_trace_cmd;
 
 #[derive(Debug, Clone, Args)]
 struct ConvertCommand {
@@ -23,6 +25,8 @@ enum RuntimeTracingCliCommand {
     FormatTrace(FmtTraceCommand),
     /// Inspect a .ct CTFS container file
     InspectCtfs(InspectCtfsCommand),
+    /// Open each .ct file through every Rust reader; exit 1 if any refuses it
+    VerifyTrace(VerifyTraceCommand),
 }
 
 #[derive(Parser, Debug)]
@@ -75,6 +79,9 @@ fn main() {
         }
         RuntimeTracingCliCommand::InspectCtfs(inspect_ctfs_cmd) => {
             inspect_ctfs_cmd::run(inspect_ctfs_cmd);
+        }
+        RuntimeTracingCliCommand::VerifyTrace(verify_trace_cmd) => {
+            verify_trace_cmd::run(verify_trace_cmd);
         }
     }
 }

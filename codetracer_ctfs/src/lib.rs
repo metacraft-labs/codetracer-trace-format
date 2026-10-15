@@ -24,6 +24,7 @@ pub mod cow_namespace;
 pub mod file_entry;
 pub mod filemap;
 pub mod header;
+pub mod interning_set;
 pub mod member;
 pub mod mmap_info;
 pub mod platform_info;
@@ -70,6 +71,10 @@ pub enum CtfsError {
     /// A member name outside `ctfs-container.md` §3, with the refusal that
     /// names it ([`base40::member_name_refusal`]).
     InvalidMemberName(String),
+    /// A container finished with some but not all of the four interning
+    /// tables, with the refusal that names them
+    /// ([`interning_set::interning_set_refusal`]).
+    PartialInterningTableSet(String),
 }
 
 impl fmt::Display for CtfsError {
@@ -90,6 +95,7 @@ impl fmt::Display for CtfsError {
             CtfsError::NameTooLong(n) => write!(f, "filename too long: {}", n),
             CtfsError::InvalidBase40Char(c) => write!(f, "invalid base40 character: {}", c),
             CtfsError::InvalidMemberName(refusal) => f.write_str(refusal),
+            CtfsError::PartialInterningTableSet(refusal) => f.write_str(refusal),
         }
     }
 }

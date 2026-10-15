@@ -371,14 +371,17 @@ impl InterningTablesReader {
         // that as a bare record hands the caller its own length prefix and a
         // trailing NUL as part of the file name.
         let column_aware = meta.as_deref().is_some_and(meta_dat_has_column_aware_steps);
-        // `paths.dat` is written first and unconditionally by both writers, so
-        // its presence is the container's own answer to "do I carry interning
-        // tables". Absent ⇒ no binary tables (legacy path).
+        // The four tables are carried all four or none (`internal-files.md`
+        // §"Interning Tables"); a container with some but not all of them is
+        // refused, in the words every reader of the format uses.
+        if let Some(refusal) = codetracer_ctfs::interning_set::interning_set_refusal(|name| reader.file_size(name).is_some()) {
+            return Err(refusal);
+        }
+        // With the set whole or empty, `paths.dat` answers "do I carry
+        // interning tables". Absent ⇒ no binary tables (legacy path).
         if reader.file_size("paths.dat").is_none() {
             return Ok(None);
         }
-        // Read each table; a missing data file once `paths.dat` exists is an
-        // error (the writer always emits all four together).
         let paths = Self::load_table(reader, "paths")?;
         let funcs = Self::load_table(reader, "funcs")?;
         let types = Self::load_table(reader, "types")?;

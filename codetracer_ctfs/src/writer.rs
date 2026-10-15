@@ -749,7 +749,15 @@ impl CtfsWriter {
         self.close_inner()
     }
 
+    /// Flush every member and write its entry. A container that carries some
+    /// but not all of the four interning tables is refused
+    /// ([`crate::interning_set`]): a file-backed one is still completed on
+    /// disk, since its members are written already, and the refusal is what
+    /// the caller gets back.
     fn close_inner(&mut self) -> Result<(), CtfsError> {
+        let refusal = crate::interning_set::interning_set_refusal(|name| {
+            encode_member_name(name).is_ok_and(|key| self.files.iter().any(|f| f.name_encoded == key))
+        });
         for i in 0..self.files.len() {
             if let Some(block) = self.files[i].pending_block.take() {
                 let buffer = std::mem::take(&mut self.files[i].buffer);
@@ -759,7 +767,10 @@ impl CtfsWriter {
             self.write_entry(i)?;
         }
         self.writer.flush()?;
-        Ok(())
+        match refusal {
+            Some(refusal) => Err(CtfsError::PartialInterningTableSet(refusal)),
+            None => Ok(()),
+        }
     }
 }
 

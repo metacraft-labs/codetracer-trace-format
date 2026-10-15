@@ -193,8 +193,16 @@ impl ConcurrentCtfsWriter {
 
     /// Close the container, writing all file entry metadata to disk.
     /// All `FileWriter` handles must have been flushed and dropped before calling this.
+    ///
+    /// A container that carries some but not all of the four interning tables
+    /// is refused ([`crate::interning_set`]); it is still completed on disk,
+    /// since its members are written already, and the refusal is what the
+    /// caller gets back.
     pub fn close(self) -> Result<(), CtfsError> {
         let entries = self.file_entries.lock().unwrap();
+        let refusal = crate::interning_set::interning_set_refusal(|name| {
+            encode_member_name(name).is_ok_and(|key| entries.iter().any(|e| e.name_encoded == key))
+        });
 
         for (i, entry_state) in entries.iter().enumerate() {
             let entry_offset = self.entries_offset + (i as u64) * FILE_ENTRY_SIZE as u64;
@@ -206,7 +214,10 @@ impl ConcurrentCtfsWriter {
         }
 
         self.file.sync_all()?;
-        Ok(())
+        match refusal {
+            Some(refusal) => Err(CtfsError::PartialInterningTableSet(refusal)),
+            None => Ok(()),
+        }
     }
 }
 

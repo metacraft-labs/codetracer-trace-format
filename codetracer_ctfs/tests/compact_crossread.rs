@@ -71,7 +71,7 @@ fn members() -> Vec<(String, Vec<u8>)> {
         ("events.fmt", 12),
         ("empty.dat", 0),
         ("steps.dat", 9000),
-        ("paths.off", 40),
+        ("calls.idx", 40),
     ]
     .into_iter()
     .enumerate()

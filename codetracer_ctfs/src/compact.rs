@@ -295,9 +295,13 @@ pub fn read_compact_directory(image: &[u8], body_reconstructed: bool) -> Result<
 /// copied verbatim, in the order given. `compression` is declared in the
 /// header only: what this returns is the image a reader holds, and
 /// [`compress_image`] makes the stored object of an image that declares
-/// zstd. A name outside §3's alphabet or longer than 12 characters, and a name
-/// given twice, are refused.
+/// zstd. A name outside §3's alphabet or longer than 12 characters, a name
+/// given twice, and a member list that carries some but not all of the four
+/// interning tables ([`crate::interning_set`]) are refused.
 pub fn encode_compact_container(members: &[(&str, &[u8])], compression: WholeFileCompression) -> Result<Vec<u8>, CtfsError> {
+    if let Some(refusal) = crate::interning_set::interning_set_refusal(|name| members.iter().any(|(m, _)| *m == name)) {
+        return Err(CtfsError::PartialInterningTableSet(refusal));
+    }
     let mut names: Vec<u64> = Vec::with_capacity(members.len());
     for (name, _) in members {
         let encoded = crate::base40::encode_member_name(name)?;

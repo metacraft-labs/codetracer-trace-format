@@ -8,12 +8,15 @@
 //! fixture that the Rust readers refused. Asserted: `close`,
 //! `finish_to_bytes` and `ConcurrentCtfsWriter::close` all return the
 //! refusal for every partial set tried, and finish a container with all
-//! four tables, with none, or with `markers` alone.
+//! four tables, with none, or with `markers` alone. The compact-profile
+//! encoder (`compact::encode_compact_container`), which lays a container out
+//! from a member list without a `CtfsWriter`, is held to the same rule.
 //!
 //! No mocks: real containers written by the real writers, in memory and on
 //! disk.
 
 use codetracer_ctfs::interning_set::{interning_set_refusal, INTERNING_TABLE_MEMBERS};
+use codetracer_ctfs::compact::{encode_compact_container, WholeFileCompression};
 use codetracer_ctfs::{CompressionMethod, ConcurrentCtfsWriter, CtfsReader, CtfsWriter};
 
 const PATHS_ONLY: &str = "the container carries paths.dat, paths.off but not funcs.dat, funcs.off, types.dat, \
@@ -90,4 +93,35 @@ fn all_four_none_and_markers_alone_finish() {
     for m in INTERNING_TABLE_MEMBERS {
         assert!(r.file_size(m).is_some(), "{m} is in the finished container");
     }
+}
+
+/// `members` laid out as a compact container, each an empty table half.
+fn encoded_compact(members: &[&str]) -> Result<Vec<u8>, String> {
+    let zero = 0u64.to_le_bytes();
+    let list: Vec<(&str, &[u8])> =
+        members.iter().map(|m| (*m, if m.ends_with(".off") { &zero[..] } else { &[][..] })).collect();
+    encode_compact_container(&list, WholeFileCompression::None).map_err(|e| e.to_string())
+}
+
+#[test]
+fn compact_encoder_refuses_every_strict_subset() {
+    assert_eq!(encoded_compact(&["paths.dat", "paths.off"]).map(|_| "encoded"), Err(PATHS_ONLY.to_string()));
+    for mask in 1u32..255 {
+        let members: Vec<&str> = INTERNING_TABLE_MEMBERS
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| mask & (1 << i) != 0)
+            .map(|(_, n)| *n)
+            .collect();
+        let want = interning_set_refusal(|n| members.contains(&n)).expect("a strict subset");
+        assert_eq!(encoded_compact(&members).map(|_| "encoded"), Err(want), "subset {members:?}");
+    }
+}
+
+#[test]
+fn compact_encoder_takes_all_four_none_and_markers_alone() {
+    assert!(encoded_compact(&INTERNING_TABLE_MEMBERS).is_ok());
+    assert!(encoded_compact(&[]).is_ok());
+    assert!(encoded_compact(&["meta.dat"]).is_ok());
+    assert!(encoded_compact(&["markers.dat", "markers.off"]).is_ok());
 }

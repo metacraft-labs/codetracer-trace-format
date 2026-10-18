@@ -634,10 +634,12 @@ impl EnterpriseLeaseChecker for HttpEnterpriseLeaseChecker {
             "workloadIdentity": lease.workload_identity,
             "traceIdentity": lease.trace_identity,
         });
+        let nonce = fresh_lease_nonce()?;
         let response = self
             .agent
             .post(&lease.endpoint_url)
             .set("Authorization", &format!("Bearer {token}"))
+            .set(LEASE_NONCE_HEADER, &nonce)
             .send_json(body)
             .map_err(lease_error_from_ureq)?
             .into_json::<serde_json::Value>()
@@ -647,6 +649,27 @@ impl EnterpriseLeaseChecker for HttpEnterpriseLeaseChecker {
             expires_at: json_string(&response, "expiresAt")?,
         })
     }
+}
+
+/// Header carrying the per-call client nonce that Enterprise lease servers
+/// require on checkout and bind their signed response to, so a recorded
+/// response cannot be replayed. Without it the server answers
+/// `400 client_nonce_required`.
+const LEASE_NONCE_HEADER: &str = "X-CodeTracer-Lease-Nonce";
+
+/// 32 bytes from the OS CSPRNG, hex-encoded (64 chars of the `[A-Za-z0-9_-]`
+/// alphabet the servers accept).
+///
+/// This sender does not verify the response signature: it only carries the
+/// lease ID to the direct-storage finalize call, and the storage authority
+/// re-validates that lease server-side (active, same tenant, user and trace)
+/// before it accepts the upload, so a forged checkout response gains nothing.
+/// Native recording sessions, which do act on the response, verify it.
+fn fresh_lease_nonce() -> Result<String, SenderError> {
+    let mut bytes = [0_u8; 32];
+    getrandom::getrandom(&mut bytes)
+        .map_err(|error| SenderError::fatal(format!("cannot draw an Enterprise lease nonce from the OS CSPRNG: {error}")))?;
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
 fn resolve_credential(credential_ref: &CredentialRef) -> Result<String, SenderError> {

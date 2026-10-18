@@ -651,6 +651,20 @@ fn start_fake_lease_server(status: u16) -> (String, thread::JoinHandle<()>) {
         let request_text = String::from_utf8_lossy(&request[..read]);
         assert!(request_text.contains("POST /api/v1/license/sessions/checkout"));
         assert!(request_text.contains("Authorization: Bearer test-token"));
+        // Lease servers refuse a checkout without a fresh per-call nonce
+        // (`client_nonce_required`): the nonce is what their signed response
+        // is bound to, so a recorded response cannot be replayed.
+        let nonce = request_text
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("x-codetracer-lease-nonce").then(|| value.trim().to_string())
+            })
+            .expect("Enterprise lease checkout must send X-CodeTracer-Lease-Nonce");
+        assert!(
+            (22..=128).contains(&nonce.len()) && nonce.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'),
+            "malformed lease nonce: {nonce:?}"
+        );
         let (status_line, body) = if status == 200 {
             ("HTTP/1.1 200 OK", r#"{"leaseId":"lease-m38","expiresAt":"2026-05-07T12:00:00Z"}"#)
         } else {

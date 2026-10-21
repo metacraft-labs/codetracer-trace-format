@@ -1,6 +1,7 @@
 # Run all tests
 test:
   cargo test --verbose
+  bash codetracer_trace_writer_nim/tests/nimcache_environment.sh
 
 # Run the formatting and clippy lint checks.
 #

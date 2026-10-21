@@ -30,6 +30,8 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+mod nimcache_path;
+
 /// Recursively collect the Nim source files under `dir` (`.nim` / `.nims` /
 /// `.cfg` / `.nimble`, and the `.c` / `.h` files they `{.compile.}`), skipping VCS and build-output directories. Used to make
 /// this crate rebuild when the SIBLING `codetracer-trace-format-nim` sources
@@ -158,7 +160,29 @@ fn main() {
     // Include the Nim source hash so a source change lands in a fresh nimcache
     // rather than incrementally reusing objects compiled from the old sources.
     nim_src_hash.hash(&mut hasher);
-    let nimcache = env::temp_dir().join("ctnw").join(format!("{:016x}", hasher.finish()));
+    // Cargo otherwise considers the build script fresh after an operator moves
+    // scratch off a full volume. Include the host's temp-dir inputs, including
+    // GetTempPath2's SYSTEMTEMP on Windows, and the fallback's SystemRoot.
+    for name in ["TMPDIR", "TMP", "TEMP", "USERPROFILE", "SYSTEMTEMP", "SystemRoot"] {
+        println!("cargo:rerun-if-env-changed={name}");
+    }
+    println!("cargo:rerun-if-changed=nimcache_path.rs");
+    let temp = env::temp_dir();
+    #[cfg(windows)]
+    let fallback = PathBuf::from(env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into())).join("Temp");
+    #[cfg(not(windows))]
+    let fallback = PathBuf::from("/tmp");
+    let (nimcache, used_fallback) = nimcache_path::select(&temp, &fallback, hasher.finish());
+    if used_fallback {
+        // stderr is intentional: raw build-script invocations must explain the
+        // fallback too, while Cargo surfaces the warning in normal builds.
+        let warning = format!(
+            "Nim FFI temporary directory {} exceeds the {}-unit nimcache path budget; using {} instead (choose a shorter TMPDIR/TEMP to move scratch)",
+            temp.display(), nimcache_path::MAX_CACHE_PATH, nimcache.display(),
+        );
+        eprintln!("warning: {warning}");
+        println!("cargo:warning={warning}");
+    }
 
     // --- resolve the Nim sources' nimble dependencies --------------------
     // `codetracer-trace-format-nim`'s `.nimble` declares `requires` entries

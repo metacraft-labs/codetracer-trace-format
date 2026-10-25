@@ -10,11 +10,11 @@ use std::{
 
 use codetracer_ctfs::trace_storage::LogicalCtfsBlockReader;
 use codetracer_ctfs::trace_storage::{
-    CodetracerCiSenderBackend, CodetracerCiSenderConfig, DataState, DirectStorageSenderBackend, DirectStorageTransport, EnterpriseLeaseGrant,
-    FinalizeState, HttpDirectStorageTransport, HttpEnterpriseLeaseChecker, LifecycleState, ManagedFinalizeRequest, ManagedTraceSender,
-    ManagedUploadKind, ManagedUploadObject, ManagedUploadReceipt, MaterializedLanguage, PlacedObject, Placement, ReplayStart, ReplicationState,
-    RetryState, SenderError, SenderHealth, ServiceIdentity, SharedSenderBackend, StorageMode, StorageServer, TraceSource, TraceStorageConfig,
-    TraceStorageManifest, UploadState, TRACE_STORAGE_SCHEMA,
+    CodetracerCiSenderBackend, CodetracerCiSenderConfig, DataState, DirectStorageSenderBackend, DirectStorageTransport, EnterpriseLeaseChecker,
+    EnterpriseLeaseGrant, FinalizeState, HttpDirectStorageTransport, HttpEnterpriseLeaseChecker, LifecycleState, ManagedFinalizeRequest,
+    ManagedTraceSender, ManagedUploadKind, ManagedUploadObject, ManagedUploadReceipt, MaterializedLanguage, PlacedObject, Placement, ReplayStart,
+    ReplicationState, RetryState, SenderError, SenderHealth, ServiceIdentity, SharedSenderBackend, StorageMode, StorageServer, TraceSource,
+    TraceStorageConfig, TraceStorageManifest, UploadState, TRACE_STORAGE_SCHEMA,
 };
 use serde_json::json;
 
@@ -641,42 +641,109 @@ fn test_http_direct_storage_transport_uploads_bytes_and_reports_metadata() {
     control_plane.join().unwrap();
 }
 
+/// Lease protocol v2 (the security model's §5.4): every checkout carries the
+/// lease client's incarnation, created once per client instance (one
+/// Enterprise session), beside a nonce drawn fresh for each call. A retry
+/// through one checker must present the same incarnation with a new nonce, so
+/// the server returns the same lease instead of taking a second seat; another
+/// checker is another session and presents another incarnation. A server
+/// answers `400 client_incarnation_required` to a checkout without one.
+#[test]
+fn test_enterprise_lease_checkout_sends_one_incarnation_per_client_and_a_fresh_nonce_per_call() {
+    let (lease_url, headers, server) = start_recording_lease_server(3);
+    std::env::set_var("CODETRACER_ENTERPRISE_LEASE_TOKEN", "test-token");
+    let mut config = TraceStorageConfig::from_json(&fixture("storage_config.full.json")).unwrap();
+    let mut lease = config.enterprise_lease.take().unwrap();
+    lease.endpoint_url = lease_url;
+
+    let mut client = HttpEnterpriseLeaseChecker::new();
+    let first = client.checkout(&lease).unwrap();
+    let retry = client.checkout(&lease).unwrap();
+    let other = HttpEnterpriseLeaseChecker::new().checkout(&lease).unwrap();
+    for grant in [&first, &retry, &other] {
+        assert_eq!(grant.lease_id, "lease-m38");
+    }
+    server.join().unwrap();
+
+    let (first_nonce, first_incarnation) = headers.recv_timeout(Duration::from_secs(2)).unwrap();
+    let (retry_nonce, retry_incarnation) = headers.recv_timeout(Duration::from_secs(2)).unwrap();
+    let (other_nonce, other_incarnation) = headers.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert_eq!(first_incarnation, retry_incarnation, "one lease client presented two incarnations");
+    assert_ne!(first_incarnation, other_incarnation, "two lease clients presented one incarnation");
+    assert_eq!(first_incarnation.len(), 43, "an incarnation is 32 bytes, base64url without padding");
+    let nonces = [&first_nonce, &retry_nonce, &other_nonce];
+    assert!(
+        nonces.iter().enumerate().all(|(i, a)| nonces[i + 1..].iter().all(|b| a != b)),
+        "a nonce was reused across checkouts"
+    );
+    assert!(!nonces.contains(&&first_incarnation), "the incarnation is a nonce");
+}
+
 fn start_fake_lease_server(status: u16) -> (String, thread::JoinHandle<()>) {
+    let (url, _headers, handle) = start_lease_server(status, 1);
+    (url, handle)
+}
+
+/// A lease server that answers `requests` checkouts with a lease and sends
+/// each one's (nonce, incarnation) headers to the returned receiver.
+fn start_recording_lease_server(requests: usize) -> (String, mpsc::Receiver<(String, String)>, thread::JoinHandle<()>) {
+    start_lease_server(200, requests)
+}
+
+/// Accepts `requests` checkouts in turn. Each must carry the bearer token and
+/// the two headers the lease servers refuse a checkout without: a fresh
+/// per-call nonce (`client_nonce_required`), the value their signed response
+/// is bound to so a recorded response cannot be replayed, and the process
+/// incarnation of lease protocol v2 (`client_incarnation_required`), which
+/// tells a retry by one process apart from a second live process presenting
+/// the same client session ID. Both are 22 to 128 characters of the base64url
+/// alphabet (codetracer-ci `libs/LeaseProtocol/LeaseResponseSigning.cs`).
+/// Answers 200 with a lease when `status` is 200, and 403 otherwise.
+fn start_lease_server(status: u16, requests: usize) -> (String, mpsc::Receiver<(String, String)>, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}/api/v1/license/sessions/checkout", listener.local_addr().unwrap());
+    let (tx, rx) = mpsc::channel();
     let handle = thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        let mut request = [0_u8; 4096];
-        let read = stream.read(&mut request).unwrap();
-        let request_text = String::from_utf8_lossy(&request[..read]);
-        assert!(request_text.contains("POST /api/v1/license/sessions/checkout"));
-        assert!(request_text.contains("Authorization: Bearer test-token"));
-        // Lease servers refuse a checkout without a fresh per-call nonce
-        // (`client_nonce_required`): the nonce is what their signed response
-        // is bound to, so a recorded response cannot be replayed.
-        let nonce = request_text
-            .lines()
-            .find_map(|line| {
-                let (name, value) = line.split_once(':')?;
-                name.eq_ignore_ascii_case("x-codetracer-lease-nonce").then(|| value.trim().to_string())
-            })
-            .expect("Enterprise lease checkout must send X-CodeTracer-Lease-Nonce");
-        assert!(
-            (22..=128).contains(&nonce.len()) && nonce.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'),
-            "malformed lease nonce: {nonce:?}"
-        );
-        let (status_line, body) = if status == 200 {
-            ("HTTP/1.1 200 OK", r#"{"leaseId":"lease-m38","expiresAt":"2026-05-07T12:00:00Z"}"#)
-        } else {
-            ("HTTP/1.1 403 Forbidden", r#"{"code":"not_enterprise"}"#)
-        };
-        let response = format!(
-            "{status_line}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        );
-        stream.write_all(response.as_bytes()).unwrap();
+        for _ in 0..requests {
+            let (mut stream, _) = listener.accept().unwrap();
+            let (request_text, _body) = read_http_request(&mut stream);
+            assert!(request_text.contains("POST /api/v1/license/sessions/checkout"));
+            assert!(request_text.contains("Authorization: Bearer test-token"));
+            let nonce = lease_token_header(&request_text, "x-codetracer-lease-nonce");
+            let incarnation = lease_token_header(&request_text, "x-codetracer-lease-incarnation");
+            // `start_fake_lease_server` drops the receiver: its callers check
+            // the headers above and read nothing back.
+            let _ = tx.send((nonce, incarnation));
+            let (status_line, body) = if status == 200 {
+                ("HTTP/1.1 200 OK", r#"{"leaseId":"lease-m38","expiresAt":"2026-05-07T12:00:00Z"}"#)
+            } else {
+                ("HTTP/1.1 403 Forbidden", r#"{"code":"not_enterprise"}"#)
+            };
+            let response = format!(
+                "{status_line}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            stream.write_all(response.as_bytes()).unwrap();
+        }
     });
-    (url, handle)
+    (url, rx, handle)
+}
+
+/// The value of header `name` (lower case) in a request, which must be there
+/// and be 22 to 128 characters of the base64url alphabet.
+fn lease_token_header(request_text: &str, name: &str) -> String {
+    let value = request_text
+        .lines()
+        .find_map(|line| {
+            let (header, value) = line.split_once(':')?;
+            header.eq_ignore_ascii_case(name).then(|| value.trim().to_string())
+        })
+        .unwrap_or_else(|| panic!("Enterprise lease checkout must send {name}"));
+    assert!(
+        (22..=128).contains(&value.len()) && value.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'),
+        "malformed {name}: {value:?}"
+    );
+    value
 }
 
 fn start_fake_storage_node() -> (String, mpsc::Receiver<Vec<u8>>, thread::JoinHandle<()>) {
@@ -1164,6 +1231,12 @@ fn test_no_recorder_private_sender_or_static_config_parser() {
     assert!(shared.contains("ManagedTraceSender"));
 }
 
+/// Every file under `root` that belongs to the checkout's sources. Tool state
+/// is skipped (`.repro` and `.direnv` hold environment caches, reprobuild's
+/// with GC roots into the Nix store), and a symbolic link is listed as a file,
+/// never followed: a link into the store or back into the tree is not a
+/// source of the checkout, and following one can loop (`.repro`'s links into
+/// ncurses' `include/` did, failing the walk with ELOOP).
 fn walk_files(root: impl AsRef<Path>) -> Vec<std::path::PathBuf> {
     let mut files = Vec::new();
     let mut stack = vec![root.as_ref().to_path_buf()];
@@ -1171,11 +1244,11 @@ fn walk_files(root: impl AsRef<Path>) -> Vec<std::path::PathBuf> {
         if path
             .file_name()
             .and_then(|value| value.to_str())
-            .is_some_and(|name| matches!(name, ".git" | "target" | "node_modules" | ".direnv"))
+            .is_some_and(|name| matches!(name, ".git" | "target" | "node_modules" | ".direnv" | ".repro"))
         {
             continue;
         }
-        if path.is_dir() {
+        if fs::symlink_metadata(&path).unwrap().is_dir() {
             for child in fs::read_dir(path).unwrap() {
                 stack.push(child.unwrap().path());
             }

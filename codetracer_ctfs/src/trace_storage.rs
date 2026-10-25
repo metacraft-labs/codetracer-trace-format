@@ -603,9 +603,17 @@ pub trait EnterpriseLeaseChecker {
     fn checkout(&mut self, lease: &EnterpriseLeaseConfig) -> Result<EnterpriseLeaseGrant, SenderError>;
 }
 
+/// The Enterprise lease client of a sender: checks a lease out over HTTP.
+///
+/// One checker is one lease client for one Enterprise session, so it carries
+/// one process incarnation (lease protocol v2): drawn on its first checkout
+/// and sent on every checkout it makes, so a retry is recognised as this
+/// session's and returns the same lease, while another checker, another
+/// session, presents another incarnation and takes its own seat.
 #[derive(Debug)]
 pub struct HttpEnterpriseLeaseChecker {
     agent: ureq::Agent,
+    incarnation: Option<String>,
 }
 
 impl Default for HttpEnterpriseLeaseChecker {
@@ -618,7 +626,20 @@ impl HttpEnterpriseLeaseChecker {
     pub fn new() -> Self {
         Self {
             agent: ureq::AgentBuilder::new().timeout(Duration::from_secs(10)).build(),
+            incarnation: None,
         }
+    }
+
+    /// This lease client's incarnation, drawn on first use. Drawn lazily
+    /// rather than in [`Self::new`] because the OS CSPRNG can fail, and
+    /// `new` cannot report it.
+    fn incarnation(&mut self) -> Result<String, SenderError> {
+        if let Some(incarnation) = &self.incarnation {
+            return Ok(incarnation.clone());
+        }
+        let incarnation = fresh_lease_incarnation()?;
+        self.incarnation = Some(incarnation.clone());
+        Ok(incarnation)
     }
 }
 
@@ -635,11 +656,13 @@ impl EnterpriseLeaseChecker for HttpEnterpriseLeaseChecker {
             "traceIdentity": lease.trace_identity,
         });
         let nonce = fresh_lease_nonce()?;
+        let incarnation = self.incarnation()?;
         let response = self
             .agent
             .post(&lease.endpoint_url)
             .set("Authorization", &format!("Bearer {token}"))
             .set(LEASE_NONCE_HEADER, &nonce)
+            .set(LEASE_INCARNATION_HEADER, &incarnation)
             .send_json(body)
             .map_err(lease_error_from_ureq)?
             .into_json::<serde_json::Value>()
@@ -670,6 +693,39 @@ fn fresh_lease_nonce() -> Result<String, SenderError> {
     getrandom::getrandom(&mut bytes)
         .map_err(|error| SenderError::fatal(format!("cannot draw an Enterprise lease nonce from the OS CSPRNG: {error}")))?;
     Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+/// Header carrying the lease client's process incarnation (lease protocol v2)
+/// on every checkout. Lease servers deduplicate a checkout only when the
+/// organization, the client session ID and the incarnation all match, so a
+/// second live process presenting the same client session ID takes its own
+/// seat instead of sharing one; without the header they answer
+/// `400 client_incarnation_required`.
+const LEASE_INCARNATION_HEADER: &str = "X-CodeTracer-Lease-Incarnation";
+
+/// A new incarnation: 32 bytes from the OS CSPRNG, base64url without padding
+/// (43 characters, the shape the servers validate for both the nonce and the
+/// incarnation; RFC 4648 §5, <https://www.rfc-editor.org/rfc/rfc4648#section-5>).
+fn fresh_lease_incarnation() -> Result<String, SenderError> {
+    let mut bytes = [0_u8; 32];
+    getrandom::getrandom(&mut bytes)
+        .map_err(|error| SenderError::fatal(format!("cannot draw an Enterprise lease incarnation from the OS CSPRNG: {error}")))?;
+    Ok(base64url_unpadded(&bytes))
+}
+
+/// RFC 4648 §5 base64url, without the `=` padding.
+fn base64url_unpadded(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut encoded = String::with_capacity(bytes.len().div_ceil(3) * 4);
+    for chunk in bytes.chunks(3) {
+        let group =
+            (u32::from(chunk[0]) << 16) | (u32::from(chunk.get(1).copied().unwrap_or(0)) << 8) | u32::from(chunk.get(2).copied().unwrap_or(0));
+        // A chunk of n bytes carries 8n bits: n + 1 six-bit characters.
+        for index in 0..=chunk.len() {
+            encoded.push(char::from(ALPHABET[((group >> (18 - 6 * index)) & 0x3f) as usize]));
+        }
+    }
+    encoded
 }
 
 fn resolve_credential(credential_ref: &CredentialRef) -> Result<String, SenderError> {
@@ -1900,4 +1956,36 @@ pub struct ReplayStart {
     pub span_id: String,
     pub geid: Option<u64>,
     pub timestamp_unix_nanos: Option<u64>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{base64url_unpadded, fresh_lease_incarnation};
+
+    /// The RFC 4648 §10 test vectors, unpadded, and the two characters
+    /// base64url uses in place of base64's `+` and `/`.
+    #[test]
+    fn base64url_unpadded_matches_rfc_4648() {
+        for (input, expected) in [
+            ("", ""),
+            ("f", "Zg"),
+            ("fo", "Zm8"),
+            ("foo", "Zm9v"),
+            ("foob", "Zm9vYg"),
+            ("fooba", "Zm9vYmE"),
+            ("foobar", "Zm9vYmFy"),
+        ] {
+            assert_eq!(base64url_unpadded(input.as_bytes()), expected, "{input:?}");
+        }
+        assert_eq!(base64url_unpadded(&[0xfb, 0xff, 0xbf]), "-_-_");
+    }
+
+    #[test]
+    fn a_lease_incarnation_is_43_base64url_characters_and_new_each_time() {
+        let first = fresh_lease_incarnation().unwrap();
+        let second = fresh_lease_incarnation().unwrap();
+        assert_eq!(first.len(), 43);
+        assert!(first.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_'), "{first:?}");
+        assert_ne!(first, second);
+    }
 }

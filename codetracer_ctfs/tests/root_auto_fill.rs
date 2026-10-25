@@ -116,9 +116,12 @@ fn assert_reads(r: &mut CtfsReader, files: &[(String, Vec<u8>)], slots: usize, w
     }
 }
 
+/// A fixture: `(members, the explicit-170 image, the same image declaring 0)`.
+type Fixture = (Vec<(String, Vec<u8>)>, Vec<u8>, Vec<u8>);
+
 /// The version-5 fixture: `(members, the explicit-170 image, the same image
 /// declaring 0)`.
-fn v5_fixture() -> (Vec<(String, Vec<u8>)>, Vec<u8>, Vec<u8>) {
+fn v5_fixture() -> Fixture {
     let files = members(V5_AUTO);
     let explicit = written(V5_AUTO as u32, &files);
     let mut zero = explicit.clone();

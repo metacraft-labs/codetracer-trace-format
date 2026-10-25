@@ -119,7 +119,7 @@ fn which_direnv() -> Option<PathBuf> {
         return None;
     }
     let p = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
-    if p.exists() { Some(p) } else { None }
+    p.exists().then_some(p)
 }
 
 /// Drive the production Nim reader over `container` with a manifest of

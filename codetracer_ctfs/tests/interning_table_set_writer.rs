@@ -15,8 +15,8 @@
 //! No mocks: real containers written by the real writers, in memory and on
 //! disk.
 
-use codetracer_ctfs::interning_set::{interning_set_refusal, INTERNING_TABLE_MEMBERS};
 use codetracer_ctfs::compact::{encode_compact_container, WholeFileCompression};
+use codetracer_ctfs::interning_set::{interning_set_refusal, INTERNING_TABLE_MEMBERS};
 use codetracer_ctfs::{CompressionMethod, ConcurrentCtfsWriter, CtfsReader, CtfsWriter};
 
 const PATHS_ONLY: &str = "the container carries paths.dat, paths.off but not funcs.dat, funcs.off, types.dat, \
@@ -98,14 +98,19 @@ fn all_four_none_and_markers_alone_finish() {
 /// `members` laid out as a compact container, each an empty table half.
 fn encoded_compact(members: &[&str]) -> Result<Vec<u8>, String> {
     let zero = 0u64.to_le_bytes();
-    let list: Vec<(&str, &[u8])> =
-        members.iter().map(|m| (*m, if m.ends_with(".off") { &zero[..] } else { &[][..] })).collect();
+    let list: Vec<(&str, &[u8])> = members
+        .iter()
+        .map(|m| (*m, if m.ends_with(".off") { &zero[..] } else { &[][..] }))
+        .collect();
     encode_compact_container(&list, WholeFileCompression::None).map_err(|e| e.to_string())
 }
 
 #[test]
 fn compact_encoder_refuses_every_strict_subset() {
-    assert_eq!(encoded_compact(&["paths.dat", "paths.off"]).map(|_| "encoded"), Err(PATHS_ONLY.to_string()));
+    assert_eq!(
+        encoded_compact(&["paths.dat", "paths.off"]).map(|_| "encoded"),
+        Err(PATHS_ONLY.to_string())
+    );
     for mask in 1u32..255 {
         let members: Vec<&str> = INTERNING_TABLE_MEMBERS
             .iter()

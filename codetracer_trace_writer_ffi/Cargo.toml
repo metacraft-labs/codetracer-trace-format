@@ -20,6 +20,7 @@ serde_json = "1.0"
 
 [dev-dependencies]
 tempfile = "3"
+cc = "1.2"
 
 [build-dependencies]
 cbindgen = "0.28"

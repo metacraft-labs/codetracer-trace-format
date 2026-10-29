@@ -54,70 +54,232 @@ fn run(cmd: &mut Command, what: &str) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
-/// The Nim archive, built by the Nim repository's own build script.
-fn build_nim_archive(repo: &Path, work: &Path) -> PathBuf {
+/// Cargo's target-native outputs, including the system closure rustc reports.
+struct NativeBuild {
+    archive: PathBuf,
+    system_libs: Vec<String>,
+    zstd_root: PathBuf,
+}
+
+fn compiler(work: &Path) -> cc::Tool {
+    let tool = cc::Build::new()
+        .host(env!("CT_PARITY_HOST"))
+        .target(env!("CT_PARITY_TARGET"))
+        .opt_level(0)
+        .debug(false)
+        .static_crt(cfg!(target_feature = "crt-static"))
+        .cargo_metadata(false)
+        .out_dir(work)
+        .get_compiler();
+    assert_eq!(
+        tool.is_like_msvc(),
+        cfg!(target_env = "msvc"),
+        "the C host compiler must match the Rust target ABI: {:?}",
+        tool.path()
+    );
+    tool
+}
+
+/// Nim's passC value is inserted into its compiler command line, so preserve
+/// each cc::Tool argument as one argument through that extra parsing boundary.
+fn nim_compiler_arg(arg: &std::ffi::OsStr) -> String {
+    let arg = arg.to_str().expect("Nim compiler arguments must be UTF-8");
+    if cfg!(windows) {
+        // Windows argv quoting: backslashes before a quote or the closing
+        // quote are doubled. Ordinary path separators are preserved.
+        let mut quoted = String::from("\"");
+        let mut slashes = 0;
+        for c in arg.chars() {
+            if c == '\\' {
+                slashes += 1;
+                continue;
+            }
+            if c == '\"' {
+                quoted.extend(std::iter::repeat_n('\\', 2 * slashes + 1));
+            } else {
+                quoted.extend(std::iter::repeat_n('\\', slashes));
+            }
+            quoted.push(c);
+            slashes = 0;
+        }
+        quoted.extend(std::iter::repeat_n('\\', 2 * slashes));
+        quoted.push('\"');
+        quoted
+    } else {
+        format!("'{}'", arg.replace('\'', "'\\''"))
+    }
+}
+
+/// The Nim archive is still its own build script, with the same real target
+/// compiler/environment and Cargo-built Zstd headers as the independent C host.
+fn build_nim_archive(repo: &Path, work: &Path, tool: &cc::Tool, native: &NativeBuild) -> PathBuf {
     if std::env::var_os("CODETRACER_TRACE_FORMAT_NIM_SKIP_NIMBLE_INSTALL").is_none() {
         run(
             Command::new("nimble").args(["install", "--depsOnly", "-y"]).current_dir(repo),
             "nimble install --depsOnly (the Nim library's dependencies)",
         );
     }
-    let out = work.join("libcodetracer_trace_writer.a");
-    run(
-        Command::new("nim")
-            .arg("e")
-            .arg("--hints:off")
-            .arg("build_ffi.nims")
-            .arg(format!("--nimcache:{}", work.join("nimcache").display()))
-            .arg(format!("--out:{}", out.display()))
-            .current_dir(repo),
-        "building the Nim C ABI archive with build_ffi.nims",
+    let msvc = cfg!(target_env = "msvc");
+    let target = if msvc {
+        "msvc"
+    } else if cfg!(windows) {
+        "mingw"
+    } else {
+        "posix"
+    };
+    let family = if tool.is_like_msvc() {
+        "vcc"
+    } else if tool.is_like_clang() {
+        "clang"
+    } else {
+        "gcc"
+    };
+    let out = work.join(if msvc {
+        "codetracer_trace_writer.lib"
+    } else {
+        "libcodetracer_trace_writer.a"
+    });
+    let include = native.zstd_root.join("include");
+    assert!(
+        include.join("zstd.h").is_file(),
+        "Cargo's Zstd output has no header: {}",
+        include.display()
     );
+    let mut cmd = Command::new("nim");
+    cmd.arg("e")
+        .arg("--hints:off")
+        .arg("build_ffi.nims")
+        .arg(format!("--target:{target}"))
+        .arg(format!("--nimcache:{}", work.join("nimcache").display()))
+        .arg(format!("--out:{}", out.display()))
+        .arg("--")
+        .arg(format!("--cc:{family}"))
+        .arg(format!("--{family}.exe:{}", tool.path().display()));
+    // Keep cc's target/CRT/sysroot and caller compiler configuration, in its
+    // original order, in both independent compiles. The owning Nim script
+    // retains its runtime/threads/ABI flags; these configure its C compiler.
+    for arg in tool.args() {
+        cmd.arg(format!("--passC:{}", nim_compiler_arg(arg)));
+    }
+    let include_arg = std::ffi::OsString::from(format!("{}{}", if msvc { "/I" } else { "-I" }, include.display()));
+    cmd.arg(format!("--passC:{}", nim_compiler_arg(&include_arg)))
+        .envs(tool.env().iter().cloned())
+        .current_dir(repo);
+    run(&mut cmd, "building the Nim C ABI archive with build_ffi.nims");
+    assert!(out.is_file(), "the owning Nim build did not produce {}", out.display());
     out
 }
 
-/// This crate's staticlib, built now: an integration test does not link the
-/// library (the crate builds no rlib), so Cargo does not rebuild it for one.
-fn rust_archive() -> PathBuf {
+/// Build the actual Rust library and read Cargo's documented messages. The
+/// same artifact/build-script metadata is emitted for cached builds too:
+/// https://doc.rust-lang.org/cargo/reference/external-tools.html
+/// No target-directory glob or PATH data lookup can substitute another Zstd.
+fn rust_archive() -> NativeBuild {
     let exe = std::env::current_exe().expect("test executable");
     let profile_dir = exe.parent().and_then(Path::parent).expect("target/<profile>/deps/<test>");
-    let target_dir = profile_dir.parent().expect("target/<profile>");
+    let parent = profile_dir.parent().expect("target/<profile>");
+    let explicit_target = parent.file_name().is_some_and(|p| p == env!("CT_PARITY_TARGET"));
+    let target_dir = if explicit_target {
+        parent.parent().expect("target root")
+    } else {
+        parent
+    };
     let mut cmd = Command::new(env!("CARGO"));
-    cmd.args(["build", "--lib", "-p", "codetracer_trace_writer_ffi"])
+    cmd.args(["rustc", "--locked", "--lib", "-p", "codetracer_trace_writer_ffi", "--message-format=json"])
         .arg("--target-dir")
         .arg(target_dir)
         .current_dir(env!("CARGO_MANIFEST_DIR"));
+    if explicit_target || env!("CT_PARITY_HOST") != env!("CT_PARITY_TARGET") {
+        cmd.args(["--target", env!("CT_PARITY_TARGET")]);
+    }
     if profile_dir.file_name().is_some_and(|n| n == "release") {
         cmd.arg("--release");
     }
-    run(&mut cmd, "building this crate's staticlib");
-    let lib = profile_dir.join("libcodetracer_trace_writer_ffi.a");
-    assert!(lib.is_file(), "this crate's staticlib is not at {}", lib.display());
-    lib
+    // Ask rustc for its real native system closure, including ordered framework
+    // argument pairs; copying a Winlibs list would silently drift with Rust.
+    cmd.args(["--", "--print=native-static-libs"]);
+    let output = run(&mut cmd, "building this crate's staticlib and native link closure");
+    let mut archives = std::collections::BTreeSet::new();
+    let mut zstd_roots = std::collections::BTreeSet::new();
+    let mut system_libs = None;
+    for line in output.lines().filter(|line| line.starts_with('{')) {
+        let value: serde_json::Value = serde_json::from_str(line).expect("Cargo JSON message");
+        match value["reason"].as_str() {
+            Some("compiler-artifact") if value["target"]["name"] == "codetracer_trace_writer_ffi" => {
+                let name = if cfg!(target_env = "msvc") {
+                    "codetracer_trace_writer_ffi.lib"
+                } else {
+                    "libcodetracer_trace_writer_ffi.a"
+                };
+                // A cdylib also emits a .dll.lib on MSVC: that is NOT the
+                // independent static library this test promises to compare.
+                for file in value["filenames"].as_array().expect("artifact filenames") {
+                    let file = PathBuf::from(file.as_str().expect("artifact path"));
+                    if file.file_name().is_some_and(|n| n == name) {
+                        archives.insert(file);
+                    }
+                }
+            }
+            Some("build-script-executed")
+                if value["package_id"]
+                    .as_str()
+                    .is_some_and(|id| id.rsplit('#').next().is_some_and(|name| name.starts_with("zstd-sys@"))) =>
+            {
+                zstd_roots.insert(PathBuf::from(value["out_dir"].as_str().expect("Zstd OUT_DIR")));
+            }
+            Some("compiler-message") if value["target"]["name"] == "codetracer_trace_writer_ffi" => {
+                if let Some(libs) = value["message"]["message"].as_str().and_then(|s| s.strip_prefix("native-static-libs:")) {
+                    let libs: Vec<String> = libs.split_whitespace().map(str::to_owned).collect();
+                    if let Some(previous) = &system_libs {
+                        assert_eq!(previous, &libs, "ambiguous native link closure");
+                    }
+                    system_libs = Some(libs);
+                }
+            }
+            _ => {}
+        }
+    }
+    assert_eq!(archives.len(), 1, "Cargo must report exactly one target static archive: {archives:?}");
+    assert_eq!(zstd_roots.len(), 1, "Cargo must report one target-native Zstd output: {zstd_roots:?}");
+    let archive = archives.into_iter().next().unwrap();
+    assert!(archive.is_file(), "Cargo's static archive is absent: {}", archive.display());
+    let zstd_root = zstd_roots.into_iter().next().unwrap();
+    let system_libs = system_libs.expect("rustc must report native-static-libs");
+    assert!(!system_libs.is_empty(), "the native system link closure must be explicit");
+    NativeBuild {
+        archive,
+        system_libs,
+        zstd_root,
+    }
 }
 
-fn zstd_libs() -> Vec<String> {
-    Command::new("pkg-config")
-        .args(["--libs", "libzstd"])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).split_whitespace().map(str::to_string).collect())
-        .unwrap_or_else(|| vec!["-lzstd".to_string()])
-}
-
-fn compile_host(nim_include: &Path, archive: &Path, extra: &[String], out: &Path) {
+fn compile_host(nim_include: &Path, archive: &Path, extra: &[PathBuf], out: &Path, tool: &cc::Tool, native: &NativeBuild) {
     let source = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/c_abi/parity_host.c");
-    let cc = std::env::var("CC").unwrap_or_else(|_| "cc".to_string());
-    let mut cmd = Command::new(cc);
-    cmd.arg("-o")
-        .arg(out)
-        .arg(&source)
-        .arg(archive)
-        .arg(format!("-I{}", nim_include.display()))
-        .args(extra)
-        .args(["-lpthread", "-ldl", "-lm"]);
-    run(&mut cmd, &format!("compiling the C host against {}", archive.display()));
+    let mut cmd = tool.to_command();
+    // MSVC writes intermediate .obj/.pdb files too: they belong to this private
+    // test directory, never to the checked-out source or another running test.
+    cmd.current_dir(out.parent().expect("private host output directory"));
+    if tool.is_like_msvc() {
+        cmd.arg("/nologo")
+            .arg("/TC")
+            .arg(format!("/Fe:{}", out.display()))
+            .arg(format!("/I{}", nim_include.display()))
+            .arg(&source)
+            .arg(archive)
+            .args(extra)
+            .arg("/link")
+            .args(&native.system_libs);
+    } else {
+        cmd.arg("-o")
+            .arg(out)
+            .arg(&source)
+            .arg(archive)
+            .arg(format!("-I{}", nim_include.display()))
+            .args(extra)
+            .args(&native.system_libs);
+    }
+    run(&mut cmd, &format!("compiling the independent C host against {}", archive.display()));
+    assert!(out.is_file(), "the native C host was not produced: {}", out.display());
 }
 
 const WRITER_SCENARIOS: &[&str] = &[
@@ -220,12 +382,20 @@ fn a_c_host_gets_the_same_answers_from_both_libraries() {
         .tempdir_in(env!("CARGO_TARGET_TMPDIR"))
         .unwrap();
     let work = work.path();
-    let nim_lib = build_nim_archive(&repo, work);
-    let rust_lib = rust_archive();
+    let native = rust_archive();
+    let tool = compiler(work);
+    let nim_lib = build_nim_archive(&repo, work, &tool, &native);
+    let zstd_lib = native.zstd_root.join(if cfg!(target_env = "msvc") { "zstd.lib" } else { "libzstd.a" });
+    assert!(
+        zstd_lib.is_file(),
+        "Cargo's matching native Zstd archive is absent: {}",
+        zstd_lib.display()
+    );
     let include = repo.join("include");
-    let (host_nim, host_rust) = (work.join("host_nim"), work.join("host_rust"));
-    compile_host(&include, &nim_lib, &zstd_libs(), &host_nim);
-    compile_host(&include, &rust_lib, &[], &host_rust);
+    let suffix = if cfg!(windows) { ".exe" } else { "" };
+    let (host_nim, host_rust) = (work.join(format!("host_nim{suffix}")), work.join(format!("host_rust{suffix}")));
+    compile_host(&include, &nim_lib, &[zstd_lib], &host_nim, &tool, &native);
+    compile_host(&include, &native.archive, &[], &host_rust, &tool, &native);
 
     let mut failures = Vec::new();
     let (nim_out, rust_out) = (work.join("nim"), work.join("rust"));

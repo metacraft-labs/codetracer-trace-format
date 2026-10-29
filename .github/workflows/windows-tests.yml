@@ -35,7 +35,7 @@ jobs:
           owner: metacraft-labs
 
       - name: Setup dev env (reprobuild)
-        uses: metacraft-labs/metacraft-github-actions/setup-dev-env@acd4c78c489dad954257f19715c390906d682db6
+        uses: metacraft-labs/metacraft-github-actions/setup-dev-env@fd124e67289014f126bd8d66473850a85e2d30c1
         with:
           env-flavor: reprobuild
           sibling-strategy: repro-lock

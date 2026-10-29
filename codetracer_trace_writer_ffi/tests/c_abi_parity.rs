@@ -265,9 +265,11 @@ fn compile_host(nim_include: &Path, archive: &Path, extra: &[PathBuf], out: &Pat
             .arg(format!("/Fe:{}", out.display()))
             .arg(format!("/I{}", nim_include.display()))
             .arg(&source)
+            // /TC applies to every compiler input, including .lib files.
+            // Archives belong to link.exe after the CL /link boundary.
+            .arg("/link")
             .arg(archive)
             .args(extra)
-            .arg("/link")
             .args(&native.system_libs);
     } else {
         cmd.arg("-o")

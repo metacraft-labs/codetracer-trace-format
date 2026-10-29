@@ -8,7 +8,8 @@
 //!
 //! No mocks. The killed recording is a real child process — this test binary
 //! re-executed — that aborts mid-recording; the refused write is a real
-//! `ulimit -f` file-size limit on a real file.
+//! `ulimit -f` file-size limit on a real file on POSIX, or an owned native
+//! byte-range lock above the initial header on Windows.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -25,6 +26,10 @@ use codetracer_trace_writer::meta_dat::{
     FLAG_HAS_CALL_STREAM, FLAG_HAS_INTERNING_TABLES, FLAG_HAS_IO_EVENT_STREAM, FLAG_HAS_STEP_STREAM, FLAG_HAS_VALUE_STREAM, decode_meta_dat,
 };
 use codetracer_trace_writer::trace_writer::TraceWriter;
+
+#[cfg(windows)]
+#[path = "support/windows_write_refusal.rs"]
+mod windows_refusal;
 
 const CHILD_ENV: &str = "CT_DURABILITY_CHILD";
 const STEPS: i64 = 22;
@@ -65,6 +70,7 @@ fn child_records_then_aborts() {
     let mut w = writer();
     AbstractTraceWriter::set_workdir(&mut w, Path::new(WORKDIR));
     TraceWriter::begin_writing_trace_events(&mut w, Path::new(&base)).expect("begin");
+    eprintln!("BEGIN: Ok");
     record(&mut w);
     if std::env::var("CT_DURABILITY_MODE").as_deref() == Ok("finish") {
         let r = TraceWriter::finish_writing_trace_events(&mut w);
@@ -78,6 +84,7 @@ fn child_records_then_aborts() {
 /// first. Returns the child's status and stderr.
 fn run_child(base: &Path, pre: &str, mode: &str) -> (std::process::ExitStatus, String) {
     let exe = std::env::current_exe().unwrap();
+    #[cfg(not(windows))]
     let out = Command::new("sh")
         .arg("-c")
         .arg(format!(
@@ -88,6 +95,16 @@ fn run_child(base: &Path, pre: &str, mode: &str) -> (std::process::ExitStatus, S
         .env("CT_DURABILITY_MODE", mode)
         .output()
         .expect("spawn child");
+    #[cfg(windows)]
+    let out = {
+        assert!(pre.is_empty(), "Windows uses a native byte-range refusal");
+        Command::new(exe)
+            .args(["--exact", "child_records_then_aborts", "--nocapture", "--test-threads=1"])
+            .env(CHILD_ENV, base)
+            .env("CT_DURABILITY_MODE", mode)
+            .output()
+            .expect("spawn child")
+    };
     (out.status, String::from_utf8_lossy(&out.stderr).into_owned())
 }
 
@@ -153,6 +170,10 @@ fn a_finished_recording_has_everything() {
     TraceWriter::begin_writing_trace_events(&mut w, &base).unwrap();
     record(&mut w);
     TraceWriter::finish_writing_trace_events(&mut w).unwrap();
+    assert!(
+        std::fs::metadata(base.with_extension("ct")).unwrap().len() > 12 * 1024,
+        "the successful recording crosses the refused range"
+    );
     let mut r = CtfsReader::open(&base.with_extension("ct")).unwrap();
     assert_eq!(StepStreamReader::open(&mut r).unwrap().unwrap().count(), STEPS as u64);
     assert_eq!(ValueStreamReader::open(&mut r).unwrap().unwrap().count(), STEPS as u64);
@@ -195,15 +216,27 @@ fn a_refused_write_fails_the_recording() {
     let base: PathBuf = dir.path().join("full");
     // 24 blocks of 512 bytes: block 0 and a few members fit, the recording
     // does not.
+    #[cfg(not(windows))]
     let (status, stderr) = run_child(&base, "trap '' XFSZ; ulimit -f 24;", "finish");
+    #[cfg(windows)]
+    let (status, stderr) = {
+        let mut lock = windows_refusal::LockedRange::new(&base.with_extension("ct"), 12 * 1024).expect("lock future container bytes");
+        let result = run_child(&base, "", "finish");
+        lock.unlock().expect("unlock owned container range");
+        result
+    };
+    assert!(stderr.contains("BEGIN: Ok"), "begin succeeds before the refused recording: {stderr}");
     assert_eq!(
         status.code(),
         Some(3),
         "the recording must fail, not succeed or crash: {status:?}\n{stderr}"
     );
     assert!(stderr.contains("FINISH: Err"), "{stderr}");
+    #[cfg(not(windows))]
     assert!(
         stderr.to_lowercase().contains("file too large") || stderr.contains("EFBIG"),
         "the I/O error is named: {stderr}"
     );
+    #[cfg(windows)]
+    assert!(stderr.contains("os error 33"), "the native lock violation is named: {stderr}");
 }

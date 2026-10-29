@@ -79,84 +79,9 @@ fn run_child(path: &Path, pre: &str) -> (std::process::ExitStatus, String) {
     (out.status, String::from_utf8_lossy(&out.stderr).into_owned())
 }
 
-// Windows byte-range locks are enforced against other handles, including
-// writes beyond EOF. Keep the header writable and refuse the same later event
-// write the POSIX file-size limit exercises. No mock writer or elevated volume
-// configuration is involved.
-// https://learn.microsoft.com/en-us/windows/win32/fileio/locking-and-unlocking-byte-ranges-in-files
 #[cfg(windows)]
-mod windows_refusal {
-    use std::ffi::c_void;
-    use std::fs::File;
-    use std::io;
-    use std::os::windows::io::AsRawHandle;
-    use std::path::Path;
-
-    #[repr(C)]
-    struct Overlapped {
-        internal: usize,
-        internal_high: usize,
-        offset: u32,
-        offset_high: u32,
-        event: *mut c_void,
-    }
-
-    #[link(name = "kernel32")]
-    unsafe extern "system" {
-        fn LockFileEx(file: *mut c_void, flags: u32, reserved: u32, length_low: u32, length_high: u32, overlapped: *mut Overlapped) -> i32;
-        fn UnlockFileEx(file: *mut c_void, reserved: u32, length_low: u32, length_high: u32, overlapped: *mut Overlapped) -> i32;
-    }
-
-    pub struct LockedRange {
-        file: File,
-        overlapped: Overlapped,
-        locked: bool,
-    }
-
-    impl LockedRange {
-        pub fn new(path: &Path) -> io::Result<Self> {
-            let mut lock = Self {
-                file: File::create(path)?,
-                overlapped: Overlapped {
-                    internal: 0,
-                    internal_high: 0,
-                    offset: 64 * 1024,
-                    offset_high: 0,
-                    event: std::ptr::null_mut(),
-                },
-                locked: false,
-            };
-            // Synchronous handle, exclusive + fail immediately. All pointers
-            // remain valid for this call; no asynchronous operation is issued.
-            let ok = unsafe { LockFileEx(lock.file.as_raw_handle(), 0x2 | 0x1, 0, u32::MAX, 0, &mut lock.overlapped) };
-            if ok == 0 {
-                return Err(io::Error::last_os_error());
-            }
-            lock.locked = true;
-            Ok(lock)
-        }
-
-        pub fn unlock(&mut self) -> io::Result<()> {
-            if self.locked {
-                // Same live handle, range and synchronous structure as above.
-                let ok = unsafe { UnlockFileEx(self.file.as_raw_handle(), 0, u32::MAX, 0, &mut self.overlapped) };
-                if ok == 0 {
-                    return Err(io::Error::last_os_error());
-                }
-                self.locked = false;
-            }
-            Ok(())
-        }
-    }
-
-    impl Drop for LockedRange {
-        fn drop(&mut self) {
-            // Also release on assertion failure; closing File releases the
-            // owned lock if explicit unlocking itself fails during unwinding.
-            let _ = self.unlock();
-        }
-    }
-}
+#[path = "support/windows_write_refusal.rs"]
+mod windows_refusal;
 
 /// Without a limit the same recording finishes, so the failure below is the
 /// limit's doing and not the recording's.
@@ -185,7 +110,7 @@ fn a_write_refused_while_recording_fails_the_finish() {
     let (status, stderr) = run_child(&path, "trap '' XFSZ; ulimit -f 16;");
     #[cfg(windows)]
     let (status, stderr) = {
-        let mut lock = windows_refusal::LockedRange::new(&path).expect("lock future event bytes");
+        let mut lock = windows_refusal::LockedRange::new(&path, 64 * 1024).expect("lock future event bytes");
         let result = run_child(&path, "");
         lock.unlock().expect("unlock owned event range");
         result

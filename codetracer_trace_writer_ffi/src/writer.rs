@@ -277,6 +277,22 @@ fn name_key(h: &mut TraceWriterHandle, bytes: &[u8]) -> String {
     }
 }
 
+/// Recorded source paths are wire bytes, not filesystem paths. Windows OS
+/// strings cannot represent arbitrary invalid UTF-8. As with raw names, use a
+/// NUL-prefixed logical key no C string can equal and retain its original bytes.
+/// The filesystem-path decoder remains separate and unchanged.
+fn recorded_path(h: &mut TraceWriterHandle, bytes: &[u8]) -> PathBuf {
+    if cfg!(windows) && std::str::from_utf8(bytes).is_err() {
+        let key = PathBuf::from(format!("\0raw-path:{}", bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()));
+        if let Some(w) = h.ctfs.as_mut() {
+            w.register_raw_path(key.clone(), bytes.to_vec());
+        }
+        key
+    } else {
+        path_from_bytes(bytes)
+    }
+}
+
 /// `bytes` as meta.dat text, which is UTF-8; otherwise the refusal, naming
 /// `what`, reported with `prefix`.
 fn meta_text(bytes: &[u8], prefix: &str, what: &str) -> Option<String> {
@@ -987,10 +1003,11 @@ pub unsafe extern "C" fn trace_writer_register_path_with_line_count(handle: *mut
         1,
         "trace_writer_register_path_with_line_count: NULL handle",
         |h| {
+            let p = recorded_path(h, unsafe { cstr_bytes(path) });
             let Ok(w) = ready(h, "trace_writer_register_path_with_line_count") else {
                 return 1;
             };
-            match w.register_path_with_line_count(&path_from_bytes(unsafe { cstr_bytes(path) }), line_count) {
+            match w.register_path_with_line_count(&p, line_count) {
                 Ok(_) => 0,
                 Err(e) => {
                     set_error(&e);
@@ -1018,7 +1035,7 @@ pub unsafe extern "C" fn trace_writer_register_path_with_line_lengths(
         1,
         "trace_writer_register_path_with_line_lengths: NULL handle",
         |h| {
-            let p = path_from_bytes(unsafe { cstr_bytes(path) });
+            let p = recorded_path(h, unsafe { cstr_bytes(path) });
             let Some(w) = h.ctfs.as_mut() else {
                 set_error("trace_writer_register_path_with_line_lengths: writer not ready (call trace_writer_begin_events first)");
                 return 1;
@@ -1051,10 +1068,11 @@ pub unsafe extern "C" fn trace_writer_register_path_version(handle: *mut TraceWr
         CT_TW_INVALID_PATH_ID,
         "trace_writer_register_path_version: NULL handle",
         |h| {
+            let p = recorded_path(h, unsafe { cstr_bytes(path) });
             let Ok(w) = ready(h, "trace_writer_register_path_version") else {
                 return CT_TW_INVALID_PATH_ID;
             };
-            match w.register_path_version(&path_from_bytes(unsafe { cstr_bytes(path) }), line_count) {
+            match w.register_path_version(&p, line_count) {
                 Ok(id) => id.0 as u64,
                 Err(e) => {
                     set_error(&e);
@@ -1077,10 +1095,10 @@ pub unsafe extern "C" fn trace_writer_current_path_id(handle: *mut TraceWriterHa
         CT_TW_INVALID_PATH_ID,
         "trace_writer_current_path_id: NULL handle",
         |h| {
+            let p = recorded_path(h, unsafe { cstr_bytes(path) });
             let Ok(w) = ready(h, "trace_writer_current_path_id") else {
                 return CT_TW_INVALID_PATH_ID;
             };
-            let p = path_from_bytes(unsafe { cstr_bytes(path) });
             match w.current_path_id(&p) {
                 Some(id) => id.0 as u64,
                 None => {
@@ -1107,10 +1125,10 @@ pub unsafe extern "C" fn trace_writer_register_path(handle: *mut TraceWriterHand
         CT_TW_INVALID_PATH_ID,
         "trace_writer_register_path: NULL handle",
         |h| {
+            let p = recorded_path(h, unsafe { cstr_bytes(path) });
             let Ok(w) = ready(h, "trace_writer_register_path") else {
                 return CT_TW_INVALID_PATH_ID;
             };
-            let p = path_from_bytes(unsafe { cstr_bytes(path) });
             if let Some(id) = w.current_path_id(&p) {
                 return id.0 as u64;
             }
@@ -1285,7 +1303,7 @@ pub unsafe extern "C" fn trace_writer_next_step_index(handle: *mut TraceWriterHa
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_start(handle: *mut TraceWriterHandle, path: *const c_char, line: i64) {
     with_handle("trace_writer_start", handle, true, (), (), |h| {
-        let p = path_from_bytes(unsafe { cstr_bytes(path) });
+        let p = recorded_path(h, unsafe { cstr_bytes(path) });
         let Some(w) = h.ctfs.as_mut() else {
             return;
         };
@@ -1304,7 +1322,7 @@ pub unsafe extern "C" fn trace_writer_start(handle: *mut TraceWriterHandle, path
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn trace_writer_register_step(handle: *mut TraceWriterHandle, path: *const c_char, line: i64) {
     with_handle("trace_writer_register_step", handle, true, (), (), |h| {
-        let p = path_from_bytes(unsafe { cstr_bytes(path) });
+        let p = recorded_path(h, unsafe { cstr_bytes(path) });
         if h.ctfs.is_none() {
             return;
         }
@@ -1325,7 +1343,7 @@ pub unsafe extern "C" fn trace_writer_register_step(handle: *mut TraceWriterHand
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn ct_assignment_with_column(handle: *mut TraceWriterHandle, path: *const c_char, line: i64, _column: i64, has_column: i32) {
     with_handle("ct_assignment_with_column", handle, true, (), (), |h| {
-        let p = path_from_bytes(unsafe { cstr_bytes(path) });
+        let p = recorded_path(h, unsafe { cstr_bytes(path) });
         if h.ctfs.is_none() {
             return;
         }
@@ -1387,7 +1405,7 @@ pub unsafe extern "C" fn trace_writer_ensure_function_id(
         if let Some(&id) = h.function_ids.get(&n) {
             return id;
         }
-        let p = path_from_bytes(unsafe { cstr_bytes(path) });
+        let p = recorded_path(h, unsafe { cstr_bytes(path) });
         let id = {
             let Some(w) = h.ctfs.as_mut() else {
                 set_error("trace_writer_ensure_function_id: writer is not ready");
@@ -2651,6 +2669,39 @@ pub unsafe extern "C" fn trace_writer_enable_linehits(handle: *mut TraceWriterHa
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recorded_invalid_path_does_not_alias_replacement_characters() {
+        use std::ffi::CString;
+        let program = CString::new("raw-paths").unwrap();
+        let raw = CString::new(b"/src/b\xff\xfed.py".to_vec()).unwrap();
+        let replacement = CString::new("/src/b\u{fffd}\u{fffd}d.py").unwrap();
+        unsafe {
+            let h = trace_writer_new(program.as_ptr(), FORMAT_BINARY);
+            assert!(!h.is_null());
+            assert_eq!(trace_writer_begin_in_memory(h), 0);
+            let a = trace_writer_register_path(h, raw.as_ptr());
+            let b = trace_writer_register_path(h, replacement.as_ptr());
+            assert_ne!(a, CT_TW_INVALID_PATH_ID);
+            assert_ne!(b, CT_TW_INVALID_PATH_ID);
+            assert_ne!(a, b);
+            assert_eq!(trace_writer_current_path_id(h, raw.as_ptr()), a);
+            assert_eq!(trace_writer_close(h), 0);
+            let data = (*h).container.clone();
+            trace_writer_free(h);
+            let mut reader = codetracer_ctfs::CtfsReader::from_bytes(data).unwrap();
+            let paths = reader.read_file("paths.dat").unwrap();
+            let offsets = reader.read_file("paths.off").unwrap();
+            let record = |id: u64| {
+                let at = id as usize * 8;
+                let start = u64::from_le_bytes(offsets[at..at + 8].try_into().unwrap()) as usize;
+                let end = u64::from_le_bytes(offsets[at + 8..at + 16].try_into().unwrap()) as usize;
+                &paths[start..end]
+            };
+            assert_eq!(record(a), raw.as_bytes());
+            assert_eq!(record(b), replacement.as_bytes());
+        }
+    }
 
     /// Formats 0 and 1 named the combined `events.log` stream, which is not
     /// part of the trace format: both are refused by name, and the binary

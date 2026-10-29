@@ -18,6 +18,10 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef _WIN32
+#include <fcntl.h>
+#include <io.h>
+#endif
 
 #include "codetracer_trace_writer.h"
 
@@ -1407,6 +1411,14 @@ int main(int argc, char** argv) {
         return 2;
     }
     codetracer_trace_writer_init();
+#ifdef _WIN32
+    /* Library initialization must not choose the host transcript transport.
+     * Compare the same raw bytes from both real C hosts, without CRLF folding. */
+    if (_setmode(_fileno(stdout), _O_BINARY) == -1) {
+        perror("binary stdout");
+        return 2;
+    }
+#endif
     s = argv[1];
     g_dir = argv[2];
     setvbuf(stdout, NULL, _IOFBF, 1 << 16);

@@ -768,6 +768,14 @@ impl CtfsTraceWriter {
         }
     }
 
+    /// Record original source-path bytes under a logical key that cannot be a
+    /// NUL-terminated C path. This key is never a host filesystem location.
+    pub fn register_raw_path(&mut self, key: std::path::PathBuf, bytes: Vec<u8>) {
+        if let Some(builder) = self.interning_tables_builder.as_mut() {
+            builder.register_raw_path(key, bytes);
+        }
+    }
+
     /// Seal the buffered spans as a chunk, possibly a short one, and publish
     /// it, so a reader of the growing container sees them. A no-op when no
     /// span is buffered or none was ever registered.

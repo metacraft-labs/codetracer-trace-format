@@ -181,6 +181,8 @@ pub struct InterningTablesBuilder {
     /// type or variable name interned under a key of this map is recorded as
     /// these bytes. See [`InterningTablesBuilder::register_raw_name`].
     raw_names: std::collections::HashMap<String, Vec<u8>>,
+    /// Recorded path bytes for logical keys that cannot be host OS strings.
+    raw_paths: std::collections::HashMap<std::path::PathBuf, Vec<u8>>,
 }
 
 impl InterningTablesBuilder {
@@ -242,6 +244,11 @@ impl InterningTablesBuilder {
         self.raw_names.insert(key, bytes);
     }
 
+    /// Bind a collision-free logical path key to its original wire bytes.
+    pub fn register_raw_path(&mut self, key: std::path::PathBuf, bytes: Vec<u8>) {
+        self.raw_paths.insert(key, bytes);
+    }
+
     fn name_bytes(&self, name: &str) -> Vec<u8> {
         self.raw_names.get(name).cloned().unwrap_or_else(|| name.as_bytes().to_vec())
     }
@@ -253,7 +260,12 @@ impl InterningTablesBuilder {
     pub fn observe(&mut self, event: &TraceLowLevelEvent) {
         match event {
             TraceLowLevelEvent::Path(path) => {
-                self.paths.push(path.as_os_str().as_encoded_bytes().to_vec());
+                self.paths.push(
+                    self.raw_paths
+                        .get(path)
+                        .cloned()
+                        .unwrap_or_else(|| path.as_os_str().as_encoded_bytes().to_vec()),
+                );
                 match self.next_path_line_count.take() {
                     Some(count) => {
                         self.space.push_file(count);
@@ -443,6 +455,39 @@ mod tests {
         assert_eq!(read_record(&dat, &off, 2), b"hello");
         // Trailing sentinel == total length.
         assert_eq!(read_off(&off, 3) as usize, dat.len());
+    }
+
+    #[test]
+    fn recorded_raw_paths_keep_bytes_in_every_layout() {
+        let raw = b"/src/b\xff\xfed.py";
+        let key = PathBuf::from("\0raw-path:test");
+        let replacement = PathBuf::from("/src/b\u{fffd}\u{fffd}d.py");
+        for layout in 0..3 {
+            let mut b = InterningTablesBuilder::new();
+            b.set_column_aware(layout == 2);
+            b.set_line_count_table(layout == 1);
+            b.register_raw_path(key.clone(), raw.to_vec());
+            b.set_next_path_line_count(7);
+            b.observe(&TraceLowLevelEvent::Path(key.clone()));
+            b.set_path_line_lengths(0, &[2, 5]);
+            b.set_next_path_line_count(7);
+            b.observe(&TraceLowLevelEvent::Path(replacement.clone()));
+            b.set_path_line_lengths(1, &[2, 5]);
+            let expected = match layout {
+                0 => raw.to_vec(),
+                1 => {
+                    let mut r = vec![];
+                    encode_varint(raw.len() as u64, &mut r);
+                    r.extend_from_slice(raw);
+                    encode_varint(7, &mut r);
+                    r
+                }
+                _ => crate::column_aware::encode_path_bytes_record_layout_a(raw, &[2, 5]),
+            };
+            let t = b.finish();
+            assert_eq!(read_record(&t.paths_dat, &t.paths_off, 0), expected);
+            assert_ne!(read_record(&t.paths_dat, &t.paths_off, 0), read_record(&t.paths_dat, &t.paths_off, 1));
+        }
     }
 
     #[test]

@@ -7,6 +7,9 @@ use codetracer_trace_writer::meta_dat::{MetaDat, decode_meta_dat, encode_meta_da
 
 use crate::{alloc_buffer, bytes, cstr_bytes, free_buffer, guarded, path_from_bytes, set_error};
 
+#[cfg(test)]
+mod tests;
+
 /// Whether `id` is a canonical UUIDv7 in its 36-character lowercase text form.
 pub(crate) fn validate_recording_id(id: &str) -> Result<(), String> {
     let s = id.as_bytes();
@@ -412,6 +415,16 @@ fn append_files(path: &std::path::Path, files: &[(String, &[u8])]) -> Result<(),
                 "already contains an internal file named {name}; CTFS is append-only and this writer will not overwrite it"
             )));
         }
+    }
+    // This API attaches a batch to a sealed container. Unlike the generic
+    // live writer, a refused interning set must not publish that batch before
+    // reporting failure. Check the resulting namespace, including members
+    // already present, before add_file/write can change the underlying file.
+    // Keep the shared all-eight-or-none predicate and streaming close intact.
+    if let Some(refusal) = codetracer_ctfs::interning_set::interning_set_refusal(|member| {
+        writer.find_file(member).is_some() || files.iter().any(|(name, _)| name == member)
+    }) {
+        return Err(at(refusal));
     }
     for (name, data) in files {
         let h = writer.add_file(name).map_err(|e| at(format!("cannot add {name}: {e}")))?;

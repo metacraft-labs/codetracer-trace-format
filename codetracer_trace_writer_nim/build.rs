@@ -31,6 +31,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 mod nimcache_path;
+mod msvc_runtime;
 
 /// Recursively collect the Nim source files under `dir` (`.nim` / `.nims` /
 /// `.cfg` / `.nimble`, and the `.c` / `.h` files they `{.compile.}`), skipping VCS and build-output directories. Used to make
@@ -67,6 +68,13 @@ fn main() {
     // the `x86_64-pc-windows-gnu` target (used by e.g. the Ruby recorder to
     // match MSYS2 Ruby) needs MinGW gcc and a `.a`.
     let msvc = windows && env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc");
+    // Cargo's CRT choice is part of the foreign-host ABI, not a change to
+    // the producer's heap/thread policy or its standalone defaults.
+    let runtime_argument = msvc_runtime::compiler_argument(
+        msvc,
+        &env::var("CARGO_CFG_TARGET_FEATURE").unwrap_or_default(),
+    );
+    println!("cargo:rerun-if-changed=msvc_runtime.rs");
     let lib_name = if msvc {
         "codetracer_trace_writer.lib"
     } else {
@@ -155,11 +163,7 @@ fn main() {
     // nimcache in a short directory under the system temp dir avoids that.
     // The directory is keyed by a deterministic hash of OUT_DIR so each
     // cargo build unit gets its own cache and incremental reuse still works.
-    let mut hasher = DefaultHasher::new();
-    out_dir.hash(&mut hasher);
-    // Include the Nim source hash so a source change lands in a fresh nimcache
-    // rather than incrementally reusing objects compiled from the old sources.
-    nim_src_hash.hash(&mut hasher);
+    let cache_identity = msvc_runtime::cache_identity(&out_dir, nim_src_hash, runtime_argument);
     // Cargo otherwise considers the build script fresh after an operator moves
     // scratch off a full volume. Include the host's temp-dir inputs, including
     // GetTempPath2's SYSTEMTEMP on Windows, and the fallback's SystemRoot.
@@ -172,7 +176,7 @@ fn main() {
     let fallback = PathBuf::from(env::var_os("SystemRoot").unwrap_or_else(|| "C:\\Windows".into())).join("Temp");
     #[cfg(not(windows))]
     let fallback = PathBuf::from("/tmp");
-    let (nimcache, used_fallback) = nimcache_path::select(&temp, &fallback, hasher.finish());
+    let (nimcache, used_fallback) = nimcache_path::select(&temp, &fallback, cache_identity);
     if used_fallback {
         // stderr is intentional: raw build-script invocations must explain the
         // fallback too, while Cargo surfaces the warning in normal builds.
@@ -264,6 +268,12 @@ fn main() {
         .arg(format!("--out:{}", lib_path.display()))
         // Everything after `--` is passed to `nim c` after the script's flags.
         .arg("--");
+    // Use the producer's existing compiler-argument tail, exactly as for
+    // this host's dependency include paths. Do not change Rust's CRT mode
+    // or force an unrelated CRT library into the final link.
+    if let Some(argument) = runtime_argument {
+        nim.arg(argument);
+    }
     // ``CODETRACER_TRACE_FORMAT_NIM_EXTRA_PATHS`` (the host platform's path
     // separator: `:` on POSIX, `;` on Windows)
     // injects additional ``--path:`` directives.  Callers that skip

@@ -58,6 +58,23 @@ jobs:
           if-no-files-found: warn
           retention-days: 7
 
+      # Keep the original workspace exclusions below. Exercise this specific
+      # foreign-host archive contract additively with the normal provisioned
+      # Nim/Cargo/MSVC tools, in both supported C-runtime modes.
+      - name: Verify Nim archive MSVC runtime interoperability
+        id: nim_crt
+        shell: pwsh
+        run: dev-exec pwsh -NoProfile -File ./codetracer_trace_writer_nim/tests/msvc_runtime.ps1
+
+      - name: Preserve MSVC runtime interoperability evidence
+        if: always() && steps.nim_crt.outputs.evidence_dir != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: nim-msvc-runtime-${{ matrix.runner }}
+          path: ${{ steps.nim_crt.outputs.evidence_dir }}
+          retention-days: 7
+          if-no-files-found: error
+
       # Two crates are excluded on Windows:
       #
       # * codetracer_trace_writer_nim: links against libcodetracer_trace_writer.a

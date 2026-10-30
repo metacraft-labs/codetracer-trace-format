@@ -42,7 +42,8 @@
               pkgs.pkg-config
               pkgs.zstd # libzstd for zeekstd/zstd-sys
 
-              # Development tools
+              # Development tools, including the committed portable hook set.
+              pkgs.pre-commit
               pkgs.cargo-edit
             ];
 

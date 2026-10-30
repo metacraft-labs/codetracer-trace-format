@@ -75,3 +75,15 @@ Documentation for released versions will be automatically hosted on
 Authored and maintained by Metacraft Labs, Ltd
 
 LICENSE: MIT
+
+## MSVC host C-runtime interoperability
+
+The Nim writer's Rust build adapter follows Cargo's `crt-static` target context
+through the producer's existing compiler-argument interface. It does not change
+standalone Nim defaults or the library's ARC/thread/process-lock configuration.
+On Windows, run `pwsh -NoProfile -File codetracer_trace_writer_nim/tests/msvc_runtime.ps1`
+inside the normal development environment. This compiles and links real archives
+in DLL and static CRT modes, exercises dictionary training and roundtrip I/O,
+and retains the actual producer arguments, archive hashes and separate caches.
+The existing Windows workflow runs these checks in addition to its unchanged
+workspace test command and exclusions. No source or SDK bootstrap is performed.

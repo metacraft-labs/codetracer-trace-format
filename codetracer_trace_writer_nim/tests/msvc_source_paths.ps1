@@ -22,8 +22,8 @@ if ([IO.Directory]::Exists($scratch)) { throw 'source-path scratch already exist
 [IO.Directory]::CreateDirectory($scratch) | Out-Null
 $receipt = @{ complete = $false; target = $TargetTriple; compiler_platform = $platform; cases = @() }
 try {
-    $wrapper = (Get-Command vccexe.exe -CommandType Application -ErrorAction Stop).Source
-    $nim = (Get-Command nim.exe -CommandType Application -ErrorAction Stop).Source
+    $wrapper = (Get-Command vccexe.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+    $nim = (Get-Command nim.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
     $receipt.wrapper = @{ path = $wrapper; sha256 = (Get-FileHash -LiteralPath $wrapper -Algorithm SHA256).Hash }
     $receipt.nim = @{ path = $nim; sha256 = (Get-FileHash -LiteralPath $nim -Algorithm SHA256).Hash }
     $source = Join-Path $scratch '@mcodetracer_trace_writer@sstreaming_value_encoder.nim.c'
@@ -70,7 +70,7 @@ try {
     # This is fixture observation, never a production compilation workaround.
     $direct = @'
 $ErrorActionPreference = 'Stop'
-$compiler = (Get-Command cl.exe -CommandType Application -ErrorAction Stop).Source
+$compiler = (Get-Command cl.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
 $cwd = [IO.Directory]::GetCurrentDirectory()
 $marker = [IO.File]::ReadAllText((Join-Path $cwd 'cwd-marker'))
 $observation = @{

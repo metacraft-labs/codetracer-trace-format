@@ -98,6 +98,7 @@ try {
         Write-Host "PASS $($crtCase.name): real Nim archive, dictionary-builder link/roundtrip and context controls"
     }
     if ($crtReceipt.modes[0].cache -eq $crtReceipt.modes[1].cache) { throw 'different CRT objects shared one native cache' }
+    & (Join-Path $PSScriptRoot 'msvc_source_paths.ps1') -EvidenceRoot $crtEvidence -TargetTriple $rustHostTriple
     $crtReceipt.complete = $true
     Write-Host "PASS both MSVC CRT modes; evidence $crtEvidence"
 } finally {

@@ -189,7 +189,11 @@ fn rust_archive() -> NativeBuild {
         .arg("--target-dir")
         .arg(target_dir)
         .current_dir(env!("CARGO_MANIFEST_DIR"));
-    if explicit_target || env!("CT_PARITY_HOST") != env!("CT_PARITY_TARGET") {
+    // Bound to names first: both expand to string literals, and on a native
+    // build they are the same literal, which clippy's eq_op rejects as a
+    // comparison that cannot vary even though it does across builds.
+    let (parity_host, parity_target) = (env!("CT_PARITY_HOST"), env!("CT_PARITY_TARGET"));
+    if explicit_target || parity_host != parity_target {
         cmd.args(["--target", env!("CT_PARITY_TARGET")]);
     }
     if profile_dir.file_name().is_some_and(|n| n == "release") {

@@ -30,8 +30,8 @@ use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-mod nimcache_path;
 mod msvc_runtime;
+mod nimcache_path;
 
 /// Recursively collect the Nim source files under `dir` (`.nim` / `.nims` /
 /// `.cfg` / `.nimble`, and the `.c` / `.h` files they `{.compile.}`), skipping VCS and build-output directories. Used to make
@@ -70,10 +70,7 @@ fn main() {
     let msvc = windows && env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("msvc");
     // Cargo's CRT choice is part of the foreign-host ABI, not a change to
     // the producer's heap/thread policy or its standalone defaults.
-    let runtime_argument = msvc_runtime::compiler_argument(
-        msvc,
-        &env::var("CARGO_CFG_TARGET_FEATURE").unwrap_or_default(),
-    );
+    let runtime_argument = msvc_runtime::compiler_argument(msvc, &env::var("CARGO_CFG_TARGET_FEATURE").unwrap_or_default());
     println!("cargo:rerun-if-changed=msvc_runtime.rs");
     let lib_name = if msvc {
         "codetracer_trace_writer.lib"

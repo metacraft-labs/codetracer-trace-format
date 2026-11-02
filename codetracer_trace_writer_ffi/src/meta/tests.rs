@@ -102,6 +102,6 @@ fn preflight_checks_existing_and_new_names_together() {
     }
     assert!(matches!(writer.close(), Err(codetracer_ctfs::CtfsError::PartialInterningTableSet(_))));
     assert_eq!(append(&path, &TABLES[2..]), 0, "the resulting namespace carries all eight members");
-    let mut reader = codetracer_ctfs::CtfsReader::from_bytes(std::fs::read(&path).unwrap()).unwrap();
+    let reader = codetracer_ctfs::CtfsReader::from_bytes(std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(reader.list_files(), TABLES.map(str::to_string));
 }

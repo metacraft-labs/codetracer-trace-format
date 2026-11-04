@@ -11,6 +11,14 @@ use codetracer_trace_types::TraceLowLevelEvent;
 /// Read every event of the `.ct` container at `path`.
 pub fn read_trace_from_ctfs(path: &std::path::Path) -> Result<Vec<TraceLowLevelEvent>, Box<dyn std::error::Error>> {
     let mut reader = CtfsReader::open(path)?;
+    if reader.list_files().iter().any(|name| name == "entry.dat") {
+        reader = reader.snapshot_owned()?;
+        if reader.list_files().iter().filter(|name| *name == "entry.dat").count() != 1 {
+            return Err("entry.dat: member changed during held-image capture".into());
+        }
+    }
+    crate::recorded_entry_reader::RecordedEntryReader::recorded_entry(&mut reader)?;
+
     crate::split_stream_reader::read_trace_from_split_streams(&mut reader).map_err(|e| e.into())
 }
 

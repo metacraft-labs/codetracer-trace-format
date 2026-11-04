@@ -187,6 +187,48 @@ impl CtfsReader {
         }
     }
 
+    /// Open a container from bytes the caller owns. The same as
+    /// [`from_bytes`](Self::from_bytes); the name states the property the
+    /// recorded-entry readers depend on: the image cannot change between
+    /// directory decoding, entry validation and stream reads.
+    pub fn from_owned_bytes(bytes: Vec<u8>) -> Result<Self, CtfsError> {
+        Self::from_bytes(bytes)
+    }
+
+    /// Whether this reader serves an immutable in-memory image rather than a
+    /// file that can still grow under it.
+    pub fn is_owned_image(&self) -> bool {
+        matches!(self.source, Source::Bytes(_))
+    }
+
+    /// An immutable owned image of the container this reader holds.
+    ///
+    /// A file-backed reader copies the bytes from the file it already holds
+    /// open -- it never reopens a pathname, which may by now name another
+    /// file -- and parses them as [`from_bytes`](Self::from_bytes) does. A
+    /// reader that already serves an owned image shares it.
+    pub fn snapshot_owned(&mut self) -> Result<Self, CtfsError> {
+        match &self.source {
+            Source::File(file) => {
+                let len = usize::try_from(file.metadata()?.len())
+                    .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidData, "container is larger than this platform's address space"))?;
+                let mut bytes = vec![0u8; len];
+                pread_exact(file, &mut bytes, 0)?;
+                Self::from_bytes(bytes)
+            }
+            Source::Bytes(image) => Ok(CtfsReader {
+                source: Source::Bytes(Arc::clone(image)),
+                block_size: self.block_size,
+                entries: self.entries.clone(),
+                compact_offsets: self.compact_offsets.clone(),
+                profile: self.profile,
+                whole_file_compression: self.whole_file_compression,
+                compression: self.compression,
+                encryption: self.encryption,
+            }),
+        }
+    }
+
     fn full_from_bytes(image: Vec<u8>, header_size: usize, whole_file_compression: WholeFileCompression) -> Result<Self, CtfsError> {
         let (header, ext_header, entries) = Self::read_root(&mut image.as_slice(), header_size)?;
         Ok(CtfsReader {

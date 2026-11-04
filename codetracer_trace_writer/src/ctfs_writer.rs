@@ -70,6 +70,9 @@ pub struct CtfsTraceWriter {
     /// Builds the call records from the observed event sequence (present only
     /// while a trace is being written).
     call_stream_builder: Option<CallStreamBuilder>,
+    recorded_entry: Option<crate::recorded_entry_identity::RecordedEntryIdentity>,
+    entry_records: std::collections::BTreeMap<u64, crate::call_stream::CallStreamRecord>,
+
     /// Records-per-chunk for `calls.dat`.
     calls_chunk_size: usize,
 
@@ -353,6 +356,8 @@ impl CtfsTraceWriter {
             compact_threshold: 0,
             recording_id: None,
             call_stream_builder: None,
+            recorded_entry: None,
+            entry_records: std::collections::BTreeMap::new(),
             calls_chunk_size: DEFAULT_CALLS_CHUNK_SIZE,
             step_stream_builder: None,
             step_map_builder: None,
@@ -1888,6 +1893,23 @@ impl CtfsTraceWriter {
         self.latch(result.map_err(|e| format!("writing an interning record: {e}")));
     }
 
+    /// Mark the actual active call; repeated identical marks are idempotent.
+    pub fn mark_current_call_as_entry(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        let builder = self.call_stream_builder.as_ref().ok_or("entry.dat: call stream is not active")?;
+        let entry = builder.active_entry().ok_or("entry.dat: no active call")?;
+        if let Some(old) = self.recorded_entry {
+            if old != entry {
+                return Err("entry.dat: a different entry is already marked".into());
+            }
+            return Ok(());
+        }
+        crate::recorded_entry_identity::encode_entry_identity(entry)?;
+        self.entry_records
+            .extend(builder.pending_entry_records().into_iter().map(|r| (r.call_key, r)));
+        self.recorded_entry = Some(entry);
+        Ok(())
+    }
+
     /// Move every record that has become final into its stream: steps as they
     /// are built, values once no later event can change them, calls once they
     /// and every call before them have returned, I/O events as they are
@@ -1912,6 +1934,9 @@ impl CtfsTraceWriter {
         }
         if let (Some(builder), Some(sink)) = (self.call_stream_builder.as_mut(), self.calls_sink.as_mut()) {
             for record in builder.take_complete() {
+                if self.recorded_entry.is_some() {
+                    self.entry_records.insert(record.call_key, record.clone());
+                }
                 let mut bytes = Vec::new();
                 record.encode(&mut bytes);
                 if result.is_ok() {
@@ -2364,6 +2389,10 @@ impl AbstractTraceWriter for CtfsTraceWriter {
 }
 
 impl TraceWriter for CtfsTraceWriter {
+    fn mark_current_call_as_entry(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        CtfsTraceWriter::mark_current_call_as_entry(self)
+    }
+
     // ---------------------------------------------------------------------
     // THE COLUMN-AWARE FAMILY IS HONOURED NOW, AND THESE OVERRIDES ARE WHAT
     // DELIVERS THAT TO A CALLER HOLDING THE TRAIT.
@@ -2525,8 +2554,12 @@ impl TraceWriter for CtfsTraceWriter {
             }
             closing = closing.and_then(|_| sink.finish());
         }
+        let entry_step_count = self.call_stream_builder.as_ref().map(|b| b.exec_records()).unwrap_or(0);
         if let Some(sink) = self.calls_sink.as_mut() {
             for record in self.call_stream_builder.take().map(|b| b.finish()).unwrap_or_default() {
+                if self.recorded_entry.is_some() {
+                    self.entry_records.insert(record.call_key, record.clone());
+                }
                 let mut bytes = Vec::new();
                 record.encode(&mut bytes);
                 closing = closing.and_then(|_| sink.push(&bytes));
@@ -2613,6 +2646,24 @@ impl TraceWriter for CtfsTraceWriter {
                 Ok(())
             });
             self.latch(r.map_err(|e| format!("writing {name}: {e}")));
+        }
+
+        if let Some(entry) = self.recorded_entry {
+            let records: Vec<_> = self.entry_records.values().cloned().collect();
+            let names = self
+                .base
+                .functions
+                .iter()
+                .map(|(name, id)| (id.0 as u64, name.as_bytes().to_vec()))
+                .collect();
+            let result = crate::recorded_entry_identity::validate_entry_image(entry, &records, entry_step_count, &names)
+                .and_then(|_| crate::recorded_entry_identity::encode_entry_identity(entry))
+                .and_then(|bytes| {
+                    let writer = self.ctfs_writer.as_mut().ok_or("entry.dat: container is not active")?;
+                    let handle = writer.add_file("entry.dat").map_err(|e| e.to_string())?;
+                    writer.write(handle, &bytes).map(|_| ()).map_err(|e| e.to_string())
+                });
+            self.latch(result);
         }
 
         if let Some(err) = self.write_error.take() {

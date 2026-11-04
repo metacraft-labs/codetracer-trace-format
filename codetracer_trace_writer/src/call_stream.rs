@@ -356,6 +356,22 @@ impl CallStreamBuilder {
         self.return_override = Some(value);
     }
 
+    /// Capture the actual active call; no caller-supplied identifiers.
+    pub fn active_entry(&self) -> Option<crate::recorded_entry_identity::RecordedEntryIdentity> {
+        let key = *self.open_stack.last()?;
+        let record = self.records.get(key.checked_sub(self.taken)?)?;
+        Some(crate::recorded_entry_identity::RecordedEntryIdentity {
+            call_key: record.call_key,
+            function_id: record.function_id,
+            entry_step: record.first_step_id,
+        })
+    }
+
+    /// The call records not yet handed out, for validating a recorded entry.
+    pub fn pending_entry_records(&self) -> Vec<CallStreamRecord> {
+        self.records.clone()
+    }
+
     /// Feed one event in stream order.
     pub fn observe(&mut self, event: &TraceLowLevelEvent) {
         match event {

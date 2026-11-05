@@ -492,7 +492,7 @@ try:
     module_before = image(module)
     plugin = direnv_profile / 'share/trace-cross-reader/flake-overrides.bash'
     plugin_body = plugin.read_bytes()
-    if hashlib.sha256(plugin_body).hexdigest() != '8b10a0a0b0cf25e964b93e60ba481f7cdc60f5e7526447d538ae5072292d23be':
+    if hashlib.sha256(plugin_body).hexdigest() != '08c7365e9388da5de98bd8fe18a8e32271f4006f65730e0fcdaa62d22335b0d2':
         raise RuntimeError('Plugin differs from the actual envrc pinned body')
     root_source = tracked(root)
     root_config = metadata(root, 'config', '--null', '--show-origin', '--list')

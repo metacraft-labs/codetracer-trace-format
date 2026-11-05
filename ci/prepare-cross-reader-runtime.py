@@ -13,7 +13,6 @@ import shutil
 import re
 import shlex
 import importlib.util
-import ast
 
 sys.dont_write_bytecode = True
 helper_path = Path(__file__).with_name('generated-runtime-namespace.py')
@@ -118,37 +117,15 @@ def hook_directory_identity(path, fd=None):
     return [st.st_dev, st.st_ino, st.st_mode, st.st_uid]
 
 def declared_peer_config_continuity(peer, before):
+    # The tracked hook installer writes hook files only; it never sets
+    # core.hooksPath (the shellHook rewrites only a relative `.git/hooks`, which
+    # the initial census refuses). Effective configuration must stay exact, and
+    # once the installer ran, so must the hooks directory it wrote.
     if any(hook_directory_identity(path) != identity or hook_directory_identity(path, fd) != identity for path, fd, identity in hook_directory_bindings):
         return False
-    current = metadata(peer, 'config', '--null', '--show-origin', '--list')
-    if current == before:
-        return hook_transition is None or namespace(Path(hook_transition['path'])) == hook_transition['namespace']
-    if hook_transition is None:
+    if metadata(peer, 'config', '--null', '--show-origin', '--list') != before:
         return False
-    def split(data):
-        fields = data.split(b'\0')
-        if fields[-1] != b'' or (len(fields) - 1) % 2:
-            raise RuntimeError('Unsupported actual Git config inventory schema')
-        keep, hooks = [], []
-        for origin, entry in zip(fields[::2], fields[1::2]):
-            key, sep, value = entry.partition(b'\n')
-            if not sep:
-                raise RuntimeError('Unsupported actual Git config entry schema')
-            if key == b'core.hookspath':
-                hooks.append((origin, value))
-            else:
-                keep.append((origin, entry))
-        return keep, hooks
-    old_rest, old_hooks = split(before)
-    new_rest, new_hooks = split(current)
-    expected = (b'file:.git/config', os.fsencode(hook_transition['path']))
-    if old_rest != new_rest or old_hooks not in ([], [expected]) or new_hooks != [expected]:
-        return False
-    if metadata(peer, 'config', '--local', '--get', 'core.hooksPath').rstrip(b'\n') != expected[1]:
-        return False
-    common = Path(os.fsdecode(metadata(peer, 'rev-parse', '--path-format=absolute', '--git-common-dir').rstrip(b'\n')))
-    hooks = common / 'hooks'
-    return common == peer / '.git' and str(hooks) == hook_transition['path'] and namespace(hooks) == hook_transition['namespace']
+    return hook_transition is None or namespace(Path(hook_transition['path'])) == hook_transition['namespace']
 
 def nix_failure_classes(text):
     """Boolean observations of fixed selected Nix 2.31.2 error formats only."""
@@ -246,19 +223,14 @@ def run_child(command, peer, role, child_env=None):
         text = stderr.decode('utf-8', errors='replace')
         prefixes = []
         if diagnostic_source_peer is not None:
-            for name in ['nix/hook-ownership-guard.py', 'nix/hook-transaction.py']:
-                source_tree = ast.parse((diagnostic_source_peer / name).read_text())
-                for node in ast.walk(source_tree):
-                    if not (isinstance(node, ast.Raise) and isinstance(node.exc, ast.Call)
-                            and isinstance(node.exc.func, ast.Name) and node.exc.func.id == 'RuntimeError'
-                            and node.exc.args):
-                        continue
-                    value = node.exc.args[0]
-                    if isinstance(value, ast.BinOp) and isinstance(value.op, ast.Add):
-                        value = value.left
-                    if isinstance(value, ast.Constant) and isinstance(value.value, str) and len(value.value) > 10:
-                        if value.value in text:
-                            prefixes.append({'source': name, 'literalRefusalPrefix': value.value})
+            # The authenticated tracked hook installer refuses by echoing fixed
+            # text to stderr. Report only those literal leading prefixes, never
+            # the interpolated remainder.
+            name = 'scripts/install-git-hooks.sh'
+            installer_text = (diagnostic_source_peer / name).read_text()
+            for literal in re.findall(r'echo "([^"$\\]{11,})', installer_text):
+                if literal in text:
+                    prefixes.append({'source': name, 'literalRefusalPrefix': literal})
         commands = {'bash', 'python3', 'git', 'nix', 'direnv', 'jq', 'curl', 'dirname',
                     'basename', 'readlink', 'sort', 'sha256sum', 'cut', 'head', 'sed',
                     'grep', 'tr', 'mkdir', 'cp', 'chmod', 'touch', 'printf', 'env'}
@@ -379,7 +351,7 @@ try:
         raise RuntimeError('Preexisting foreign native hook configuration refused')
     # Fresh CI admission is deliberately exclusive. Existing activation/cache
     # code must not execute merely because its namespace was inventoried.
-    for generated in ['.direnv', '.nimble', '.pre-commit-config.yaml']:
+    for generated in ['.direnv', '.nimble']:
         if (peer / generated).exists() or (peer / generated).is_symlink():
             raise RuntimeError('Preexisting CI generated runtime root refused')
     peer_namespace = namespace(peer)
@@ -397,7 +369,7 @@ try:
         raise RuntimeError('Undeclared CI dotenv activation input')
     if (peer.parent / 'direnv-nix-flake-overrides/plugin/flake-overrides.bash').exists():
         raise RuntimeError('CI runtime requires the envrc pinned published plugin')
-    generated_roots = {'.direnv', '.nimble', '.pre-commit-config.yaml'}
+    generated_roots = {'.direnv', '.nimble'}
     source_namespace = [row for row in peer_namespace if row[0].split('/')[0] not in generated_roots]
     proof['prospectiveGeneratedRoots'] = sorted(generated_roots)
     proof['ordinarySourceNamespace'] = source_namespace
@@ -428,49 +400,48 @@ try:
     shell_hook = variables['shellHook']['value']
     if not isinstance(shell_hook, str):
         raise RuntimeError('Unsupported actual shellHook constructor schema')
-    transactions = [shlex.split(line) for line in shell_hook.splitlines() if 'hook-transaction' in line]
-    if len(transactions) != 1:
-        raise RuntimeError('Actual native-hook config constructor absent or ambiguous')
-    tokens = transactions[0]
+    # The tracked envrc's flake runs the tracked scripts/install-git-hooks.sh
+    # with the flake's own pre-commit, in a subshell, as one shellHook line:
+    #   ( cd "$ct_tfn_root" && bash <store>/install-git-hooks.sh <store>/bin/pre-commit ) || exit $?
+    installers = [shlex.split(line) for line in shell_hook.splitlines() if 'install-git-hooks' in line]
+    if len(installers) != 1:
+        raise RuntimeError('Actual native-hook installer constructor absent or ambiguous')
+    tokens = installers[0]
     script_positions = [i for i, token in enumerate(tokens)
-                        if re.fullmatch(r'/nix/store/[a-z0-9]{32}-hook-transaction\.py', token)]
+                        if re.fullmatch(r'/nix/store/[a-z0-9]{32}-install-git-hooks\.sh', token)]
     if len(script_positions) != 1:
-        raise RuntimeError('Actual native-hook transaction script absent or ambiguous')
+        raise RuntimeError('Actual native-hook installer script absent or ambiguous')
     script_position = script_positions[0]
-    if script_position == 0 or not re.fullmatch(r'/nix/store/[a-z0-9]{32}-python3-[^/]+/bin/python3', tokens[script_position - 1]):
-        raise RuntimeError('Actual native-hook Python constructor absent')
-    transaction_python = image(Path(tokens[script_position - 1]))
-    transaction_script = Path(tokens[script_position])
-    transaction_image = image(transaction_script)
-    if transaction_script.read_bytes() != (peer / 'nix/hook-transaction.py').read_bytes():
-        raise RuntimeError('Native-hook transaction differs from the tracked peer constructor')
-    # shellHook wraps the command in a subshell. Its whole-line token offset is
-    # not an argv offset; derive the role from the held script's actual parser.
-    parser = ast.parse(transaction_script.read_text())
-    config_roles = [node.value for node in parser.body if isinstance(node, ast.Assign)
-                    and any(isinstance(target, ast.Name) and target.id == 'config'
-                            for target in node.targets)]
-    if len(config_roles) != 1:
-        raise RuntimeError('Actual native-hook config parser absent or ambiguous')
-    role = config_roles[0]
-    if not (isinstance(role, ast.Subscript) and isinstance(role.value, ast.Attribute)
-            and isinstance(role.value.value, ast.Name) and role.value.value.id == 'sys'
-            and role.value.attr == 'argv' and isinstance(role.slice, ast.Constant)
-            and type(role.slice.value) is int and role.slice.value == 6):
-        raise RuntimeError('Unsupported actual native-hook config parser')
-    config_position = script_position + role.slice.value
-    if config_position >= len(tokens):
-        raise RuntimeError('Actual native-hook config argument absent')
-    expected_hook_config = Path(tokens[config_position])
-    if not re.fullmatch(r'/nix/store/[a-z0-9]{32}-pre-commit-config\.json', str(expected_hook_config)):
-        raise RuntimeError('Actual native-hook config constructor role differs')
-    expected_hook_config_before = image(expected_hook_config)
-    images.append(transaction_image)
-    images.append(transaction_python)
-    proof['nativeHookConstructor'] = {'transaction': transaction_image,
-                                     'python': transaction_python,
-                                     'configArgvPosition': role.slice.value,
-                                     'config': expected_hook_config_before}
+    if script_position == 0 or tokens[script_position - 1] != 'bash' or script_position + 1 >= len(tokens):
+        raise RuntimeError('Unsupported actual native-hook installer invocation')
+    pre_commit_token = tokens[script_position + 1]
+    if not re.fullmatch(r'/nix/store/[a-z0-9]{32}-[A-Za-z0-9_.+-]*pre-commit[A-Za-z0-9_.+-]*/bin/pre-commit', pre_commit_token):
+        raise RuntimeError('Actual native-hook pre-commit constructor absent')
+    installer_script = Path(tokens[script_position])
+    if installer_script.read_bytes() != (peer / 'scripts/install-git-hooks.sh').read_bytes():
+        raise RuntimeError('Native-hook installer differs from the tracked peer constructor')
+    # The installer's own marker line heads every hook it writes.
+    markers = re.findall(r"^marker='([^'\n]+)'$", installer_script.read_text(), re.MULTILINE)
+    if len(markers) != 1:
+        raise RuntimeError('Actual native-hook installer marker absent or ambiguous')
+    hook_marker = markers[0]
+    # Stages are the committed config's `default_install_hook_types`, else
+    # pre-commit alone. Only the default is admitted: a declared stage list is
+    # refused rather than re-parsed here with a second, divergent grammar.
+    config_slot_text = (peer / '.pre-commit-config.yaml').read_text()
+    if re.search(r'^default_install_hook_types\s*:', config_slot_text, re.MULTILINE):
+        raise RuntimeError('Unsupported declared native-hook stage inventory')
+    hook_stages = ['pre-commit']
+    for operand in (pre_commit_token, str(peer / '.git/hooks')):
+        if not re.fullmatch(r'[A-Za-z0-9_./+-]+', operand):
+            raise RuntimeError('Native-hook operand is not shell-literal')
+    hook_installer = image(installer_script)
+    hook_pre_commit = image(Path(pre_commit_token))
+    images.append(hook_installer)
+    images.append(hook_pre_commit)
+    proof['nativeHookConstructor'] = {'installer': hook_installer, 'preCommit': hook_pre_commit,
+                                     'marker': hook_marker, 'stages': hook_stages,
+                                     'configSha256': hashlib.sha256(config_slot_text.encode()).hexdigest()}
     expected_profile = expected_profile_slot.resolve(strict=True)
     archive_bytes, _ = run_child([str(nix), 'flake', 'archive', '--json', '--offline', '--no-write-lock-file', '.'], peer, 'actual-locked-peer-source-constructor')
     archive = json.loads(archive_bytes)
@@ -515,32 +486,14 @@ try:
             os.close(descriptor)
             raise RuntimeError('Native hook held directory differs')
         hook_directory_bindings.append((path, descriptor, identity))
-    # Authenticate the same tracked native constructor's complete canonical
-    # hook census before accepting its one declared local config output.
-    hook_roles = {'guard': 2, 'native': 3, 'templates': 4, 'legacy': 5,
-                  'legacy_config': 7, 'prior_native': 11, 'prior_config': 12}
-    for role_name, role_index in hook_roles.items():
-        assignments = [node.value for node in parser.body if isinstance(node, ast.Assign)
-                       and any(isinstance(t, ast.Name) and t.id == role_name for t in node.targets)]
-        if len(assignments) != 1 or not (isinstance(assignments[0], ast.Subscript)
-                and isinstance(assignments[0].value, ast.Attribute)
-                and isinstance(assignments[0].value.value, ast.Name)
-                and assignments[0].value.value.id == 'sys' and assignments[0].value.attr == 'argv'
-                and isinstance(assignments[0].slice, ast.Constant)
-                and assignments[0].slice.value == role_index):
-            raise RuntimeError('Unsupported actual native hook role parser')
-    hook_guard = Path(tokens[script_position + hook_roles['guard']])
-    if hook_guard.read_bytes() != (peer / 'nix/hook-ownership-guard.py').read_bytes():
-        raise RuntimeError('Native hook census differs from tracked constructor')
-    images.append(image(hook_guard))
-    role_values = {name: tokens[script_position + index] for name, index in hook_roles.items()}
-    hook_env = dict(os.environ)
-    hook_env['PATH'] = str(Path(expected_roles['git']['lexical']).parent) + os.pathsep + hook_env.get('PATH', '')
-    census_bytes, _ = run_child([transaction_python['lexical'], str(hook_guard), str(peer),
-            role_values['native'], 'snapshot', 'reserved', role_values['templates'],
-            role_values['legacy'], str(expected_hook_config), role_values['legacy_config'],
-            role_values['prior_native'], role_values['prior_config']], peer,
-            'verify-initial-native-hook-authority', hook_env)
+    # Census the fresh clone's hooks before activation. Only the selected Git
+    # template's inert `*.sample` members may exist: an active hook, a
+    # Reprobuild dispatcher or a `.legacy`/`.repro-local` chain member would
+    # make the installer take a different, undeclared branch.
+    hooks_before = {row[0]: row for row in namespace(common_before / 'hooks')}
+    if any(name != '.' and not (row[5] == 'file' and name.endswith('.sample') and '/' not in name)
+           for name, row in hooks_before.items()):
+        raise RuntimeError('Preexisting active native hook refused')
     proof['initialHookAuthorityVerified'] = True
     # Authorize only this already-authenticated tracked file, never a global allow.
     command = [str(direnv_profile / 'bin/direnv'), 'allow', str(envrc)]
@@ -561,32 +514,46 @@ try:
     activated, selected = helper_module.apply_activation(delta, diagnostics, activation_environment, expected_roles, image)
     if activated.get('NIMBLE_DIR') != str(peer / '.nimble'):
         raise RuntimeError('Declared Nimble source cache selector differs from owned seed output')
+    # The tracked config stays ordinary source (its bytes are guarded with the
+    # rest of the tracked peer); the installer's only declared outputs are the
+    # stage hook files it writes into the fresh clone's own hooks directory.
     config_slot = peer / '.pre-commit-config.yaml'
-    if not stat.S_ISLNK(config_slot.lstat().st_mode) or str(config_slot.resolve(strict=True)) != str(expected_hook_config):
-        raise RuntimeError('Native-hook generated config link differs from actual constructor')
-    census_bytes, _ = run_child([transaction_python['lexical'], str(hook_guard), str(peer),
-            role_values['native'], 'snapshot', 'reserved', role_values['templates'],
-            role_values['legacy'], str(expected_hook_config), role_values['legacy_config'],
-            role_values['prior_native'], role_values['prior_config']], peer,
-            'verify-actual-generated-native-hooks', hook_env)
-    hook_census = json.loads(census_bytes)
-    for name in ('pre-commit', 'pre-push'):
-        native_file = Path(role_values['native']) / name
-        if not stat.S_ISREG(native_file.lstat().st_mode):
-            raise RuntimeError('Native hook source is not an ordinary file')
-        if hook_census['entries'].get(name + '.repro-local') != [0o755, hashlib.sha256(native_file.read_bytes()).hexdigest()]:
-            raise RuntimeError('Actual native local hook differs from constructor')
-        images.append(image(native_file))
+    if not stat.S_ISREG(config_slot.lstat().st_mode) or config_slot.is_symlink():
+        raise RuntimeError('Committed native-hook config is not an ordinary tracked file')
     common = Path(os.fsdecode(metadata(peer, 'rev-parse', '--path-format=absolute', '--git-common-dir').rstrip(b'\n')))
     if common != peer / '.git' or common.is_symlink() or (common / 'hooks').is_symlink():
         raise RuntimeError('Unsupported local hook config output ownership')
+    hooks_after = {row[0]: row for row in namespace(common / 'hooks')}
+    expected_outputs = {}
+    for stage in hook_stages:
+        # install-git-hooks.sh writes the marker line, then
+        # `printf 'exec %q hook-impl --config %q --hook-type %q --hook-dir %q -- "$@"\n'`.
+        # Every operand is held to [A-Za-z0-9_./+-] above, for which bash's %q is
+        # the identity, so the exact body is reconstructible here.
+        expected_outputs[stage] = ('#!/usr/bin/env bash\n' + hook_marker + '\n'
+            + 'exec ' + hook_pre_commit['lexical'] + ' hook-impl --config .pre-commit-config.yaml'
+            + ' --hook-type ' + stage + ' --hook-dir ' + str(common / 'hooks') + ' -- "$@"\n').encode()
+    for name, row in hooks_after.items():
+        if name in hooks_before and name not in expected_outputs:
+            if row != hooks_before[name]:
+                raise RuntimeError('Native hook constructor changed an undeclared hook member')
+        elif name not in expected_outputs:
+            raise RuntimeError('Native hook constructor wrote an undeclared hook member')
+    if set(hooks_before) - set(hooks_after):
+        raise RuntimeError('Native hook constructor removed a hook member')
+    for stage, body in expected_outputs.items():
+        output = common / 'hooks' / stage
+        value = output.lstat()
+        if (not stat.S_ISREG(value.st_mode) or value.st_nlink != 1 or value.st_uid != os.getuid()
+                or stat.S_IMODE(value.st_mode) & 0o100 == 0 or output.read_bytes() != body):
+            raise RuntimeError('Actual native local hook differs from constructor')
     hook_transition = {'path': str(common / 'hooks'), 'namespace': namespace(common / 'hooks')}
     if not declared_peer_config_continuity(peer, config):
         raise RuntimeError('Native hook constructor changed undeclared Git configuration')
-    proof['declaredHookConfigTransition'] = {'key': 'core.hooksPath', 'scope': 'local',
-            'origin': 'file:.git/config', 'path': hook_transition['path'],
-            'constructor': transaction_image, 'hookCensus': hook_census,
-            'scopeLimit': 'All other effective configuration remains exact in memory'}
+    proof['declaredHookOutputs'] = {'path': hook_transition['path'],
+            'constructor': hook_installer, 'stages': hook_stages,
+            'outputs': {stage: hashlib.sha256(body).hexdigest() for stage, body in expected_outputs.items()},
+            'scopeLimit': 'Effective Git configuration remains exact in memory'}
     if activated.get('DIRENV_DIR') != '-' + str(peer):
         raise RuntimeError('Actual locked peer loaded-RC association differs')
     proof['loadedRcDirectory'] = activated['DIRENV_DIR']
@@ -620,6 +587,14 @@ try:
     if len(source_matches) != 1 or Path(source_matches[0]).read_bytes() != writer_source.read_bytes() or attributes['env']['src'] != source_root or attributes['env']['out'] != str(metadata_root):
         raise RuntimeError('Writer source/output differs from actual held constructor')
     images.append(image(writer_source)); images.append(image(Path(source_matches[0])))
+    # Nothing else realises this output: the dev shell does not reference the
+    # writer, so on a fresh store its path is not yet valid. Build exactly the
+    # derivation just authenticated (by its held .drv, not by re-evaluating the
+    # flake), and require the build to name the authenticated output.
+    built_bytes, _ = run_child([str(nix), 'build', '--offline', '--no-link', '--print-out-paths',
+        drv + '^out'], peer, 'actual-metadata-writer-build')
+    if built_bytes.decode().strip() != str(metadata_root):
+        raise RuntimeError('Actual metadata writer build output differs')
     closure_json, _ = run_child([str(nix), 'path-info', '--json', '--recursive', str(metadata_root)], peer,
         'actual-metadata-writer-registered-closure')
     closure = json.loads(closure_json)
@@ -747,7 +722,7 @@ finally:
                 proof['authorityGuards'][name] = False
                 proof.setdefault('guardErrors', {})[name] = type(error).__name__
     try:
-        proof['finalGuards'] = bool(all(namespace(Path(p)) == rows for p, rows in metadata_runtime_trees.items()) and held and tracked(held[0]) == held[1] and declared_peer_config_continuity(held[0], held[2]) and [image(Path(p['lexical'])) for p in held[3]] == held[3] and [row for row in namespace(peer) if row[0].split('/')[0] not in generated_roots] == source_namespace and generated_verified and [row for row in namespace(peer) if row[0].split('/')[0] in generated_roots] == generated_after and namespace(seed) == seed_before and image(module) == module_before and image(expected_hook_config) == expected_hook_config_before and tracked(root) == held[5] and metadata(root, 'config', '--null', '--show-origin', '--list') == held[6] and dict(os.environ) == held[7] and all(image(Path(v['lexical'])) == v for v in proof.get('activatedSelectedImages', {}).values()) and all(image(Path(v['lexical'])) == v for v in proof.get('expectedSelectedImages', {}).values()))
+        proof['finalGuards'] = bool(all(namespace(Path(p)) == rows for p, rows in metadata_runtime_trees.items()) and held and tracked(held[0]) == held[1] and declared_peer_config_continuity(held[0], held[2]) and [image(Path(p['lexical'])) for p in held[3]] == held[3] and [row for row in namespace(peer) if row[0].split('/')[0] not in generated_roots] == source_namespace and generated_verified and [row for row in namespace(peer) if row[0].split('/')[0] in generated_roots] == generated_after and namespace(seed) == seed_before and image(module) == module_before and tracked(root) == held[5] and metadata(root, 'config', '--null', '--show-origin', '--list') == held[6] and dict(os.environ) == held[7] and all(image(Path(v['lexical'])) == v for v in proof.get('activatedSelectedImages', {}).values()) and all(image(Path(v['lexical'])) == v for v in proof.get('expectedSelectedImages', {}).values()))
     except Exception:
         proof['finalGuards'] = False
     proof['success'] = bool(proof['success'] and proof['finalGuards'])

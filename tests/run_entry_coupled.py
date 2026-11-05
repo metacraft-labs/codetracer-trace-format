@@ -286,7 +286,7 @@ try:
                 else: raise RuntimeError('Special current peer namespace member')
             walk(environment, '.')
             return result
-        declared_generated = {'.direnv', '.nimble', '.pre-commit-config.yaml'}
+        declared_generated = {'.direnv', '.nimble'}
         if authority.get('prospectiveGeneratedRoots') != sorted(declared_generated) or not isinstance(authority.get('ordinarySourceNamespace'), list) or not isinstance(authority.get('generatedOutputAfter'), list):
             raise RuntimeError('Unix runtime authority namespace schema differs')
         expected_generated = authority['generatedOutputAfter']

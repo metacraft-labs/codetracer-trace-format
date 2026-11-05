@@ -119,11 +119,17 @@ fn which_direnv() -> Option<PathBuf> {
 /// proving something about the wrong toolchain.
 fn run_nim_checker(work: &Path, container: &Path, present: &[(&str, &[u8])], absent: &[&str]) -> (String, bool) {
     let (repo, direnv, home) = nim_checker().expect("caller checked");
-    // Keep the empty-environment toolchain boundary. Only the declared matching
-    // hook constructor is forwarded; the sibling still admits its own compiler.
-    let constructor = PathBuf::from(std::env::var_os("REPROBUILD_REPRO").expect("declared matching hook constructor is required"));
-    let constructor = fs::canonicalize(constructor).expect("declared matching hook constructor is absent");
-    assert!(constructor.is_file(), "declared matching hook constructor is not a regular file");
+    // Keep the empty-environment toolchain boundary. Only a declared matching
+    // hook constructor (`REPROBUILD_REPRO`, the variable Reprobuild's managed
+    // hooks resolve `repro` through) is forwarded, and only when one is
+    // declared: the sibling's dev shell installs its committed pre-commit
+    // config as the git hook without Reprobuild, so its absence is no reason
+    // to refuse the cross-read. A declared one must still be a real file.
+    let constructor = std::env::var_os("REPROBUILD_REPRO").map(|declared| {
+        let constructor = fs::canonicalize(PathBuf::from(declared)).expect("declared matching hook constructor is absent");
+        assert!(constructor.is_file(), "declared matching hook constructor is not a regular file");
+        constructor
+    });
 
     let mut manifest = String::new();
     for (name, body) in present {
@@ -142,10 +148,12 @@ fn run_nim_checker(work: &Path, container: &Path, present: &[(&str, &[u8])], abs
         Command::new(nim)
     } else {
         let mut command = Command::new("env");
+        command.arg("-i");
+        command.arg(format!("HOME={}", home.display()));
+        if let Some(constructor) = &constructor {
+            command.arg(format!("REPROBUILD_REPRO={}", constructor.display()));
+        }
         command.args([
-            "-i".to_string(),
-            format!("HOME={}", home.display()),
-            format!("REPROBUILD_REPRO={}", constructor.display()),
             "PATH=/run/current-system/sw/bin:/usr/bin:/bin".to_string(),
             direnv.display().to_string(),
             "exec".into(),

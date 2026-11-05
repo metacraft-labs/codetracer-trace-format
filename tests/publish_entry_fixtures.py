@@ -85,6 +85,25 @@ class HeldDirectory:
         if os.name=='nt':self.kernel.CloseHandle(self.handle)
         else:os.close(self.fd)
 
+def held_members(directory,destination_fd):
+    """List the held output directory as it is now.
+
+    POSIX leaves unspecified whether readdir() reports an entry added after the
+    stream's last opendir()/rewinddir(), and os.listdir(fd) rewinds only after
+    reading. Re-listing one long-lived descriptor therefore misses entries this
+    publisher itself just created (measured on btrfs, Linux 6.18: the second
+    listing omits the lock written before it). Each POSIX listing opens a fresh
+    stream on '.' relative to the held descriptor, so no path is re-resolved,
+    and refuses if that stream is not the held directory.
+    """
+    if os.name=='nt':return set(os.listdir(directory))
+    fd=os.open('.',os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=destination_fd)
+    try:
+        held=os.fstat(destination_fd);fresh=os.fstat(fd)
+        if (fresh.st_dev,fresh.st_ino)!=(held.st_dev,held.st_ino):raise RuntimeError('Changed held output directory')
+        return set(os.listdir(fd))
+    finally:os.close(fd)
+
 def publish(root,source,destination):
     root=Path(root).resolve(strict=True);destination=Path(destination).absolute()
     if destination!=root/'target'/'entry-fixtures':raise RuntimeError('Foreign output namespace')
@@ -101,7 +120,7 @@ def publish(root,source,destination):
         lock_fd=os.open(lock if os.name=='nt' else '.publisher-lock',os.O_WRONLY|os.O_CREAT|os.O_EXCL| (0 if os.name=='nt' else os.O_NOFOLLOW),0o600,**({} if os.name=='nt' else {'dir_fd':destination_fd}))
         with os.fdopen(lock_fd,'wb') as stream:stream.write(SCHEMA.encode()+b'\n');stream.flush();os.fsync(stream.fileno())
         lock_identity=identity(lock)
-        members=set(os.listdir(destination if os.name=='nt' else destination_fd))-{'.publisher-lock'}
+        members=held_members(destination,destination_fd)-{'.publisher-lock'}
         if members and members!=NAMES:raise RuntimeError('Incomplete/foreign previous output unit')
         if members:
             old={}
@@ -127,7 +146,7 @@ def publish(root,source,destination):
             for parent in parents:parent.check()
             if os.name=='nt':os.replace(temporary,destination/name)
             else:os.replace(temporary.name,name,src_dir_fd=destination_fd,dst_dir_fd=destination_fd)
-        if set(os.listdir(destination if os.name=='nt' else destination_fd))!=NAMES|{'.publisher-lock'}:raise RuntimeError('Changed final output membership')
+        if held_members(destination,destination_fd)!=NAMES|{'.publisher-lock'}:raise RuntimeError('Changed final output membership')
         for name,body in payloads.items():
             file,before=held_file(destination/name)
             with file:

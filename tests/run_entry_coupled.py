@@ -456,6 +456,12 @@ try:
         guard_peer_execution_namespace()
         env['CODETRACER_TRACE_FORMAT_NIM_SKIP_NIMBLE_INSTALL'] = '1'
         env['CODETRACER_TRACE_FORMAT_NIM_EXTRA_PATHS'] = os.pathsep.join(package_paths)
+        # The Nim sources, their prepared dependencies and the Nim reader all
+        # come from this one guarded supplier peer. Its constructor already
+        # built the source-declared `ct-print` there, which the reload
+        # cross-writer test runs; an ambient override naming another checkout
+        # would pair this peer's dependencies with that checkout's sources.
+        env['CODETRACER_TRACE_FORMAT_NIM_DIR'] = str(environment)
     if args.prepare_only and args.fixture_output is None:
         raise RuntimeError('Declared fixture output is required')
     published_root = args.fixture_output if args.prepare_only else root / 'target' / 'entry-fixtures'

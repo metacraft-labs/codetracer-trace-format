@@ -5,7 +5,7 @@ let
   # Per-user Direnv configuration is neither edited nor an implicit supplier.
   overridePlugin = pkgs.fetchurl {
     url = "https://direnv-flake-overrides.blocksense.network/plugin";
-    hash = "sha256-ixCgoLDPJelkuT5gukgffNxg9edSZEfVOK5QciktI74=";
+    hash = "sha256-CMc2XpOI2l3pi9j+GKjjInH0AG9lcw4Pzapi0iM1sNI=";
   };
   runtimeConfig = pkgs.writeTextDir "direnvrc" ''
     source ${pkgs.nix-direnv}/share/nix-direnv/direnvrc

@@ -2,6 +2,7 @@
 test:
   python3 tests/run_entry_coupled.py --nim-environment-root "${ENTRY_NIM_ENVIRONMENT_ROOT:-../codetracer-trace-format-nim}" --direnv "$(command -v direnv)" --unix-runtime-authority "${ENTRY_NIM_RUNTIME_AUTHORITY:-}"
   bash codetracer_trace_writer_nim/tests/nimcache_environment.sh
+  python3 -B tests/test_override_plugin_pin.py
 
 # Run the formatting and clippy lint checks.
 #

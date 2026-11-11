@@ -379,11 +379,13 @@ try:
     root_config = metadata(root, 'config', '--null', '--show-origin', '--list')
     environment_before = dict(os.environ)
     held = (peer, source, config, images, peer_namespace, root_source, root_config, environment_before)
-    # The two `print-dev-env --offline` constructors below substitute nothing,
-    # so on a store that does not already hold the locked shell's inputs (a
-    # fresh CI runner) they build them from source. Fetch exactly that closure
-    # first, online, with the same command and flake; its output is discarded.
+    # The `print-dev-env --offline` constructors and the `flake archive
+    # --offline` source constructor below substitute and fetch nothing, so on a
+    # store that does not already hold the locked shell's inputs and every
+    # locked flake input (a fresh CI runner) they fail. Fetch exactly those
+    # first, online, with the same commands and flake; their output is discarded.
     run_child([str(nix), '--log-format', 'internal-json', 'print-dev-env', '--option', 'allow-import-from-derivation', 'false', '--no-write-lock-file', '.'], peer, 'actual-locked-peer-shell-realisation')
+    run_child([str(nix), 'flake', 'archive', '--json', '--no-write-lock-file', '.'], peer, 'actual-locked-peer-source-realisation')
     # Independent same-source print-dev-env supplies the exact expected cache
     # body and seed. It uses no private environment replacement or copied envrc.
     expected_profile_slot = receipts / 'expected-nim-env-profile'
@@ -596,7 +598,10 @@ try:
     # Nothing else realises this output: the dev shell does not reference the
     # writer, so on a fresh store its path is not yet valid. Build exactly the
     # derivation just authenticated (by its held .drv, not by re-evaluating the
-    # flake), and require the build to name the authenticated output.
+    # flake), and require the build to name the authenticated output. Its
+    # inputs are substituted online first, as for the peer shell above; the
+    # offline build then only names the output.
+    run_child([str(nix), 'build', '--no-link', drv + '^out'], peer, 'actual-metadata-writer-realisation')
     built_bytes, _ = run_child([str(nix), 'build', '--offline', '--no-link', '--print-out-paths',
         drv + '^out'], peer, 'actual-metadata-writer-build')
     if built_bytes.decode().strip() != str(metadata_root):

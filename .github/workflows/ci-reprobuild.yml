@@ -111,7 +111,7 @@ jobs:
         with:
           env-flavor: reprobuild
           repro-from-source: ${{ runner.os != 'Windows' && 'true' || 'false' }}
-          repro-build-pin: "76659f5730ecf698b1963c656494d2cb66eb256d"
+          repro-build-pin: "d0469cddae49e157f6561f25e0583dc97d2b3f7f"
           gh-token: ${{ steps.ci_token.outputs.token }}
 
       - name: Capture public SDK build resource outcome
@@ -132,7 +132,7 @@ jobs:
           git rev-parse HEAD
           engine_source="$(git -C .reprobuild-src rev-parse HEAD)"
           echo "Repro source: $engine_source"
-          test "$engine_source" = 76659f5730ecf698b1963c656494d2cb66eb256d
+          test "$engine_source" = d0469cddae49e157f6561f25e0583dc97d2b3f7f
           test -z "$(git -C .reprobuild-src status --porcelain)"
           test "$(command -v repro)" = "$GITHUB_WORKSPACE/.reprobuild-src/build/bin/repro"
           command -v repro

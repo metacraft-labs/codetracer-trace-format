@@ -61,7 +61,11 @@ use codetracer_trace_writer::trace_writer::TraceWriter;
 fn ct_print() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("CODETRACER_TRACE_FORMAT_NIM_CT_PRINT") {
         let p = PathBuf::from(p);
-        assert!(p.exists(), "CODETRACER_TRACE_FORMAT_NIM_CT_PRINT names {}, which does not exist", p.display());
+        assert!(
+            p.exists(),
+            "CODETRACER_TRACE_FORMAT_NIM_CT_PRINT names {}, which does not exist",
+            p.display()
+        );
         return Some(p.canonicalize().unwrap_or(p));
     }
     let nim_repo = std::env::var("CODETRACER_TRACE_FORMAT_NIM_DIR")

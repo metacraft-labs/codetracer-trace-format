@@ -56,11 +56,13 @@ use codetracer_trace_writer::trace_writer::TraceWriter;
 /// archive with a reader built from different sources. The one exception is
 /// `CODETRACER_TRACE_FORMAT_NIM_CT_PRINT`, which `repro.nim` sets to the reader
 /// its entry-runtime constructor built in the locked Nim peer: the revision the
-/// sibling checkout is locked to.
+/// sibling checkout is locked to. A reader named that way must exist; it is
+/// never a reason to skip.
 fn ct_print() -> Option<PathBuf> {
     if let Ok(p) = std::env::var("CODETRACER_TRACE_FORMAT_NIM_CT_PRINT") {
         let p = PathBuf::from(p);
-        return p.exists().then(|| p.canonicalize().unwrap_or(p));
+        assert!(p.exists(), "CODETRACER_TRACE_FORMAT_NIM_CT_PRINT names {}, which does not exist", p.display());
+        return Some(p.canonicalize().unwrap_or(p));
     }
     let nim_repo = std::env::var("CODETRACER_TRACE_FORMAT_NIM_DIR")
         .map(PathBuf::from)

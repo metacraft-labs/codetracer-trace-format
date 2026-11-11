@@ -253,7 +253,8 @@ def run_child(command, peer, role, child_env=None):
             'scope': 'Classifier metadata only; no diagnostic/config/export bytes or hashes retained',
         }
         if role in {"actual-locked-peer-cache-constructor",
-                    "actual-locked-peer-runtime-role-constructor"}:
+                    "actual-locked-peer-runtime-role-constructor",
+                    "actual-locked-peer-shell-realisation"}:
             # JSON logging escapes messages. Decode only in memory so the existing
             # grounded predicates retain their behavior; never emit message bodies.
             fixed_classes = nix_failure_classes(text)
@@ -378,6 +379,11 @@ try:
     root_config = metadata(root, 'config', '--null', '--show-origin', '--list')
     environment_before = dict(os.environ)
     held = (peer, source, config, images, peer_namespace, root_source, root_config, environment_before)
+    # The two `print-dev-env --offline` constructors below substitute nothing,
+    # so on a store that does not already hold the locked shell's inputs (a
+    # fresh CI runner) they build them from source. Fetch exactly that closure
+    # first, online, with the same command and flake; its output is discarded.
+    run_child([str(nix), '--log-format', 'internal-json', 'print-dev-env', '--option', 'allow-import-from-derivation', 'false', '--no-write-lock-file', '.'], peer, 'actual-locked-peer-shell-realisation')
     # Independent same-source print-dev-env supplies the exact expected cache
     # body and seed. It uses no private environment replacement or copied envrc.
     expected_profile_slot = receipts / 'expected-nim-env-profile'

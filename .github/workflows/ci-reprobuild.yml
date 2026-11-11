@@ -146,7 +146,11 @@ jobs:
         run: dev-exec repro build ${{ runner.os != 'Windows' && '--tool-provisioning=nix' || '' }}
 
       - name: repro test
-        # Materialises the `test` collection.
+        # Materialises the `test` collection. The entry-runtime constructor asks
+        # the GitHub API for the official Nim releases, as in rust.yml; the
+        # unauthenticated quota is shared by every job behind the runner's address.
+        env:
+          GITHUB_TOKEN: ${{ steps.ci_token.outputs.token }}
         run: dev-exec repro test ${{ runner.os != 'Windows' && '--tool-provisioning=nix' || '' }}
 
       - name: just build (cross-check)
@@ -156,6 +160,8 @@ jobs:
         run: dev-exec just build
 
       - name: just test (cross-check)
+        env:
+          GITHUB_TOKEN: ${{ steps.ci_token.outputs.token }}
         run: dev-exec just test
 
       - name: Report public runtime constructor failure

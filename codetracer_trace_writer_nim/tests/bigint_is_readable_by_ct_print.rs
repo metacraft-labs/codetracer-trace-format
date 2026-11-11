@@ -53,8 +53,15 @@ use codetracer_trace_writer::trace_writer::TraceWriter;
 /// The prebuilt production reader from the checkout `build.rs` compiles the Nim
 /// library from (the `CODETRACER_TRACE_FORMAT_NIM_DIR` override, else the
 /// sibling), if it is there. Looking anywhere else would pair this crate's Nim
-/// archive with a reader built from different sources.
+/// archive with a reader built from different sources. The one exception is
+/// `CODETRACER_TRACE_FORMAT_NIM_CT_PRINT`, which `repro.nim` sets to the reader
+/// its entry-runtime constructor built in the locked Nim peer: the revision the
+/// sibling checkout is locked to.
 fn ct_print() -> Option<PathBuf> {
+    if let Ok(p) = std::env::var("CODETRACER_TRACE_FORMAT_NIM_CT_PRINT") {
+        let p = PathBuf::from(p);
+        return p.exists().then(|| p.canonicalize().unwrap_or(p));
+    }
     let nim_repo = std::env::var("CODETRACER_TRACE_FORMAT_NIM_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../codetracer-trace-format-nim"));

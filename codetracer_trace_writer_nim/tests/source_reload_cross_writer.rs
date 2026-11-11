@@ -403,7 +403,12 @@ fn the_nim_reader_reads_both_containers_alike() {
     let nim_repo = std::env::var("CODETRACER_TRACE_FORMAT_NIM_DIR")
         .map(PathBuf::from)
         .unwrap_or_else(|_| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../codetracer-trace-format-nim"));
-    let ct_print = nim_repo.join("ct-print");
+    // `repro test` names the reader explicitly: `repro.nim` passes the one its
+    // entry-runtime constructor built in the locked Nim peer, the revision the
+    // sibling checkout is locked to.
+    let ct_print = std::env::var("CODETRACER_TRACE_FORMAT_NIM_CT_PRINT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| nim_repo.join("ct-print"));
     assert!(
         ct_print.exists(),
         "{} is not built (`nimble buildCtPrint` in {}); this is the only check that the Nim reader accepts a \

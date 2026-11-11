@@ -239,12 +239,22 @@ package codetracer_trace_format:
       else:
         @["python3", "git", "nim", "nimble", "cargo", "rustc", "direnv"]))
 
+    # The reload cross-writer and BigInt tests run the production Nim reader.
+    # The entry-runtime constructor already built `ct-print` in the locked
+    # peer, so the tests are pointed at it (`just test` reaches the same reader
+    # through tests/run_entry_coupled.py). Windows has no such peer yet.
+    var testRunInputs = workspaceInputs & @["target/debug/deps", entryFixtureRoot]
+    var testRunEnv = @[("ENTRY_NIM_FIXTURE_ROOT", entryFixtureRoot)]
+    when not defined(windows):
+      let peerCtPrint = getCurrentDir() / unixRuntimeRoot / "codetracer-trace-format-nim" / "ct-print"
+      testRunInputs.add(peerCtPrint)
+      testRunEnv.add(("CODETRACER_TRACE_FORMAT_NIM_CT_PRINT", peerCtPrint))
     let testsRun = cargo.test(
       locked = true,
       actionId = "codetracer-trace-format.cargo-test-run",
       after = @[testsBuild.action, entryFixtures],
-      extraInputs = workspaceInputs & @["target/debug/deps", entryFixtureRoot],
-      extraEnv = @[("ENTRY_NIM_FIXTURE_ROOT", entryFixtureRoot)])
+      extraInputs = testRunInputs,
+      extraEnv = testRunEnv)
 
     when defined(linux):
       for action in [workspaceBuild, testsBuild.action, testsRun.action]:

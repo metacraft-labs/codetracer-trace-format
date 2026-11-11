@@ -200,6 +200,23 @@ def nix_structured_observation(text):
     result["resultsObserved"] = sorted(results)
     return result
 
+def online_fetch_env():
+    """The environment of an online fetch stage: this process's own, plus the
+    declared GitHub token (if any) as a Nix access token for github.com.
+
+    The locked peer's flake has dozens of `github:` inputs, and Nix fetches
+    them through the GitHub API. Under `repro test` the action environment
+    carries `GITHUB_TOKEN` but not the job's Nix configuration, so without
+    this the fetches are anonymous and share the runner address's hourly
+    quota. `extra-access-tokens` adds to, never replaces, configured tokens.
+    Only the child's environment changes; the token is never logged."""
+    env = dict(os.environ)
+    token = env.get('GITHUB_TOKEN', '')
+    if token and '\n' not in token:
+        extra = 'extra-access-tokens = github.com=' + token
+        env['NIX_CONFIG'] = env['NIX_CONFIG'] + '\n' + extra if env.get('NIX_CONFIG') else extra
+    return env
+
 def run_child(command, peer, role, child_env=None):
     child = subprocess.Popen(command, cwd=peer, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                              start_new_session=True, env=child_env)
@@ -254,7 +271,9 @@ def run_child(command, peer, role, child_env=None):
         }
         if role in {"actual-locked-peer-cache-constructor",
                     "actual-locked-peer-runtime-role-constructor",
-                    "actual-locked-peer-shell-realisation"}:
+                    "actual-locked-peer-shell-realisation",
+                    "actual-locked-peer-source-realisation",
+                    "actual-metadata-writer-realisation"}:
             # JSON logging escapes messages. Decode only in memory so the existing
             # grounded predicates retain their behavior; never emit message bodies.
             fixed_classes = nix_failure_classes(text)
@@ -384,8 +403,8 @@ try:
     # store that does not already hold the locked shell's inputs and every
     # locked flake input (a fresh CI runner) they fail. Fetch exactly those
     # first, online, with the same commands and flake; their output is discarded.
-    run_child([str(nix), '--log-format', 'internal-json', 'print-dev-env', '--option', 'allow-import-from-derivation', 'false', '--no-write-lock-file', '.'], peer, 'actual-locked-peer-shell-realisation')
-    run_child([str(nix), 'flake', 'archive', '--json', '--no-write-lock-file', '.'], peer, 'actual-locked-peer-source-realisation')
+    run_child([str(nix), '--log-format', 'internal-json', 'print-dev-env', '--option', 'allow-import-from-derivation', 'false', '--no-write-lock-file', '.'], peer, 'actual-locked-peer-shell-realisation', online_fetch_env())
+    run_child([str(nix), 'flake', 'archive', '--json', '--no-write-lock-file', '.'], peer, 'actual-locked-peer-source-realisation', online_fetch_env())
     # Independent same-source print-dev-env supplies the exact expected cache
     # body and seed. It uses no private environment replacement or copied envrc.
     expected_profile_slot = receipts / 'expected-nim-env-profile'
@@ -601,7 +620,7 @@ try:
     # flake), and require the build to name the authenticated output. Its
     # inputs are substituted online first, as for the peer shell above; the
     # offline build then only names the output.
-    run_child([str(nix), 'build', '--no-link', drv + '^out'], peer, 'actual-metadata-writer-realisation')
+    run_child([str(nix), 'build', '--no-link', drv + '^out'], peer, 'actual-metadata-writer-realisation', online_fetch_env())
     built_bytes, _ = run_child([str(nix), 'build', '--offline', '--no-link', '--print-out-paths',
         drv + '^out'], peer, 'actual-metadata-writer-build')
     if built_bytes.decode().strip() != str(metadata_root):

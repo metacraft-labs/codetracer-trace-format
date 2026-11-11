@@ -113,6 +113,10 @@ jobs:
           repro-from-source: ${{ runner.os != 'Windows' && 'true' || 'false' }}
           repro-build-pin: "d0469cddae49e157f6561f25e0583dc97d2b3f7f"
           gh-token: ${{ steps.ci_token.outputs.token }}
+          # The source build of repro can outlast the hour the minted token
+          # lives; the broker re-mints the Nix credential before it expires.
+          app-id: ${{ secrets.CI_TOKEN_PROVIDER_APP_ID }}
+          app-private-key: ${{ secrets.CI_TOKEN_PROVIDER_PRIVATE_KEY }}
 
       - name: Capture public SDK build resource outcome
         continue-on-error: true
@@ -149,8 +153,9 @@ jobs:
         # Materialises the `test` collection. The entry-runtime constructor asks
         # the GitHub API for the official Nim releases, as in rust.yml; the
         # unauthenticated quota is shared by every job behind the runner's address.
+        # The workflow token lasts the whole job; the minted one may have expired.
         env:
-          GITHUB_TOKEN: ${{ steps.ci_token.outputs.token }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: dev-exec repro test ${{ runner.os != 'Windows' && '--tool-provisioning=nix' || '' }}
 
       - name: just build (cross-check)
@@ -161,7 +166,7 @@ jobs:
 
       - name: just test (cross-check)
         env:
-          GITHUB_TOKEN: ${{ steps.ci_token.outputs.token }}
+          GITHUB_TOKEN: ${{ github.token }}
         run: dev-exec just test
 
       - name: Report public runtime constructor failure

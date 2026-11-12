@@ -24,5 +24,19 @@ in {
   nativeEnv = pkgs.coreutils.out;
   nativeClang = pkgs.clang.out;
   nativeGcc = pkgs.stdenv.cc.out;
+  # The archiver Nim's `clang` C compiler runs: on Linux Nim hard-codes
+  # `llvm-ar rcs` for `--app:staticlib` (compiler/extccomp.nim, `llvmGcc`,
+  # which `clang` inherits; no config key overrides it), while the clang
+  # wrapper above carries only GNU binutils' `ar`. The C ABI parity test
+  # builds the Nim archive with `--cc:clang` when `cc` is that clang. Only the
+  # one executable, from the LLVM release the wrapped clang is built from,
+  # so the edge receives neither LLVM's other tools nor its search paths.
+  nativeLlvmAr =
+    let llvm = pkgs.llvmPackages.llvm;
+    in if llvm.version != pkgs.clang.version then fail "llvm-ar is not from the wrapped clang's LLVM"
+    else pkgs.runCommandLocal "trace-native-llvm-ar-${llvm.version}" {} ''
+      mkdir -p $out/bin
+      ln -s ${llvm}/bin/llvm-ar $out/bin/llvm-ar
+    '';
   nativeDirenv = (import ./cross-reader-profiles.nix { inherit pkgs; }).direnv;
 }

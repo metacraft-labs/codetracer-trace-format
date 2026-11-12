@@ -11,8 +11,22 @@ import tarfile, urllib.request, zipfile
 parser = argparse.ArgumentParser()
 parser.add_argument('--output', required=True, type=Path)
 parser.add_argument('--nim-supplier', required=True, type=Path)
-parser.add_argument('--nim-revision', required=True)
+# The supplier revision: given directly (windows-tests.yml selects it with
+# ci/select-entry-nim-supplier.py), or read from a repro.lock by that same
+# selector (the repro entry-native-provider edge).
+revision_source = parser.add_mutually_exclusive_group(required=True)
+revision_source.add_argument('--nim-revision')
+revision_source.add_argument('--repro-lock', type=Path)
 args = parser.parse_args()
+if args.repro_lock:
+    import importlib.util
+    selector_spec = importlib.util.spec_from_file_location(
+        'select_entry_nim_supplier', Path(__file__).resolve().with_name('select-entry-nim-supplier.py'))
+    selector = importlib.util.module_from_spec(selector_spec)
+    selector_spec.loader.exec_module(selector)
+    nim_revision = selector.declared_revision(args.repro_lock)
+else:
+    nim_revision = args.nim_revision
 if os.name != 'nt':
     raise RuntimeError('Actual Windows provider host required')
 machine = platform.machine().upper()
@@ -23,7 +37,7 @@ root = args.output.resolve()
 root.mkdir(exist_ok=False)
 supplier = args.nim_supplier.resolve(strict=True)
 git = shutil.which('git')
-if not git or subprocess.check_output([git, '-C', str(supplier), 'rev-parse', 'HEAD'], text=True).strip() != args.nim_revision:
+if not git or subprocess.check_output([git, '-C', str(supplier), 'rev-parse', 'HEAD'], text=True).strip() != nim_revision:
     raise RuntimeError('Declared real Nim source revision required')
 lock_before = (supplier / 'flake.lock').read_bytes()
 config_before = subprocess.check_output([git, '-C', str(supplier), 'config', '--null', '--show-origin', '--show-scope', '--list'])
@@ -79,7 +93,7 @@ try:
     if sys.version_info[:3] != (3, 13, 16):
         raise RuntimeError('Declared native Python version mismatch')
 
-    def supplier_state(directory=supplier, revision=args.nim_revision):
+    def supplier_state(directory=supplier, revision=nim_revision):
         if subprocess.check_output([git, "-C", str(directory), "status", "--porcelain"]):
             raise RuntimeError("Declared supplier is dirty")
         listing = subprocess.check_output([git, "-C", str(directory), "ls-tree", "-rz", "--full-tree", revision])
@@ -281,7 +295,7 @@ try:
     if (supplier / 'flake.lock').read_bytes() != lock_before:
         raise RuntimeError('Declared supplier dependency lock changed')
     component = {'schema': 'entry-native-frontend.v1',
-        'python': python_image, 'pythonRoot': str(python_root), 'pythonRuntime': python_runtime_before, 'nativeMachine': machine, 'supplierRevision': args.nim_revision, 'supplierRoot': str(supplier), 'supplierSource': supplier_before, 'providerScriptSHA256': digest(Path(__file__).resolve()), 'nim': nim_image,
+        'python': python_image, 'pythonRoot': str(python_root), 'pythonRuntime': python_runtime_before, 'nativeMachine': machine, 'supplierRevision': nim_revision, 'supplierRoot': str(supplier), 'supplierSource': supplier_before, 'providerScriptSHA256': digest(Path(__file__).resolve()), 'nim': nim_image,
         'clang': clang_image, 'archiveTool': archive_image, 'nativeRuntime': census(native),
         'inputPackages': [{'archive': str(archive), 'archiveSHA256': sha, 'root': str(source), 'members': before} for archive, sha, source, before in inputs], 'dependencies': dependencies, 'zstdSDK': census(sdk), 'zstdRoot': str(sdk), 'zstdNativeProbe': zstd_probe_image,
         'stages': stages, 'scope': 'Native provider construction only; portable continuous gate still pending'}

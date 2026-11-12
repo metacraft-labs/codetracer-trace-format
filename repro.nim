@@ -63,6 +63,7 @@ package codetracer_trace_format:
     when defined(linux):
       "traceformat_native_clang"
       "traceformat_native_gcc"
+      "traceformat_native_llvm_ar"
 
     # Rust toolchain — declared by version so the tarball-direct
     # provisioning entries in repro_dsl_stdlib/packages/cargo.nim /
@@ -85,6 +86,9 @@ package codetracer_trace_format:
     "codetracer_trace_format_nim"
     "python3 >=3.11"
     "git"
+    when defined(windows):
+      # ci/native-entry-provider.py and the coupled producer require it.
+      "traceformat_entry_python"
     when not defined(windows):
       "direnv"
       "sh"
@@ -207,9 +211,30 @@ package codetracer_trace_format:
       "--nim-environment-root", getCurrentDir().parentDir / "codetracer-trace-format-nim",
       "--prepare-only", "--fixture-output", entryFixtureRoot]
     when defined(windows):
-      let providerPath = getCurrentDir() / ".repro" / "entry-native-provider" / "profile.json"
-      discard readDevEnvFile(providerPath)
-      entryProducerArgv.add(["--windows-provider", providerPath])
+      # The Windows counterpart of the Unix `entry-runtime` edge below: the
+      # native Nim/Clang/Zstd frontend the coupled producer runs, built by
+      # ci/native-entry-provider.py for the supplier revision repro.lock pins
+      # (the script reads it with ci/select-entry-nim-supplier.py, the
+      # selector windows-tests.yml uses). Its output directory is opaque
+      # (`removeBeforeRun`): the script refuses an existing one, so the
+      # engine empties it before every run. The producer must run under the
+      # very Python the provider recorded, so both edges take the declared
+      # `traceformat_entry_python` ahead of every other `python3`.
+      let windowsProviderRoot = ".repro/entry-native-provider"
+      let windowsProvider = buildAction(
+        id = "codetracer-trace-format.entry-native-provider",
+        call = inlineExecCall(@["python3", "-I", "-B", "ci/native-entry-provider.py",
+          "--output", windowsProviderRoot,
+          "--nim-supplier", "../codetracer-trace-format-nim",
+          "--repro-lock", "repro.lock"]),
+        deps = @[workspaceBuild.id],
+        inputs = @["repro.lock", "ci/native-entry-provider.py",
+          "ci/select-entry-nim-supplier.py", "../codetracer-trace-format-nim"],
+        outputs = @[windowsProviderRoot],
+        removeBeforeRun = @[windowsProviderRoot],
+        toolIdentityRefs = @["traceformat_entry_python", "git"])
+      entryProducerArgv.add(["--windows-provider",
+        windowsProviderRoot / "frontend-component.json"])
     else:
       entryProducerArgv.add(["--direnv-from-unix-authority"])
     let unixRuntimeRoot = ".repro/build/entry-runtime"
@@ -234,16 +259,16 @@ package codetracer_trace_format:
     let entryFixtures = buildAction(
       id = "codetracer-trace-format.entry-fixtures",
       call = inlineExecCall(entryProducerArgv),
-      deps = (when defined(windows): @[workspaceBuild.id]
+      deps = (when defined(windows): @[workspaceBuild.id, windowsProvider.id]
         else: @[workspaceBuild.id, runtimePreparation.id]),
       inputs = workspaceInputs & @["repro.lock", "tests/entry_coupled.nim",
         "tests/run_entry_coupled.py", "tests/publish_entry_fixtures.py",
-        "../codetracer-trace-format-nim"] & (when defined(windows): @[]
+        "../codetracer-trace-format-nim"] & (when defined(windows): @[windowsProviderRoot]
         else: @[unixRuntimeRoot / "runtime/peer-runtime-proof.json"]),
       outputs = @[entryFixtureRoot / "marked.ct", entryFixtureRoot / "unmarked.ct",
         entryFixtureRoot / ".producer-owner"],
       toolIdentityRefs = (when defined(windows):
-        @["python3", "git", "nim", "nimble", "cargo", "rustc"]
+        @["traceformat_entry_python", "git", "nim", "nimble", "cargo", "rustc"]
       else:
         @["python3", "git", "nim", "nimble", "cargo", "rustc", "direnv"]))
 
@@ -294,6 +319,12 @@ package codetracer_trace_format:
       when defined(linux):
         appendRegisteredActionToolIdentityRefs(testsRun.action.id,
           ["traceformat_native_clang"])
+        # The C ABI parity test (codetracer_trace_writer_ffi/tests/
+        # c_abi_parity.rs) has Nim build its archive with the family of this
+        # edge's `cc`, the native clang, and Nim's `clang` archives with
+        # `llvm-ar` on Linux, which that clang's wrapper does not carry.
+        appendRegisteredActionToolIdentityRefs(testsRun.action.id,
+          ["traceformat_native_llvm_ar"])
       appendRegisteredActionToolIdentityRefs(testsRun.action.id,
         ["traceformat_peer_nim", "traceformat_peer_nimble", "traceformat_peer_git",
          "traceformat_peer_gcc", "traceformat_peer_bash", "traceformat_peer_zstd"])
@@ -322,6 +353,41 @@ when defined(linux):
       nixPackage "nativeGcc", executablePath = "bin/gcc",
         expressionFile = "ci/native-compiler-profiles.nix",
         lockIdentity = nativeCompilerLockIdentity & ":gcc"
+  package traceformat_native_llvm_ar:
+    provisioning:
+      nixPackage "nativeLlvmAr", executablePath = "bin/llvm-ar",
+        expressionFile = "ci/native-compiler-profiles.nix",
+        lockIdentity = nativeCompilerLockIdentity & ":llvm-ar"
+
+when defined(windows):
+  # The Python the Windows coupled-entry gate requires: ci/native-entry-provider.py
+  # refuses any other than 3.13.16 and records the image, and
+  # tests/run_entry_coupled.py then refuses to run under a different one.
+  # windows-tests.yml installs the same release with actions/setup-python.
+  # python.org's embeddable builds; the sha256 values are the ones python.org
+  # publishes for these files (www.python.org/api/v2/downloads/release_file/).
+  package traceformat_entry_python:
+    provisioning:
+      tarball url = "https://www.python.org/ftp/python/3.13.16/python-3.13.16-embed-amd64.zip",
+        sha256 = "97dae5274cc54867065e8d5a3226e48c35017ed332a0fdb0e27d5b5821961297",
+        archiveType = "zip",
+        executablePath = "python.exe",
+        executableAlias = "python3.exe",
+        packageId = "python@3.13.16",
+        cpu = "x86_64",
+        os = "windows",
+        lockIdentity = "tarball:python@3.13.16:windows-x86_64:sha256:97dae5274cc54867065e8d5a3226e48c35017ed332a0fdb0e27d5b5821961297",
+        version = "3.13.16"
+      tarball url = "https://www.python.org/ftp/python/3.13.16/python-3.13.16-embed-arm64.zip",
+        sha256 = "790d097697a2020477549a6764d89d22194c88d6e42caebcb2db63791e004c94",
+        archiveType = "zip",
+        executablePath = "python.exe",
+        executableAlias = "python3.exe",
+        packageId = "python@3.13.16",
+        cpu = "aarch64",
+        os = "windows",
+        lockIdentity = "tarball:python@3.13.16:windows-aarch64:sha256:790d097697a2020477549a6764d89d22194c88d6e42caebcb2db63791e004c94",
+        version = "3.13.16"
 
 when not defined(windows):
   const crossReaderProcessLockIdentity =

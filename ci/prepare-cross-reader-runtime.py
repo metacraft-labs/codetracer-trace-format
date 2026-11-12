@@ -212,8 +212,14 @@ def nix_structured_observation(text):
     return result
 
 def online_fetch_env():
-    """The environment of an online fetch stage: this process's own, plus the
-    declared GitHub token (if any) as a Nix access token for github.com.
+    """The environment of an online fetch stage: this process's own, with the
+    selected git first on PATH, plus the declared GitHub token (if any) as a
+    Nix access token for github.com.
+
+    Nix fetches a `git` input (the peer's lock has one) by running `git`
+    from PATH, and under `repro test` this action's PATH carries only its
+    declared runtime profile, so the fetch failed for want of git. The git
+    put there is the one this constructor was handed and already uses.
 
     The locked peer's flake has dozens of `github:` inputs, and Nix fetches
     them through the GitHub API. Under `repro test` the action environment
@@ -222,6 +228,7 @@ def online_fetch_env():
     quota. `extra-access-tokens` adds to, never replaces, configured tokens.
     Only the child's environment changes; the token is never logged."""
     env = dict(os.environ)
+    env['PATH'] = os.pathsep.join([str(git.parent)] + [entry for entry in env.get('PATH', '').split(os.pathsep) if entry])
     token = env.get('GITHUB_TOKEN', '')
     if token and '\n' not in token:
         extra = 'extra-access-tokens = github.com=' + token

@@ -90,6 +90,13 @@ package codetracer_trace_format:
       "sh"
       "traceformat_native_env"
       "traceformat_entry_runtime"
+      # The coupled runtime's tool roles; see the cargo-test-run edge.
+      "traceformat_peer_nim"
+      "traceformat_peer_nimble"
+      "traceformat_peer_git"
+      "traceformat_peer_gcc"
+      "traceformat_peer_bash"
+      "traceformat_peer_zstd"
 
     # Cap'n Proto schema compiler — ``codetracer_trace_format_capnp``'s
     # build.rs runs ``capnpc`` over ``src/trace.capnp``.
@@ -141,6 +148,7 @@ package codetracer_trace_format:
       "Cargo.toml", "Cargo.lock", "repro.lock",
       "trace_nim_ffi_contribution.nim", "ci/locked-nim-library-profile.nix",
       "ci/native-compiler-profiles.nix", "ci/cross-reader-profiles.nix", "flake.lock",
+      "ci/peer-runtime-role-profiles.nix",
       "codetracer_trace_types",
       "codetracer_trace_format_capnp",
       "codetracer_trace_format_cbor_zstd",
@@ -243,18 +251,52 @@ package codetracer_trace_format:
     # The entry-runtime constructor already built `ct-print` in the locked
     # peer, so the tests are pointed at it (`just test` reaches the same reader
     # through tests/run_entry_coupled.py). Windows has no such peer yet.
+    #
+    # The Nim cross-implementation tests (`nim_adjudicator` and its users)
+    # build and run the production Nim reader with the coupled runtime's own
+    # toolchain. They take it when `ENTRY_NIM_RUNTIME_AUTHORITY` names the
+    # constructor's complete authority and `PATH` selects, for each of its
+    # roles (nim, nimble, git, gcc, bash), exactly the image the authority
+    # records; `just test` provides both by running cargo inside the
+    # activated peer. Here the edge declares them: the authority is an input,
+    # and the `traceformat_peer_*` tools below are the packages the locked
+    # peer's dev shell puts on its PATH, appended to this action's tool refs
+    # ahead of every other directory holding an executable of a role's name.
+    # The peer's dev shell also supplies the libzstd the Nim reader links;
+    # `traceformat_peer_zstd` gives the edge that library's search paths. Its
+    # Nim package requirements are the constructor's prepared seed in the
+    # peer's `.nimble` (the authority's expectedSeedInstalledPackages), which
+    # `NIMBLE_DIR` names exactly as the peer's shell does for `just test`.
     var testRunInputs = workspaceInputs & @["target/debug/deps", entryFixtureRoot]
     var testRunEnv = @[("ENTRY_NIM_FIXTURE_ROOT", entryFixtureRoot)]
     when not defined(windows):
       let peerCtPrint = getCurrentDir() / unixRuntimeRoot / "codetracer-trace-format-nim" / "ct-print"
       testRunInputs.add(peerCtPrint)
       testRunEnv.add(("CODETRACER_TRACE_FORMAT_NIM_CT_PRINT", peerCtPrint))
+      let peerRuntimeAuthority = getCurrentDir() / unixRuntimeRoot / "runtime/peer-runtime-proof.json"
+      testRunInputs.add(peerRuntimeAuthority)
+      testRunEnv.add(("ENTRY_NIM_RUNTIME_AUTHORITY", peerRuntimeAuthority))
+      let peerNimbleDir = getCurrentDir() / unixRuntimeRoot / "codetracer-trace-format-nim" / ".nimble"
+      testRunInputs.add(peerNimbleDir)
+      testRunEnv.add(("NIMBLE_DIR", peerNimbleDir))
     let testsRun = cargo.test(
       locked = true,
       actionId = "codetracer-trace-format.cargo-test-run",
       after = @[testsBuild.action, entryFixtures],
       extraInputs = testRunInputs,
       extraEnv = testRunEnv)
+
+    when not defined(windows):
+      # PATH is searched in tool-ref order, so the role images must precede
+      # the `traceformat_native_gcc`, `nim`, `nimble`, `git` and `sh` (a bash)
+      # directories. The native clang directory stays first: it holds `cc`,
+      # which the peer's gcc directory also holds, and no role name.
+      when defined(linux):
+        appendRegisteredActionToolIdentityRefs(testsRun.action.id,
+          ["traceformat_native_clang"])
+      appendRegisteredActionToolIdentityRefs(testsRun.action.id,
+        ["traceformat_peer_nim", "traceformat_peer_nimble", "traceformat_peer_git",
+         "traceformat_peer_gcc", "traceformat_peer_bash", "traceformat_peer_zstd"])
 
     when defined(linux):
       for action in [workspaceBuild, testsBuild.action, testsRun.action]:
@@ -288,6 +330,38 @@ when not defined(windows):
     provisioning:
       nixPackage "nativeEnv", expressionFile = "ci/native-compiler-profiles.nix",
         executablePath = "bin/env", lockIdentity = crossReaderProcessLockIdentity
+
+when not defined(windows):
+  # The coupled runtime's role images, selected from the locked peer's own
+  # dev shell (ci/peer-runtime-role-profiles.nix, keyed by it, the profile
+  # that selects the peer, and the lock that pins it).
+  const peerRuntimeRoleIdentity = "trace-peer-runtime-role-sha256:" &
+    $nativeCompilerHash.sha256.digest(staticRead("ci/peer-runtime-role-profiles.nix") &
+      staticRead("ci/locked-nim-library-profile.nix") & staticRead("repro.lock"))
+  package traceformat_peer_nim:
+    provisioning:
+      nixPackage "peerRoleNim", expressionFile = "ci/peer-runtime-role-profiles.nix",
+        executablePath = "bin/nim", lockIdentity = peerRuntimeRoleIdentity & ":nim"
+  package traceformat_peer_nimble:
+    provisioning:
+      nixPackage "peerRoleNimble", expressionFile = "ci/peer-runtime-role-profiles.nix",
+        executablePath = "bin/nimble", lockIdentity = peerRuntimeRoleIdentity & ":nimble"
+  package traceformat_peer_git:
+    provisioning:
+      nixPackage "peerRoleGit", expressionFile = "ci/peer-runtime-role-profiles.nix",
+        executablePath = "bin/git", lockIdentity = peerRuntimeRoleIdentity & ":git"
+  package traceformat_peer_gcc:
+    provisioning:
+      nixPackage "peerRoleGcc", expressionFile = "ci/peer-runtime-role-profiles.nix",
+        executablePath = "bin/gcc", lockIdentity = peerRuntimeRoleIdentity & ":gcc"
+  package traceformat_peer_bash:
+    provisioning:
+      nixPackage "peerRoleBash", expressionFile = "ci/peer-runtime-role-profiles.nix",
+        executablePath = "bin/bash", lockIdentity = peerRuntimeRoleIdentity & ":bash"
+  package traceformat_peer_zstd:
+    provisioning:
+      nixPackage "peerZstdLibrary", expressionFile = "ci/peer-runtime-role-profiles.nix",
+        executablePath = "bin/zstd", lockIdentity = peerRuntimeRoleIdentity & ":zstd"
 
 when not defined(windows):
   const entryRuntimeSourceIdentity = "trace-entry-runtime-source-sha256:" &

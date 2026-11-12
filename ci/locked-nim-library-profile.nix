@@ -18,6 +18,10 @@ let
   supplier = builtins.getFlake ("github:metacraft-labs/codetracer-trace-format-nim/" + revision);
   packages = supplier.packages.${system} or (refuse "unsupported native system");
 in {
+  # The selected supplier flake itself, for the peer runtime role profiles
+  # (ci/peer-runtime-role-profiles.nix). Not a derivation: building this file
+  # does not realize it.
+  inherit supplier;
   peerGit = packages.ci-checkout-git or (refuse "declared checkout Git constructor absent");
   peerNimble = packages.ci-nimble or (refuse "declared Nimble runtime constructor absent");
   peerNimbleSource = packages.ci-nimble-source or (refuse "declared Nimble source constructor absent");

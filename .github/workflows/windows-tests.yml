@@ -52,7 +52,7 @@ jobs:
         with:
           env-flavor: reprobuild
           sibling-strategy: repro-lock
-          repro-version: v0.2.17
+          repro-version: v0.2.23
           gh-token: ${{ steps.ci_token.outputs.token }}
 
       - name: Verify the declared Cap'n Proto executable

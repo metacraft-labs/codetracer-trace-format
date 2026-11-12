@@ -144,6 +144,17 @@ def nix_failure_classes(text):
         "nixHttp403Reported": r"unable to download '[^\n]*': HTTP error 403\b",
         "nixHttp404Reported": r"unable to download '[^\n]*': HTTP error 404\b",
         "nixHttp429Reported": r"unable to download '[^\n]*': HTTP error 429\b",
+        # Fetch-side failures of the online stages, which the classes above
+        # do not tell apart.
+        "nixHttpOtherReported": r"unable to download '[^\n]*': HTTP error (?!40[134]\b|429\b)\d{3}",
+        "nixTlsReported": r"SSL certificate problem|Problem with the SSL CA cert|SSL connect error|certificate verify failed",
+        "nixDnsReported": r"Could not resolve host",
+        "nixConnectReported": r"Couldn't connect to server|Connection refused|Connection reset|Timeout was reached",
+        "nixGitFetchReported": r"Failed to fetch git repository|Cannot find Git revision|fetching Git repository",
+        "nixArchiveReported": r"Failed to open archive|error: unpacking",
+        "nixNoSpaceReported": r"No space left on device",
+        "nixPureEvaluationReported": r"in pure evaluation mode",
+        "nixLockFileReported": r"lock file needs to be updated|cannot write modified lock file|is not locked",
     }
     return {name: re.search(pattern, text) is not None
             for name, pattern in patterns.items()}

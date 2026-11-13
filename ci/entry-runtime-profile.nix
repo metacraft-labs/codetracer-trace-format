@@ -49,6 +49,9 @@ let
 in {
   constructorNix = pkgs.nix;
   constructorPython = pkgs.python3;
+  # The acquisition script hashes and resolves images with these, not with the
+  # host's: macOS ships neither `sha256sum` nor a GNU `readlink -f`.
+  constructorCoreutils = pkgs.coreutils;
   entryRuntime = pkgs.writeShellScriptBin "prepare-entry-runtime" ''
     exec ${pkgs.python3}/bin/python3 -B ${./prepare-entry-runtime.py} \
       --python-profile ${pkgs.python3} --direnv-profile ${runtime.direnv} \

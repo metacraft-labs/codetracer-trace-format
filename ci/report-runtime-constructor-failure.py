@@ -190,6 +190,7 @@ CLASSIFIERS = (
     'blockedEnvrc',
     'hashMismatch',
     'fallback',
+    'nimReleaseQueryFailed',
 )
 
 KNOWN_COMMANDS = (

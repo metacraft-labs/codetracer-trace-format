@@ -167,6 +167,23 @@ jobs:
         # and what the dev shell + Justfile produce today.
         run: dev-exec just build
 
+      - name: Prepare the declared coupled Unix runtime
+        # `just test` reads the coupled entry runtime from
+        # ENTRY_NIM_RUNTIME_AUTHORITY and ENTRY_NIM_ENVIRONMENT_ROOT. It does not
+        # look for the runtime itself, and an unset authority is refused. This is
+        # the step rust.yml runs before `just test`. The script runs the same
+        # constructor as the `entry-runtime` edge, on the same output root. It
+        # reuses the runtime `repro test` built after checking the recorded
+        # ownership, then exports the two variables and puts the runtime's
+        # selected direnv role on PATH. A fresh construction asks the GitHub API
+        # for the official Nim releases, so it gets the workflow token, as in
+        # the `repro test` step.
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bash ci/acquire-entry-runtime.sh
+
       - name: just test (cross-check)
         env:
           GITHUB_TOKEN: ${{ github.token }}

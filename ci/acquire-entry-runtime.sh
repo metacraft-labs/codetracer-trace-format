@@ -13,7 +13,16 @@ test -x "$nix_image"
 expected_nix_drv=$("$nix_image" eval --raw --file ci/entry-runtime-profile.nix constructorNix.drvPath)
 test "$("$nix_image" path-info --derivation "$nix_package")" = "$expected_nix_drv"
 "$nix_image" store verify --recursive --no-trust "$nix_package"
-nix_sha=$(sha256sum "$(readlink -f "$nix_image")" | cut -d' ' -f1)
+# Hash and resolve with the profile's own coreutils, verified like every other
+# role, so the step is the same on Linux and macOS and uses no host tool.
+coreutils_package=$("$nix_image" build --no-link --print-out-paths --file ci/entry-runtime-profile.nix constructorCoreutils.out)
+[[ "$coreutils_package" =~ ^/nix/store/[a-z0-9]{32}-coreutils-[0-9.]+$ ]]
+test "$("$nix_image" path-info --derivation "$coreutils_package")" = "$("$nix_image" eval --raw --file ci/entry-runtime-profile.nix constructorCoreutils.drvPath)"
+"$nix_image" store verify --recursive --no-trust "$coreutils_package"
+image_sha256() {
+  "$coreutils_package/bin/sha256sum" "$("$coreutils_package/bin/readlink" -f "$1")" | "$coreutils_package/bin/cut" -d' ' -f1
+}
+nix_sha=$(image_sha256 "$nix_image")
 python_package=$("$nix_image" build --no-link --print-out-paths --file ci/entry-runtime-profile.nix constructorPython.out)
 [[ "$python_package" =~ ^/nix/store/[a-z0-9]{32}-python3-[0-9.]+$ ]]
 test "$("$nix_image" path-info --derivation "$python_package")" = "$("$nix_image" eval --raw --file ci/entry-runtime-profile.nix constructorPython.drvPath)"
@@ -23,7 +32,7 @@ profile=$("$nix_image" build --no-link --print-out-paths --file ci/entry-runtime
 expected_drv=$("$nix_image" eval --raw --file ci/entry-runtime-profile.nix entryRuntime.drvPath)
 test "$("$nix_image" path-info --derivation "$profile")" = "$expected_drv"
 "$nix_image" store verify --recursive --no-trust "$profile"
-test "$(sha256sum "$(readlink -f "$nix_image")" | cut -d' ' -f1)" = "$nix_sha"
+test "$(image_sha256 "$nix_image")" = "$nix_sha"
 set +e
 "$profile/bin/prepare-entry-runtime" --root "$root" --output "$root/.repro/build/entry-runtime"
 runtime_status=$?

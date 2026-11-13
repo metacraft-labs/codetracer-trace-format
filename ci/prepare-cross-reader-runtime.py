@@ -284,6 +284,9 @@ def run_child(command, peer, role, child_env=None):
                 'blockedEnvrc': 'is blocked',
                 'hashMismatch': 'hash mismatch',
                 'fallback': 'falling back',
+                # The peer's construct-runtime-metadata writer refuses with this
+                # text (exit 70) when Nimble's GitHub release query failed.
+                'nimReleaseQueryFailed': 'did not write official-nim-releases.json',
             }.items()},
             'scope': 'Classifier metadata only; no diagnostic/config/export bytes or hashes retained',
         }

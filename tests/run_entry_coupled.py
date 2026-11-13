@@ -16,7 +16,11 @@ parser.add_argument('--nim-environment-root', required=True, type=Path)
 parser.add_argument('--qualification-source', type=Path)
 parser.add_argument('--direnv')
 parser.add_argument('--direnv-from-unix-authority', action='store_true')
-parser.add_argument('--unix-runtime-authority', type=Path)
+# `just test` passes "${ENTRY_NIM_RUNTIME_AUTHORITY:-}", so an unset variable
+# arrives as an empty value. Path('') is Path('.'), the working directory, so
+# an empty value must stay absent: otherwise the absent-authority refusal below
+# never fires and the gate reports a directory as a foreign authority file.
+parser.add_argument('--unix-runtime-authority', type=lambda value: Path(value) if value else None)
 parser.add_argument('--windows-provider', type=Path)
 parser.add_argument('--work-root', type=Path)
 parser.add_argument('--prepare-only', action='store_true')

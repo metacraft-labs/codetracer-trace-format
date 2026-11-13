@@ -382,4 +382,12 @@ finally:
         for _, descriptor, _, _ in reversed(held_evidence): os.close(descriptor)
         for _, descriptor in reversed(held_images): os.close(descriptor)
         for _, descriptor in reversed(held_dirs): os.close(descriptor)
+if not proof['success'] and receipt_fd is None:
+    # No receipt was opened: the refusal came from the reuse checks on an
+    # existing output, or from a check that runs before the receipt is created.
+    # Report it on stderr, or the caller sees only exit status 1. Only the
+    # constant refusal text and the exception type names are printed.
+    print('prepare-entry-runtime: refused: ' + json.dumps({key: proof[key] for key in
+        ['failureType', 'failure', 'guardErrorType', 'publicationErrorType'] if key in proof}),
+        file=sys.stderr, flush=True)
 sys.exit(0 if proof['success'] else 1)

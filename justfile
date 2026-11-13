@@ -1,6 +1,23 @@
+# The coupled entry gate (tests/run_entry_coupled.py) takes a different
+# authority on each host family, and refuses to run without it.
+#
+# Unix: the entry runtime's authority and peer, from ENTRY_NIM_RUNTIME_AUTHORITY
+# and ENTRY_NIM_ENVIRONMENT_ROOT. CI sets both with ci/acquire-entry-runtime.sh.
+# Direnv is the dev shell's, which must be the image the authority records.
+#
+# Windows: the native Nim/Clang/Zstd provider that the `entry-native-provider`
+# edge writes (`repro test`, or `repro build .#test`), for the supplier
+# revision repro.lock pins. The gate must run under the Python the provider
+# recorded, so that interpreter is read from the provider's own profile. The
+# gate then checks it against the recorded image. windows-tests.yml runs the
+# same gate on a provider it builds itself.
+windows_entry_provider := ".repro/entry-native-provider/frontend-component.json"
+unix_entry_gate := 'python3 tests/run_entry_coupled.py --nim-environment-root "${ENTRY_NIM_ENVIRONMENT_ROOT:-../codetracer-trace-format-nim}" --direnv "$(command -v direnv)" --unix-runtime-authority "${ENTRY_NIM_RUNTIME_AUTHORITY:-}"'
+windows_entry_gate := '"$(python3 -I -c "import json, sys; print(json.load(open(sys.argv[1]))[sys.argv[2]][sys.argv[3]])" ' + windows_entry_provider + ' python path)" -I -B tests/run_entry_coupled.py --nim-environment-root ../codetracer-trace-format-nim --windows-provider ' + windows_entry_provider
+
 # Run all tests
 test:
-  python3 tests/run_entry_coupled.py --nim-environment-root "${ENTRY_NIM_ENVIRONMENT_ROOT:-../codetracer-trace-format-nim}" --direnv "$(command -v direnv)" --unix-runtime-authority "${ENTRY_NIM_RUNTIME_AUTHORITY:-}"
+  {{ if os_family() == "windows" { windows_entry_gate } else { unix_entry_gate } }}
   bash codetracer_trace_writer_nim/tests/nimcache_environment.sh
   python3 -B tests/test_override_plugin_pin.py
 

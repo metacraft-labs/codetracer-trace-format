@@ -112,8 +112,20 @@ fn nim_compiler_arg(arg: &std::ffi::OsStr) -> String {
 
 /// The Nim archive is still its own build script, with the same real target
 /// compiler/environment and Cargo-built Zstd headers as the independent C host.
+///
+/// `nimble install --depsOnly` is skipped in two cases. The caller can say the
+/// requirements are already on Nim's path
+/// (`CODETRACER_TRACE_FORMAT_NIM_SKIP_NIMBLE_INSTALL`, as `build.rs` reads it).
+/// Or the caller runs under the coupled entry runtime
+/// (`ENTRY_NIM_RUNTIME_AUTHORITY`). In that case `NIMBLE_DIR` names the
+/// runtime's `.nimble`, which its constructor already filled with the Nim
+/// requirements and then sealed. Nimble rewrites that directory's
+/// `nimbledata2.json` even when there is nothing to install, so the next
+/// constructor run and the next `just test` would refuse the runtime because
+/// a sealed member changed. `tests/run_entry_coupled.py` skips the install
+/// for the same reason.
 fn build_nim_archive(repo: &Path, work: &Path, tool: &cc::Tool, native: &NativeBuild) -> PathBuf {
-    if std::env::var_os("CODETRACER_TRACE_FORMAT_NIM_SKIP_NIMBLE_INSTALL").is_none() {
+    if std::env::var_os("CODETRACER_TRACE_FORMAT_NIM_SKIP_NIMBLE_INSTALL").is_none() && std::env::var_os("ENTRY_NIM_RUNTIME_AUTHORITY").is_none() {
         run(
             Command::new("nimble").args(["install", "--depsOnly", "-y"]).current_dir(repo),
             "nimble install --depsOnly (the Nim library's dependencies)",

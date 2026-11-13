@@ -106,19 +106,17 @@ fn interning_tables_resolve_by_id_matching_events_and_recorded_paths() {
         .expect("open_interning_tables ok")
         .expect("interning tables present when has_interning_tables flag is set");
 
-    // Read the same events / recorded path list that reference these ids.
-    //
-    // The oracle used to be the legacy `paths.json` sidecar.  That is retired,
-    // so the independent reference is now `meta.dat`'s recorded path list —
-    // kept alongside the `Path` event comparison below so the interning table
-    // is still checked against TWO references it did not produce, not one.
-    let (events, recorded_paths) = {
-        let mut r = codetracer_ctfs::CtfsReader::open(&ct_path).unwrap();
-        let meta = codetracer_trace_writer::meta_dat::decode_meta_dat(&r.read_file("meta.dat").unwrap()).expect("meta.dat must decode");
+    // Two references the interning table did not produce: the `Path` events
+    // the trace reader decodes, and the paths `write_trace` registered, in
+    // registration order. (`meta.dat` no longer carries a path list:
+    // `paths.dat` is the only one, `internal-files.md` §"Metadata".)
+    let events = {
         let mut reader = codetracer_trace_reader::create_trace_reader(codetracer_trace_reader::TraceEventsFileFormat::Ctfs);
-        let events = reader.load_trace_events(&ct_path).unwrap();
-        (events, meta.paths)
+        reader.load_trace_events(&ct_path).unwrap()
     };
+    let recorded_paths: Vec<String> = std::iter::once("/test/main.rs".to_string())
+        .chain((0..N).map(|i| format!("/test/mod_{i}.rs")))
+        .collect();
 
     // --- Paths: resolved path equals paths.json[id] and the Path events. ---
     let path_events: Vec<String> = events
@@ -128,12 +126,16 @@ fn interning_tables_resolve_by_id_matching_events_and_recorded_paths() {
             _ => None,
         })
         .collect();
-    assert_eq!(it.path_count(), recorded_paths.len(), "path table count must equal meta.dat's path count");
+    assert_eq!(
+        it.path_count(),
+        recorded_paths.len(),
+        "path table count must equal the registered path count"
+    );
     assert_eq!(it.path_count(), path_events.len(), "path table count must equal the Path event count");
     assert!(it.path_count() >= N, "expected at least N interned paths");
     for id in 0..it.path_count() {
         let resolved = it.path_str(id as u64).unwrap();
-        assert_eq!(resolved, recorded_paths[id], "path id {id} must equal meta.dat paths[{id}]");
+        assert_eq!(resolved, recorded_paths[id], "path id {id} must equal the {id}-th registered path");
         assert_eq!(resolved, path_events[id], "path id {id} must equal the {id}-th Path event");
     }
 
@@ -299,7 +301,7 @@ fn bit12_clear_tables_are_found_and_bare_name_records_refused() {
     {
         let mut w = CtfsWriter::create(&ct_path, 4096, 31).unwrap();
         // meta.dat WITHOUT the interning-tables flag — the real-trace case.
-        let meta = encode_meta_dat("01949fcc-7d92-7e9c-aaaa-bbbbbbbbbbbb", "prog", &[], "", "", &[], 0);
+        let meta = encode_meta_dat("01949fcc-7d92-7e9c-aaaa-bbbbbbbbbbbb", "prog", &[], "", "", 0);
         assert!(!meta_dat_has_interning_tables(&meta), "fixture must have bit 12 CLEAR");
         let h = w.add_file("meta.dat").unwrap();
         w.write(h, &meta).unwrap();
@@ -437,7 +439,7 @@ fn write_paths_container(dir: &tempfile::TempDir, name: &str, records: &[Vec<u8>
 
     let ct_path = dir.path().join(name);
     let mut w = CtfsWriter::create(&ct_path, 4096, 31).unwrap();
-    let meta = encode_meta_dat("01949fcc-7d92-7e9c-aaaa-bbbbbbbbbbbb", "prog", &[], "", "", &[], flags);
+    let meta = encode_meta_dat("01949fcc-7d92-7e9c-aaaa-bbbbbbbbbbbb", "prog", &[], "", "", flags);
     let h = w.add_file("meta.dat").unwrap();
     w.write(h, &meta).unwrap();
 

@@ -7,6 +7,10 @@ use codetracer_trace_types::{
 };
 
 pub trait TraceWriter: AbstractTraceWriter {
+    fn mark_current_call_as_entry(&mut self) -> Result<(), Box<dyn Error>> {
+        Err("recorded entry identity is unsupported by this writer".into())
+    }
+
     fn begin_writing_trace_metadata(&mut self, path: &Path) -> Result<(), Box<dyn Error>> {
         AbstractTraceWriter::begin_writing_trace_metadata(self, path)
     }

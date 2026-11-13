@@ -133,11 +133,16 @@ fn the_nim_writer_trait_surface_is_callable_and_harmless() {
     let mut writer = CtfsTraceWriter::new_in_memory("example", &[]);
     writer.set_recording_id(RECORDING_ID);
     writer.begin_writing_trace_events(Path::new("ignored")).unwrap();
+    // Before the first record: `meta.dat` is written by it.
+    TraceWriter::set_workdir(&mut writer, Path::new("/src"));
 
     assert!(!writer.dropped_column_awareness(), "nothing has asked for columns yet");
 
     {
         let w: &mut dyn TraceWriter = &mut writer;
+        // A first record fixes `meta.dat`, so the column request below comes
+        // too late to be honoured.
+        TraceWriter::register_step(w, Path::new("/src/first.rs"), Line(1));
         w.enable_column_aware_steps();
         w.enable_column_breakpoints_support();
         w.enable_column_motions_support();
@@ -178,4 +183,55 @@ fn taking_the_container_bytes_consumes_them() {
     assert!(writer.container_bytes().is_some());
     assert!(writer.take_container_bytes().is_some());
     assert!(writer.take_container_bytes().is_none());
+}
+
+/// The sample trace's container from a writer given `threshold`, in memory
+/// or through a file.
+fn sample_container(in_memory: bool, threshold: u64) -> Vec<u8> {
+    let dir = tempfile::tempdir().unwrap();
+    let base = dir.path().join("trace");
+    let mut writer = if in_memory {
+        CtfsTraceWriter::new_in_memory("example", &[])
+    } else {
+        CtfsTraceWriter::new("example", &[])
+    }
+    .with_compact_threshold(threshold);
+    writer.set_recording_id(RECORDING_ID);
+    writer.begin_writing_trace_events(&base).unwrap();
+    write_sample_trace(&mut writer);
+    writer.finish_writing_trace_events().unwrap();
+    if in_memory {
+        writer.take_container_bytes().expect("in-memory bytes")
+    } else {
+        let bytes = std::fs::read(base.with_extension("ct")).unwrap();
+        let left: Vec<_> = std::fs::read_dir(dir.path()).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(left, ["trace.ct"], "the conversion leaves the container and nothing else");
+        bytes
+    }
+}
+
+/// `with_compact_threshold` replaces the in-memory bytes and the file alike
+/// with the compact container when the compact members total fewer than the
+/// threshold, and leaves the full container byte for byte as it is when they
+/// do not (`ctfs-container.md` §1e).
+#[test]
+fn the_profile_is_chosen_at_close_in_memory_and_on_disk_alike() {
+    use codetracer_ctfs::CtfsReader;
+    use codetracer_ctfs::compact::Profile;
+    use codetracer_trace_writer::compact_profile::{compact_members_of, raw_member_bytes, select_profile};
+
+    let full = sample_container(true, 0);
+    let raw = raw_member_bytes(&compact_members_of(&full).unwrap());
+    let (_, compact, _) = select_profile(full.clone(), raw + 1).unwrap();
+    let profile = |c: &[u8]| CtfsReader::from_bytes(c.to_vec()).unwrap().profile();
+    assert_eq!(profile(&full), Profile::Full);
+    assert_eq!(profile(&compact), Profile::Compact);
+
+    for in_memory in [true, false] {
+        assert!(
+            sample_container(in_memory, raw + 1) == compact,
+            "in memory: {in_memory}: compact at R + 1"
+        );
+        assert!(sample_container(in_memory, raw) == full, "in memory: {in_memory}: full at R");
+    }
 }

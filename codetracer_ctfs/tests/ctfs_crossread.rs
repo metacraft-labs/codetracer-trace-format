@@ -36,6 +36,8 @@
 //! that is a failure, not a skip — never make a red cross-read go away by
 //! arranging for the skip.
 
+mod nim_adjudicator;
+
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -61,7 +63,9 @@ fn deterministic_bytes(seed: u64, n: usize) -> Vec<u8> {
 /// The sibling Nim checkout and the direnv that supplies its toolchain.
 /// `None` means the cross-implementation half cannot run here.
 fn nim_checker() -> Option<(PathBuf, PathBuf, PathBuf)> {
-    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../codetracer-trace-format-nim");
+    let repo = std::env::var("CODETRACER_TRACE_FORMAT_NIM_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../codetracer-trace-format-nim"));
     if !repo.join("tests/check_ctfs_container.nim").exists() {
         eprintln!(
             "SKIP: the sibling codetracer-trace-format-nim checkout has no \
@@ -72,6 +76,9 @@ fn nim_checker() -> Option<(PathBuf, PathBuf, PathBuf)> {
         return None;
     }
     let home = PathBuf::from(std::env::var("HOME").ok()?);
+    if let Some(nim) = nim_adjudicator::declared_runtime_nim() {
+        return Some((fs::canonicalize(&repo).ok()?, nim, home));
+    }
     let direnv = home.join(".nix-profile/bin/direnv");
     let direnv = if direnv.exists() {
         direnv
@@ -112,6 +119,17 @@ fn which_direnv() -> Option<PathBuf> {
 /// proving something about the wrong toolchain.
 fn run_nim_checker(work: &Path, container: &Path, present: &[(&str, &[u8])], absent: &[&str]) -> (String, bool) {
     let (repo, direnv, home) = nim_checker().expect("caller checked");
+    // Keep the empty-environment toolchain boundary. Only a declared matching
+    // hook constructor (`REPROBUILD_REPRO`, the variable Reprobuild's managed
+    // hooks resolve `repro` through) is forwarded, and only when one is
+    // declared: the sibling's dev shell installs its committed pre-commit
+    // config as the git hook without Reprobuild, so its absence is no reason
+    // to refuse the cross-read. A declared one must still be a real file.
+    let constructor = std::env::var_os("REPROBUILD_REPRO").map(|declared| {
+        let constructor = fs::canonicalize(PathBuf::from(declared)).expect("declared matching hook constructor is absent");
+        assert!(constructor.is_file(), "declared matching hook constructor is not a regular file");
+        constructor
+    });
 
     let mut manifest = String::new();
     for (name, body) in present {
@@ -125,15 +143,27 @@ fn run_nim_checker(work: &Path, container: &Path, present: &[(&str, &[u8])], abs
     let manifest_path = work.join("manifest.txt");
     fs::write(&manifest_path, &manifest).unwrap();
 
-    let out = Command::new("env")
-        .args([
-            "-i".into(),
-            format!("HOME={}", home.display()),
-            "PATH=/run/current-system/sw/bin:/usr/bin:/bin".into(),
+    let mut command = if let Some(nim) = nim_adjudicator::declared_runtime_nim() {
+        // The entry caller forwards the complete, independently verified peer environment.
+        Command::new(nim)
+    } else {
+        let mut command = Command::new("env");
+        command.arg("-i");
+        command.arg(format!("HOME={}", home.display()));
+        if let Some(constructor) = &constructor {
+            command.arg(format!("REPROBUILD_REPRO={}", constructor.display()));
+        }
+        command.args([
+            "PATH=/run/current-system/sw/bin:/usr/bin:/bin".to_string(),
             direnv.display().to_string(),
             "exec".into(),
             repo.display().to_string(),
             "nim".into(),
+        ]);
+        command
+    };
+    let out = command
+        .args([
             "c".into(),
             "-r".into(),
             "-d:release".into(),

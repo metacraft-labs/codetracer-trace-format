@@ -443,8 +443,11 @@ fn a_mapping_root_in_the_partial_region_is_refused_by_name() {
 
     // `a.dat` is an exact multiple of the block size, so `close` allocates it
     // no further block and `b.dat`'s mapping root is the higher block number.
+    // `b.dat` is longer than one block: a member of at most one block has no
+    // mapping block at all (`ctfs-container.md` §2), and its mapping block is
+    // claimed before its data blocks, so it is the first of `b.dat`'s blocks.
     let a = deterministic_bytes(21, 3 * BS);
-    let b = deterministic_bytes(22, 100);
+    let b = deterministic_bytes(22, BS + 100);
     let mut w = CtfsWriter::create(&path, BS as u32, MAX_ROOT_ENTRIES).unwrap();
     let h_a = w.add_file("a.dat").unwrap();
     w.write(h_a, &a).unwrap();

@@ -20,17 +20,36 @@ pub mod seekable_reader;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod ctfs_reader;
 
+/// Following a container that is being written.
+mod follow;
+
+/// A reader of a container that is still being written.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod trace_follower;
+
+/// The members a reader refuses: `events.log` and `events.fmt`.
+pub mod retired_streams;
+
+mod chunk_codec;
+pub use chunk_codec::ChunkForm;
+
 pub mod call_stream_reader;
 
 pub mod step_stream_reader;
 
+/// `step-map.ns` version 2: the `(path_id, line)` -> step-id index.
+pub mod step_map_reader;
+
 pub mod value_stream_reader;
 
-#[cfg(not(target_arch = "wasm32"))]
 pub mod io_event_stream_reader;
 
-#[cfg(not(target_arch = "wasm32"))]
+pub mod span_stream_reader;
+
 pub mod interning_tables_reader;
+
+/// `linehits.tc`, `corrmark.ns` and the marker labels.
+pub mod correlation_reader;
 
 /// Assembles a linear event sequence from the split streams, for containers
 /// that carry no `events.log`.
@@ -63,3 +82,5 @@ pub fn create_trace_reader(format: TraceEventsFileFormat) -> Box<dyn trace_reade
         TraceEventsFileFormat::Ctfs => panic!("CTFS format is not supported on wasm32"),
     }
 }
+
+pub mod recorded_entry_reader;

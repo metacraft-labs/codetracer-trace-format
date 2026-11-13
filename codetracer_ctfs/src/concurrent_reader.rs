@@ -3,8 +3,8 @@ use std::path::Path;
 
 use crate::base40::base40_decode;
 use crate::block_bounds::BlockBound;
-use crate::file_entry::{FileEntry, FILE_ENTRY_SIZE};
-use crate::header::{EXTENDED_HEADER_SIZE, HEADER_SIZE};
+use crate::file_entry::{FileEntry, MemberLayout, FILE_ENTRY_SIZE};
+use crate::header::{root_entry_count, EXTENDED_HEADER_SIZE, HEADER_SIZE};
 use crate::pread_compat::pread_exact;
 use crate::CtfsError;
 
@@ -48,22 +48,21 @@ impl ConcurrentCtfsReader {
         // Read header
         let mut header_buf = [0u8; HEADER_SIZE];
         pread_exact(&file, &mut header_buf, 0)?;
-        if header_buf[0..5] != crate::header::MAGIC {
-            return Err(CtfsError::InvalidMagic);
-        }
-        if header_buf[5] != crate::header::VERSION && header_buf[5] != crate::header::VERSION_V2 && header_buf[5] != crate::header::VERSION_V4 {
-            return Err(CtfsError::InvalidVersion(header_buf[5]));
-        }
+        // The same check `CtfsReader` applies: magic, then version 5 only.
+        crate::header::Header::read_from(&mut &header_buf[..])?;
 
         // Read extended header
         let mut ext_buf = [0u8; EXTENDED_HEADER_SIZE];
         pread_exact(&file, &mut ext_buf, HEADER_SIZE as u64)?;
         let block_size = u32::from_le_bytes(ext_buf[0..4].try_into().unwrap());
-        let max_root_entries = u32::from_le_bytes(ext_buf[4..8].try_into().unwrap());
+        let declared_root_entries = u32::from_le_bytes(ext_buf[4..8].try_into().unwrap());
 
         if block_size != 1024 && block_size != 2048 && block_size != 4096 {
             return Err(CtfsError::InvalidBlockSize(block_size));
         }
+        // A declared `0` is the auto-filled remainder of block 0
+        // (`ctfs-container.md` §1, "Auto-fill"), never "no entries".
+        let max_root_entries = root_entry_count(block_size, declared_root_entries, HEADER_SIZE + EXTENDED_HEADER_SIZE);
 
         // Read file entries
         let mut entries = Vec::with_capacity(max_root_entries as usize);
@@ -118,6 +117,7 @@ impl ConcurrentCtfsReader {
     /// `CTFS-Binary-Format.md` §5d. The bound is re-derived from the file on
     /// every call, so it grows with a live producer.
     pub fn read_file(&self, name: &str) -> Result<Vec<u8>, CtfsError> {
+        crate::base40::encode_member_name(name)?;
         let entry = *self.find_entry(name).ok_or_else(|| CtfsError::FileNotFound(name.to_string()))?;
 
         if entry.size == 0 {
@@ -145,6 +145,7 @@ impl ConcurrentCtfsReader {
 
     /// Read from an arbitrary position within a file using positional read.
     pub fn read_at(&self, name: &str, offset: u64, buf: &mut [u8]) -> Result<usize, CtfsError> {
+        crate::base40::encode_member_name(name)?;
         let entry = *self.find_entry(name).ok_or_else(|| CtfsError::FileNotFound(name.to_string()))?;
 
         if offset >= entry.size {
@@ -183,12 +184,25 @@ impl ConcurrentCtfsReader {
         let n = self.block_size as u64 / 8;
         let usable = n - 1;
 
+        // The form is decided from `MapBlock`, never from `Size`
+        // (`ctfs-container.md` §2, "Readers").
+        let root = match entry.layout() {
+            // Reached only with a non-zero `Size` (callers return early on an
+            // empty member), which is a null pointer: refused below by name.
+            MemberLayout::Empty => 0,
+            MemberLayout::Direct(b) => {
+                bound.check_direct_member(b, entry.size, name)?;
+                return Ok(b);
+            }
+            MemberLayout::Mapped(m) => m,
+        };
+
         let mut idx = block_index;
-        let mut current_level_block = entry.map_block;
+        let mut current_level_block = root;
         let mut level = 1u32;
 
         // Path 1 of 3: the entry's mapping root.
-        bound.check_mapping_root(current_level_block, &format!("mapping root block of internal file {name}"))?;
+        bound.check_mapping_root(current_level_block, || format!("mapping root block of internal file {name}"))?;
 
         loop {
             let cap = level_capacity(usable, level);
@@ -211,7 +225,7 @@ impl ConcurrentCtfsReader {
                 )));
             }
             // Path 2a of 3: a mapping block reached through the chain.
-            bound.check(chain_ptr, &format!("chain pointer at level {level} of internal file {name}"))?;
+            bound.check(chain_ptr, || format!("chain pointer at level {level} of internal file {name}"))?;
             current_level_block = chain_ptr;
         }
 
@@ -243,7 +257,7 @@ impl ConcurrentCtfsReader {
             // bytes the container does not own — and before `pread_exact`, out
             // of a zero-filled buffer when those bytes were not there at all.
             // Check the block NUMBER, before any of its bytes are touched.
-            bound.check(ptr, &format!("data block {block_index} of internal file {name}"))?;
+            bound.check(ptr, || format!("data block {block_index} of internal file {name}"))?;
             return Ok(ptr);
         }
 
@@ -259,13 +273,13 @@ impl ConcurrentCtfsReader {
             )));
         }
         // Path 2b of 3: a mapping block reached by descending the hierarchy.
-        bound.check(child_block, &format!("child block pointer at level {level} of internal file {name}"))?;
+        bound.check(child_block, || format!("child block pointer at level {level} of internal file {name}"))?;
 
         self.navigate_to_data_block(child_block, level - 1, sub_idx, usable, block_index, name, bound)
     }
 
     fn find_entry(&self, name: &str) -> Option<&FileEntry> {
-        let encoded = crate::base40::base40_encode(name).ok()?;
+        let encoded = crate::base40::encode_member_name(name).ok()?;
         self.entries.iter().find(|e| e.name == encoded && !e.is_empty())
     }
 }

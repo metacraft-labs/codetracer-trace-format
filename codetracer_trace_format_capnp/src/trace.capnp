@@ -340,5 +340,15 @@ struct Trace {
         error @9;
         traceLogEvent @10;
         evmEvent @13;
+        writeStderr @14;
+        exec @15;
+        readEnv @16;
+        writeEnv @17;
+        stat @18;
+        createDir @19;
+        removeDir @20;
+        removeFile @21;
+        rename @22;
+        changeDir @23;
     }
 }

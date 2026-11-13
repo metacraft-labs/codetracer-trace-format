@@ -34,10 +34,79 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// Reuse only the complete runtime already qualified by the owning entry caller.
+pub fn declared_runtime_nim() -> Option<PathBuf> {
+    use sha2::{Digest, Sha256};
+    let receipt = std::env::var_os("ENTRY_NIM_RUNTIME_AUTHORITY")?;
+    let authority: serde_json::Value =
+        serde_json::from_slice(&fs::read(receipt).expect("declared runtime authority absent")).expect("malformed declared runtime authority");
+    assert_eq!(authority["schema"], "codetracer-trace-format.unix-runtime-authority.v1");
+    for field in ["finished", "success", "finalGuards"] {
+        assert_eq!(authority[field], true, "incomplete declared runtime authority");
+    }
+    let roles = authority["expectedSelectedImages"].as_object().expect("declared runtime roles absent");
+    assert_eq!(roles.len(), 5, "declared runtime role inventory differs");
+    for role in ["nim", "nimble", "git", "gcc", "bash"] {
+        let image = roles.get(role).expect("mandatory declared runtime role absent");
+        let lexical = PathBuf::from(image["lexical"].as_str().expect("declared runtime image path absent"));
+        let search = std::env::var_os("PATH").expect("declared runtime PATH absent");
+        let actual = std::env::split_paths(&search)
+            .map(|directory| directory.join(role))
+            .find(|candidate| {
+                let Ok(metadata) = fs::metadata(candidate) else {
+                    return false;
+                };
+                if !metadata.is_file() {
+                    return false;
+                }
+                #[cfg(unix)]
+                {
+                    use std::os::unix::fs::PermissionsExt;
+                    metadata.permissions().mode() & 0o111 != 0
+                }
+                #[cfg(not(unix))]
+                {
+                    true
+                }
+            })
+            .expect("mandatory runtime PATH role absent");
+        assert_eq!(actual, lexical, "runtime PATH selected another image");
+        let resolved = fs::canonicalize(&lexical).expect("declared runtime image absent");
+        assert!(resolved.starts_with("/nix/store"), "declared runtime image is mutable");
+        assert_eq!(
+            resolved,
+            PathBuf::from(image["resolved"].as_str().expect("declared resolved image absent"))
+        );
+        let metadata = fs::metadata(&resolved).expect("declared runtime metadata absent");
+        assert!(metadata.is_file(), "declared runtime image is not regular");
+        assert_eq!(
+            format!("{:x}", Sha256::digest(fs::read(&resolved).expect("declared runtime image unreadable"))),
+            image["sha256"].as_str().expect("declared runtime image hash absent")
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::MetadataExt;
+            assert_eq!(Some(metadata.dev()), image["dev"].as_u64());
+            assert_eq!(Some(metadata.ino()), image["ino"].as_u64());
+            assert_eq!(Some((metadata.mode() & 0o7777) as u64), image["mode"].as_u64());
+        }
+    }
+    Some(PathBuf::from(roles["nim"]["lexical"].as_str().expect("declared Nim image absent")))
+}
+
+/// The Nim checkout to adjudicate with: the `CODETRACER_TRACE_FORMAT_NIM_DIR`
+/// override `codetracer_trace_writer_nim/build.rs` also honours, or the
+/// sibling repo.
+pub fn nim_repo() -> PathBuf {
+    std::env::var("CODETRACER_TRACE_FORMAT_NIM_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../codetracer-trace-format-nim"))
+}
+
 /// The sibling Nim checkout, the `direnv` that supplies its toolchain, and
 /// `HOME`. `None` means the cross-implementation half cannot run here.
 pub fn nim_checker() -> Option<(PathBuf, PathBuf, PathBuf)> {
-    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../codetracer-trace-format-nim");
+    let repo = nim_repo();
     if !repo.join("tests/check_ctfs_container.nim").exists() {
         eprintln!(
             "SKIP: the sibling codetracer-trace-format-nim checkout has no \
@@ -48,6 +117,9 @@ pub fn nim_checker() -> Option<(PathBuf, PathBuf, PathBuf)> {
         return None;
     }
     let home = PathBuf::from(std::env::var("HOME").ok()?);
+    if let Some(nim) = declared_runtime_nim() {
+        return Some((fs::canonicalize(&repo).ok()?, nim, home));
+    }
     let direnv = home.join(".nix-profile/bin/direnv");
     let direnv = if direnv.exists() {
         direnv
@@ -66,17 +138,82 @@ pub fn nim_checker() -> Option<(PathBuf, PathBuf, PathBuf)> {
     Some((fs::canonicalize(&repo).ok()?, direnv, home))
 }
 
+/// A `Command` that runs the sibling checkout's own `nim`; the caller appends
+/// nim's arguments. `toolchain` is what `nim_checker()` returned beside the
+/// checkout: the declared runtime `nim` itself when the owning entry caller
+/// forwarded a verified peer environment, otherwise `direnv`, which is then
+/// run under `env -i` so this repo's dev shell cannot leak into the sibling's.
+///
+/// Only a declared matching hook constructor (`REPROBUILD_REPRO`, the variable
+/// Reprobuild's managed hooks resolve `repro` through) crosses that boundary,
+/// and only when one is declared: the sibling's dev shell installs its
+/// committed pre-commit config as the git hook without Reprobuild, so its
+/// absence is no reason to refuse a cross-read. A declared one must still be a
+/// real file.
+fn sibling_nim(repo: &Path, toolchain: &Path, home: &Path) -> Command {
+    if declared_runtime_nim().is_some() {
+        // The entry caller forwards the complete, independently verified peer environment.
+        return Command::new(toolchain);
+    }
+    let constructor = std::env::var_os("REPROBUILD_REPRO").map(|declared| {
+        let constructor = fs::canonicalize(PathBuf::from(declared)).expect("declared matching hook constructor is absent");
+        assert!(constructor.is_file(), "declared matching hook constructor is not a regular file");
+        constructor
+    });
+    let mut command = Command::new("env");
+    command.arg("-i");
+    command.arg(format!("HOME={}", home.display()));
+    if let Some(constructor) = &constructor {
+        command.arg(format!("REPROBUILD_REPRO={}", constructor.display()));
+    }
+    command.args([
+        "PATH=/run/current-system/sw/bin:/usr/bin:/bin".to_string(),
+        toolchain.display().to_string(),
+        "exec".into(),
+        repo.display().to_string(),
+        "nim".into(),
+    ]);
+    command
+}
+
+/// Compile `source`, a Nim program over the sibling checkout's sources, into
+/// `work/<name>` through that checkout's own dev shell. `None` when the
+/// cross-implementation half cannot run here; a checkout that is present but
+/// cannot build the program fails the test.
+pub fn build_driver(work: &Path, name: &str, source: &str) -> Option<PathBuf> {
+    let (repo, direnv, home) = nim_checker()?;
+    let src = work.join(format!("{name}.nim"));
+    fs::write(&src, source).unwrap();
+    let exe = work.join(name);
+    let out = sibling_nim(&repo, &direnv, &home)
+        .args([
+            "c".to_string(),
+            "-d:release".into(),
+            format!("-p:{}", repo.join("src").display()),
+            "--hints:off".into(),
+            format!("--nimcache:{}", work.join(format!("nimcache-{name}")).display()),
+            format!("-o:{}", exe.display()),
+            src.display().to_string(),
+        ])
+        .current_dir(&repo)
+        .output()
+        .expect("failed to spawn env/direnv");
+    assert!(
+        exe.exists(),
+        "the sibling repo's Nim toolchain could not build {name}, so the cross-implementation half did not run:\n{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    Some(exe)
+}
+
 fn which_direnv() -> Option<PathBuf> {
     let out = Command::new("sh").arg("-c").arg("command -v direnv").output().ok()?;
     if !out.status.success() {
         return None;
     }
     let p = PathBuf::from(String::from_utf8_lossy(&out.stdout).trim());
-    if p.exists() {
-        Some(p)
-    } else {
-        None
-    }
+    p.exists().then_some(p)
 }
 
 /// Drive the production Nim reader over `container` with a manifest of
@@ -103,15 +240,8 @@ pub fn run_nim_checker(work: &Path, container: &Path, present: &[(&str, &[u8])],
     let manifest_path = work.join("manifest.txt");
     fs::write(&manifest_path, &manifest).unwrap();
 
-    let out = Command::new("env")
+    let out = sibling_nim(&repo, &direnv, &home)
         .args([
-            "-i".into(),
-            format!("HOME={}", home.display()),
-            "PATH=/run/current-system/sw/bin:/usr/bin:/bin".into(),
-            direnv.display().to_string(),
-            "exec".into(),
-            repo.display().to_string(),
-            "nim".into(),
             "c".into(),
             "-r".into(),
             "-d:release".into(),

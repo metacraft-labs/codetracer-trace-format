@@ -708,24 +708,127 @@ pub enum TypeKind {
 }
 
 /// Kinds of I/O or log events that can appear in a trace.
-#[derive(Debug, Default, Copy, Clone, FromPrimitive, Serialize_repr, Deserialize_repr, PartialEq, JsonSchema)]
+///
+/// The ordinal is the `events.dat` kind byte, and the table is
+/// `trace-events.md` §"EventLogKind (u8 enum)": a recorder gives an operation
+/// the kind that describes it, and `WriteOther` / `ReadOther` only when none
+/// does.
+#[derive(Debug, Default, Copy, Clone, FromPrimitive, Serialize_repr, Deserialize_repr, PartialEq, Eq, Hash, JsonSchema)]
 #[repr(u8)]
 pub enum EventLogKind {
+    /// Output to stdout, or an unspecified write.
     #[default]
     Write,
+    /// A write to a named file's contents, copying a file included.
     WriteFile,
+    /// A write no other kind describes.
     WriteOther,
+    /// Input from stdin, or an unspecified read.
     Read,
+    /// A read from a named file.
     ReadFile,
+    /// A read no other kind describes.
     ReadOther,
-    // not used for now
+    /// Reading a directory's entries.
     ReadDir,
+    /// Opening a directory.
     OpenDir,
+    /// Closing a directory.
     CloseDir,
+    /// A socket operation.
     Socket,
+    /// Opening a file.
     Open,
+    /// An uncaught exception or error.
     Error,
-    // used for trace events
+    /// A message the program or recorder logged into the trace.
     TraceLogEvent,
+    /// An EVM host event.
     EvmEvent,
+    /// Output to stderr.
+    WriteStderr,
+    /// Running a program: a command, a child process, an `exec`.
+    Exec,
+    /// Reading an environment variable, or testing whether one is set.
+    ReadEnv,
+    /// Setting or removing an environment variable.
+    WriteEnv,
+    /// Asking about a filesystem entry without reading it.
+    Stat,
+    /// Creating a directory, copying a directory tree included.
+    CreateDir,
+    /// Removing a directory.
+    RemoveDir,
+    /// Removing a file.
+    RemoveFile,
+    /// Renaming or moving a file or directory.
+    Rename,
+    /// Changing the process's current directory.
+    ChangeDir,
+}
+
+impl EventLogKind {
+    /// Every kind, in ordinal order: `ALL[k as usize] == k`.
+    pub const ALL: [EventLogKind; 24] = [
+        EventLogKind::Write,
+        EventLogKind::WriteFile,
+        EventLogKind::WriteOther,
+        EventLogKind::Read,
+        EventLogKind::ReadFile,
+        EventLogKind::ReadOther,
+        EventLogKind::ReadDir,
+        EventLogKind::OpenDir,
+        EventLogKind::CloseDir,
+        EventLogKind::Socket,
+        EventLogKind::Open,
+        EventLogKind::Error,
+        EventLogKind::TraceLogEvent,
+        EventLogKind::EvmEvent,
+        EventLogKind::WriteStderr,
+        EventLogKind::Exec,
+        EventLogKind::ReadEnv,
+        EventLogKind::WriteEnv,
+        EventLogKind::Stat,
+        EventLogKind::CreateDir,
+        EventLogKind::RemoveDir,
+        EventLogKind::RemoveFile,
+        EventLogKind::Rename,
+        EventLogKind::ChangeDir,
+    ];
+
+    /// The kind an ordinal names, or `None` for an unassigned value
+    /// (24-255), which a reader refuses rather than map onto a kind.
+    pub fn from_ordinal(ordinal: u8) -> Option<EventLogKind> {
+        Self::ALL.get(ordinal as usize).copied()
+    }
+
+    /// The kind's name as `trace-events.md` spells it.
+    pub fn name(self) -> &'static str {
+        match self {
+            EventLogKind::Write => "Write",
+            EventLogKind::WriteFile => "WriteFile",
+            EventLogKind::WriteOther => "WriteOther",
+            EventLogKind::Read => "Read",
+            EventLogKind::ReadFile => "ReadFile",
+            EventLogKind::ReadOther => "ReadOther",
+            EventLogKind::ReadDir => "ReadDir",
+            EventLogKind::OpenDir => "OpenDir",
+            EventLogKind::CloseDir => "CloseDir",
+            EventLogKind::Socket => "Socket",
+            EventLogKind::Open => "Open",
+            EventLogKind::Error => "Error",
+            EventLogKind::TraceLogEvent => "TraceLogEvent",
+            EventLogKind::EvmEvent => "EvmEvent",
+            EventLogKind::WriteStderr => "WriteStderr",
+            EventLogKind::Exec => "Exec",
+            EventLogKind::ReadEnv => "ReadEnv",
+            EventLogKind::WriteEnv => "WriteEnv",
+            EventLogKind::Stat => "Stat",
+            EventLogKind::CreateDir => "CreateDir",
+            EventLogKind::RemoveDir => "RemoveDir",
+            EventLogKind::RemoveFile => "RemoveFile",
+            EventLogKind::Rename => "Rename",
+            EventLogKind::ChangeDir => "ChangeDir",
+        }
+    }
 }

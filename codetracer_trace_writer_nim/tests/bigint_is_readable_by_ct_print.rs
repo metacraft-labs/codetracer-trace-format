@@ -50,9 +50,28 @@ use codetracer_trace_writer::abstract_trace_writer::AbstractTraceWriter;
 use codetracer_trace_writer::ctfs_writer::CtfsTraceWriter;
 use codetracer_trace_writer::trace_writer::TraceWriter;
 
-/// The prebuilt production reader from the sibling checkout, if it is there.
+/// The prebuilt production reader from the checkout `build.rs` compiles the Nim
+/// library from (the `CODETRACER_TRACE_FORMAT_NIM_DIR` override, else the
+/// sibling), if it is there. Looking anywhere else would pair this crate's Nim
+/// archive with a reader built from different sources. The one exception is
+/// `CODETRACER_TRACE_FORMAT_NIM_CT_PRINT`, which `repro.nim` sets to the reader
+/// its entry-runtime constructor built in the locked Nim peer: the revision the
+/// sibling checkout is locked to. A reader named that way must exist; it is
+/// never a reason to skip.
 fn ct_print() -> Option<PathBuf> {
-    let p = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../codetracer-trace-format-nim/ct-print");
+    if let Ok(p) = std::env::var("CODETRACER_TRACE_FORMAT_NIM_CT_PRINT") {
+        let p = PathBuf::from(p);
+        assert!(
+            p.exists(),
+            "CODETRACER_TRACE_FORMAT_NIM_CT_PRINT names {}, which does not exist",
+            p.display()
+        );
+        return Some(p.canonicalize().unwrap_or(p));
+    }
+    let nim_repo = std::env::var("CODETRACER_TRACE_FORMAT_NIM_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../codetracer-trace-format-nim"));
+    let p = nim_repo.join("ct-print");
     p.exists().then(|| p.canonicalize().unwrap_or(p))
 }
 
@@ -60,7 +79,7 @@ fn ct_print() -> Option<PathBuf> {
 fn a_bigint_wider_than_i128_is_read_back_by_the_production_nim_reader() {
     let Some(ct_print) = ct_print() else {
         eprintln!(
-            "SKIP: ../../codetracer-trace-format-nim/ct-print is not built, so the \
+            "SKIP: the Nim checkout's ct-print is not built, so the \
              cross-implementation half of the BigInt encoding claim did NOT run. This is the \
              only test that checks the Nim reader accepts what this writer emits; build the \
              sibling checkout to exercise it."

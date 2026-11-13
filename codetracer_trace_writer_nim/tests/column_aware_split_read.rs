@@ -105,3 +105,31 @@ fn column_aware_steps_read_back_at_their_recorded_lines_from_both_writers() {
         assert_eq!(got, want, "{label}: steps resolved to the wrong (path, line)");
     }
 }
+
+/// The column of each step, which the event sequence has no field for, is
+/// reported beside it — the same columns from either writer.
+#[test]
+fn column_aware_steps_report_their_recorded_columns_from_both_writers() {
+    let _g = nim_lock();
+    // The entry step `start` emits is at column 1.
+    let mut want: Vec<u64> = vec![1];
+    want.extend(STEPS.iter().map(|(_, _, c)| *c as u64));
+    for nim in [true, false] {
+        let label = if nim { "nim" } else { "rust" };
+        let dir = tempfile::tempdir().unwrap();
+        let ct = write(nim, dir.path());
+        let mut r = CtfsReader::open(&ct).unwrap();
+        let t = codetracer_trace_reader::split_stream_reader::read_trace_with_details(&mut r)
+            .unwrap_or_else(|e| panic!("{label}: split-stream read failed: {e}"));
+        let step_events: Vec<usize> = t
+            .events
+            .iter()
+            .enumerate()
+            .filter_map(|(i, e)| matches!(e, TraceLowLevelEvent::Step(_)).then_some(i))
+            .collect();
+        let at: Vec<usize> = t.details.step_columns.iter().map(|c| c.event_index).collect();
+        assert_eq!(at, step_events, "{label}: one column per Step event");
+        let got: Vec<u64> = t.details.step_columns.iter().map(|c| c.column).collect();
+        assert_eq!(got, want, "{label}: steps report the wrong columns");
+    }
+}

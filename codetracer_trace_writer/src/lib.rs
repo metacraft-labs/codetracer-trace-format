@@ -11,9 +11,23 @@ mod cbor_zstd_writer;
 
 pub mod ctfs_writer;
 
+/// The compact profile of a finished container, chosen at close.
+pub mod compact_profile;
+
+/// A Chunked Compressed Table written as its records arrive.
+pub mod chunk_sink;
+
 pub mod call_stream;
 
+/// The span stream: `spans.dat`, `spans.idx` and `spantype.ns`.
+pub mod span_stream;
+
 pub mod step_stream;
+// The one rule that chooses between an absolute and a delta position record.
+pub mod step_rule;
+
+/// `step-map.ns`, the `(path_id, line)` -> step-id index of a line-only trace.
+pub mod step_map;
 
 /// The line-only global line index: a prefix sum over the registered files, and
 /// its exact inverse. Shared by the writer, the reader and every downstream
@@ -23,6 +37,12 @@ pub mod line_position;
 /// Column-aware step encoding, ported byte-for-byte from the canonical Nim
 /// writer. See the module docs for the port table.
 pub mod column_aware;
+
+/// `corrmark.ns`, the correlation index.
+pub mod corrmark;
+
+/// `linehits.tc`, the per-position list of the steps that executed it.
+pub mod linehits;
 
 pub mod value_stream;
 
@@ -203,3 +223,5 @@ mod tests {
         // tracer.store_trace_events(&PathBuf::from("trace.json")).unwrap();
     }
 }
+
+pub mod recorded_entry_identity;

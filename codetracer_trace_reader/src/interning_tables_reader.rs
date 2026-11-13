@@ -31,8 +31,11 @@
 //! spec's shape only, and refuses a bare-name record with the same message the
 //! Nim reader gives (see `InterningTablesReader::func`).
 
-use codetracer_ctfs::CtfsReader;
+use std::borrow::Cow;
+
+use codetracer_ctfs::{CtfsReader, MemberBytes};
 use codetracer_trace_types::{TypeKind, TypeSpecificInfo};
+use codetracer_trace_writer::column_aware::FileTable;
 use codetracer_trace_writer::line_position::{LinePositionError, LinePositionSpace};
 use codetracer_trace_writer::meta_dat::{meta_dat_has_column_aware_steps, meta_dat_has_interning_tables, meta_dat_has_line_count_table};
 use num_traits::FromPrimitive;
@@ -251,59 +254,72 @@ fn decode_varint_nim(data: &[u8], pos: &mut usize) -> Result<u64, String> {
     Err("varint: too many bytes (>10)".to_string())
 }
 
-/// A single Variable-Size Record Table: the `.dat` data file plus its parsed
-/// `.off` offset index. Records are resolved by 0-based id with O(1) random
-/// access.
+/// A single Variable-Size Record Table: the `.dat` data file plus its `.off`
+/// offset index. Records are resolved by 0-based id with O(1) random access:
+/// two offsets read out of `.off`, then a slice of `.dat`. Both members are
+/// held as read, shared with the container when it is in memory.
 struct VarSizeTable {
     /// The concatenated record bytes.
-    dat: Vec<u8>,
-    /// The offset index: `record_count + 1` `u64` byte offsets (the trailing
-    /// entry is the total data length, so record `i`'s length is
-    /// `offsets[i + 1] - offsets[i]` for every record).
-    offsets: Vec<u64>,
+    dat: MemberBytes,
+    /// The offset index: `record_count + 1` little-endian `u64` byte offsets
+    /// (the trailing entry is the total data length, so record `i`'s length
+    /// is `offsets[i + 1] - offsets[i]` for every record).
+    off: MemberBytes,
 }
 
 impl VarSizeTable {
-    /// Load a table from a `.dat` data file and a `.off` offset index.
-    fn new(name: &str, dat: Vec<u8>, off: &[u8]) -> Result<VarSizeTable, String> {
+    /// A table over a `.dat` data member and a `.off` offset index.
+    fn new(name: &str, dat: MemberBytes, off: MemberBytes) -> Result<VarSizeTable, String> {
         if !off.len().is_multiple_of(8) {
             return Err(format!("{name}.off: length {} is not a multiple of 8", off.len()));
         }
-        let mut offsets = Vec::with_capacity(off.len() / 8);
-        let mut pos = 0usize;
-        while pos + 8 <= off.len() {
-            offsets.push(u64::from_le_bytes(off[pos..pos + 8].try_into().unwrap()));
-            pos += 8;
-        }
         // A valid offset index has at least the trailing sentinel. An empty
         // table is exactly one sentinel entry (== 0).
-        if offsets.is_empty() {
+        if off.is_empty() {
             return Err(format!("{name}.off: empty (missing the trailing sentinel offset)"));
         }
-        Ok(VarSizeTable { dat, offsets })
+        Ok(VarSizeTable { dat, off })
     }
 
     /// Number of records in the table.
     fn count(&self) -> usize {
-        self.offsets.len() - 1
+        self.off.len() / 8 - 1
     }
 
     /// Resolve record `id` to its raw bytes via the offset index (random access,
     /// no scan).
-    fn record(&self, id: usize) -> Result<&[u8], String> {
+    fn record(&self, id: usize) -> Result<Cow<'_, [u8]>, String> {
         if id >= self.count() {
             return Err(format!("interning table: id {id} out of range (count {})", self.count()));
         }
-        let start = self.offsets[id] as usize;
-        let end = self.offsets[id + 1] as usize;
-        if start > end || end > self.dat.len() {
-            return Err(format!(
-                "interning table: record {id} offsets [{start}, {end}) out of range (dat len {})",
+        // `id < count`, so both offsets lie inside `.off`, read as one range.
+        // An offset this target cannot address is out of range, not truncated.
+        let pair = self
+            .off
+            .get(id * 8, id * 8 + 16)
+            .map_err(|e| format!("interning table: record {id}'s offsets: {e}"))?;
+        let offset = |at: usize| {
+            let word: [u8; 8] = pair[at..at + 8].try_into().expect("an eight-byte slice");
+            usize::try_from(u64::from_le_bytes(word)).unwrap_or(usize::MAX)
+        };
+        let (start, end) = (offset(0), offset(8));
+        self.dat.get(start, end).map_err(|e| {
+            format!(
+                "interning table: record {id} offsets [{start}, {end}) out of range (dat len {}): {e}",
                 self.dat.len()
-            ));
-        }
-        Ok(&self.dat[start..end])
+            )
+        })
     }
+}
+
+/// One `paths.dat` entry's place among the entries that share its string —
+/// see [`InterningTablesReader::path_versions`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PathVersion {
+    /// 0-based: how many lower path ids carry the same string.
+    pub ordinal: u64,
+    /// How many path ids, this one included, carry the same string.
+    pub count: u64,
 }
 
 /// A reader over a container's binary interning tables, resolving interned
@@ -339,37 +355,33 @@ impl InterningTablesReader {
     /// EXISTENCE is decided by STRUCTURAL PRESENCE of `paths.dat`, not by
     /// `meta.dat` bit 12, which is only a hint (see the module docs).
     pub fn open(reader: &mut CtfsReader) -> Result<Option<InterningTablesReader>, String> {
-        // `meta.dat` is read best-effort: a still-recording trace has none yet.
-        let interning_tables_declared = match reader.read_file("meta.dat") {
-            Ok(meta) => meta_dat_has_interning_tables(&meta),
-            Err(_) => false,
-        };
+        crate::retired_streams::refuse_retired_members(reader)?;
+        // `meta.dat` is read best-effort: a still-recording trace has none yet,
+        // and each flag below then reads as unset.
+        let meta = reader.read_file("meta.dat").ok();
+        let interning_tables_declared = meta.as_deref().is_some_and(meta_dat_has_interning_tables);
         // Bit 14 selects the `paths.dat` RECORD layout, independently of bit
-        // 12's `funcs.dat`/`types.dat` selector. Read best-effort for the same
-        // reason bit 12 is: a still-recording trace has no `meta.dat` yet, and
-        // that reads as the bare layout, which is what it is.
-        let has_line_counts = match reader.read_file("meta.dat") {
-            Ok(meta) => meta_dat_has_line_count_table(&meta),
-            Err(_) => false,
-        };
+        // 12's `funcs.dat`/`types.dat` selector. A still-recording trace with
+        // no `meta.dat` yet reads as the bare layout, which is what it is.
+        let has_line_counts = meta.as_deref().is_some_and(meta_dat_has_line_count_table);
         // Bit 4 frames `paths.dat` too. A column-aware trace writes Layout A —
         // `path_len, path, line_count, line_lengths…` — for EVERY path,
         // including one whose recorder surfaced no per-line counts, where the
         // record is still framed and simply states `line_count = 0`. Reading
         // that as a bare record hands the caller its own length prefix and a
         // trailing NUL as part of the file name.
-        let column_aware = match reader.read_file("meta.dat") {
-            Ok(meta) => meta_dat_has_column_aware_steps(&meta),
-            Err(_) => false,
-        };
-        // `paths.dat` is written first and unconditionally by both writers, so
-        // its presence is the container's own answer to "do I carry interning
-        // tables". Absent ⇒ no binary tables (legacy path).
+        let column_aware = meta.as_deref().is_some_and(meta_dat_has_column_aware_steps);
+        // The four tables are carried all four or none (`internal-files.md`
+        // §"Interning Tables"); a container with some but not all of them is
+        // refused, in the words every reader of the format uses.
+        if let Some(refusal) = codetracer_ctfs::interning_set::interning_set_refusal(|name| reader.file_size(name).is_some()) {
+            return Err(refusal);
+        }
+        // With the set whole or empty, `paths.dat` answers "do I carry
+        // interning tables". Absent ⇒ no binary tables (legacy path).
         if reader.file_size("paths.dat").is_none() {
             return Ok(None);
         }
-        // Read each table; a missing data file once `paths.dat` exists is an
-        // error (the writer always emits all four together).
         let paths = Self::load_table(reader, "paths")?;
         let funcs = Self::load_table(reader, "funcs")?;
         let types = Self::load_table(reader, "types")?;
@@ -382,7 +394,7 @@ impl InterningTablesReader {
         let line_counts = if has_line_counts {
             let mut counts = Vec::with_capacity(paths.count());
             for id in 0..paths.count() {
-                counts.push(decode_line_count_path_record(paths.record(id)?, id)?.1);
+                counts.push(decode_line_count_path_record(&paths.record(id)?, id)?.1);
             }
             counts
         } else {
@@ -401,12 +413,12 @@ impl InterningTablesReader {
 
     fn load_table(reader: &mut CtfsReader, name: &str) -> Result<VarSizeTable, String> {
         let dat = reader
-            .read_file(&format!("{name}.dat"))
+            .read_member(&format!("{name}.dat"))
             .map_err(|e| format!("{name}.dat missing despite paths.dat presence: {e}"))?;
         let off = reader
-            .read_file(&format!("{name}.off"))
+            .read_member(&format!("{name}.off"))
             .map_err(|e| format!("{name}.off missing despite paths.dat presence: {e}"))?;
-        VarSizeTable::new(name, dat, &off)
+        VarSizeTable::new(name, dat, off)
     }
 
     /// Number of interned source paths.
@@ -435,14 +447,14 @@ impl InterningTablesReader {
         if self.column_aware {
             // Layout A: the path is the framed payload, and the rest of the
             // record is its per-line table. Bit 4 permits a zero count.
-            return Ok(decode_layout_a_path_record(raw, path_id as usize)?.to_vec());
+            return Ok(decode_layout_a_path_record(&raw, path_id as usize)?.to_vec());
         }
         if self.line_counts.is_empty() {
-            return Ok(raw.to_vec());
+            return Ok(raw.into_owned());
         }
         // The bit-14 line-count record: Layout A's framing without its per-line
         // table. `open` already decoded every one of these whole.
-        Ok(decode_framed_path_record(raw, path_id as usize)?.0.to_vec())
+        Ok(decode_framed_path_record(&raw, path_id as usize)?.0.to_vec())
     }
 
     /// Whether `paths.dat` records are Layout A (`meta.dat` bit 4).
@@ -450,22 +462,83 @@ impl InterningTablesReader {
         self.column_aware
     }
 
-    /// A Layout A record's per-line addressable column counts; empty for a
-    /// file whose recorder supplied none, and for every record of a trace
-    /// that is not column-aware.
+    /// A Layout A record's per-line addressable column counts, spelled out;
+    /// empty for every record of a trace that is not column-aware.
+    ///
+    /// A `line_count = 0` record is the conventional table and is returned as
+    /// its 100000 entries of 1024 (`internal-files.md` §"`paths.dat` Layout
+    /// A"). A caller that lays out or resolves positions takes
+    /// [`Self::path_file_table`] instead, which says which it is and keeps the
+    /// conventional table as its rule.
     pub fn path_line_lengths(&self, path_id: u64) -> Result<Vec<u32>, String> {
+        Ok(match self.path_file_table(path_id)? {
+            None => Vec::new(),
+            Some(FileTable::Conventional) => codetracer_trace_writer::column_aware::conventional_line_lengths(),
+            Some(FileTable::Lines(lls)) => lls,
+        })
+    }
+
+    /// A Layout A record's table: [`FileTable::Conventional`] for a record of
+    /// `line_count = 0`, [`FileTable::Lines`] otherwise; `None` when the trace
+    /// is not column-aware, whose records carry no table.
+    pub fn path_file_table(&self, path_id: u64) -> Result<Option<FileTable>, String> {
         if !self.column_aware {
-            return Ok(Vec::new());
+            return Ok(None);
         }
         let raw = self.paths.record(path_id as usize)?;
-        decode_layout_a_path_record(raw, path_id as usize)?;
-        let (_, lls) = codetracer_trace_writer::column_aware::decode_path_record_layout_a(raw)?;
-        Ok(lls)
+        decode_layout_a_path_record(&raw, path_id as usize)?;
+        let (_, lls) = codetracer_trace_writer::column_aware::decode_path_record_layout_a(&raw)?;
+        Ok(Some(FileTable::from_record(lls)))
     }
 
     /// Resolve a path id to its file path as a `String` (lossy UTF-8).
     pub fn path_str(&self, path_id: u64) -> Result<String, String> {
         Ok(String::from_utf8_lossy(&self.path(path_id)?).into_owned())
+    }
+
+    /// Every `paths.dat` entry's version, in path-id order.
+    ///
+    /// A source reload appends a SECOND record for the same path string
+    /// (`internal-files.md` §"`paths.dat` path versions"), so a string can
+    /// name several path ids. Entry `id`'s
+    /// [`ordinal`](PathVersion::ordinal) is how many earlier ids carry its
+    /// string — 0 for the first, 1 for the second — and
+    /// [`count`](PathVersion::count) is how many ids carry it in all. Every
+    /// entry of a trace without reloads is `{ ordinal: 0, count: 1 }`.
+    ///
+    /// The ordinal is not a reload count: a reload of a file that never runs
+    /// again mints no entry, and a reload marker's `generation` starts at 2.
+    /// Same answers as the Nim reader's `pathVersionOrdinal` /
+    /// `pathVersionCount`. Linear in the number of paths; it reads every
+    /// path, so it is computed on request rather than at open.
+    pub fn path_versions(&self) -> Result<Vec<PathVersion>, String> {
+        let total = self.path_count();
+        let mut payloads: Vec<Vec<u8>> = Vec::with_capacity(total);
+        let mut seen: std::collections::HashMap<Vec<u8>, u64> = std::collections::HashMap::with_capacity(total);
+        let mut out = Vec::with_capacity(total);
+        for id in 0..total {
+            let p = self.path(id as u64).map_err(|e| format!("paths.dat[{id}]: {e}"))?;
+            let n = seen.entry(p.clone()).or_insert(0);
+            out.push(PathVersion { ordinal: *n, count: 0 });
+            *n += 1;
+            payloads.push(p);
+        }
+        for (v, p) in out.iter_mut().zip(&payloads) {
+            v.count = seen[p];
+        }
+        Ok(out)
+    }
+
+    /// Every path id whose `paths.dat` string is `path`, in path-id order —
+    /// index 0 is the earliest version. Empty when no entry carries it.
+    pub fn path_ids_for(&self, path: &[u8]) -> Result<Vec<u64>, String> {
+        let mut ids = Vec::new();
+        for id in 0..self.path_count() as u64 {
+            if self.path(id)? == path {
+                ids.push(id);
+            }
+        }
+        Ok(ids)
     }
 
     /// The line count this container RECORDS for `path_id`, or `None` when it
@@ -491,14 +564,14 @@ impl InterningTablesReader {
     /// name — see [`Self::bare_record_diagnosis`].
     pub fn func(&self, function_id: u64) -> Result<FuncRecord, String> {
         let raw = self.funcs.record(function_id as usize)?;
-        decode_func_record(raw).map_err(|e| self.bare_record_diagnosis("funcs.dat", function_id, e))
+        decode_func_record(&raw).map_err(|e| self.bare_record_diagnosis("funcs.dat", function_id, e))
     }
 
     /// Resolve a type id to its decoded record (kind / lang_type /
     /// specific_info). Refused by name like [`Self::func`].
     pub fn type_record(&self, type_id: u64) -> Result<DecodedTypeRecord, String> {
         let raw = self.types.record(type_id as usize)?;
-        decode_type_record(raw).map_err(|e| self.bare_record_diagnosis("types.dat", type_id, e))
+        decode_type_record(&raw).map_err(|e| self.bare_record_diagnosis("types.dat", type_id, e))
     }
 
     /// The refusal for a `funcs.dat` / `types.dat` record that does not decode
@@ -527,12 +600,12 @@ impl InterningTablesReader {
 
     /// Resolve a variable-name id to its name (raw bytes; UTF-8 for recorders).
     pub fn varname(&self, name_id: u64) -> Result<Vec<u8>, String> {
-        Ok(self.varnames.record(name_id as usize)?.to_vec())
+        Ok(self.varnames.record(name_id as usize)?.into_owned())
     }
 
     /// Resolve a variable-name id to its name as a `String` (lossy UTF-8).
     pub fn varname_str(&self, name_id: u64) -> Result<String, String> {
-        Ok(String::from_utf8_lossy(self.varnames.record(name_id as usize)?).into_owned())
+        Ok(String::from_utf8_lossy(&self.varnames.record(name_id as usize)?).into_owned())
     }
 }
 

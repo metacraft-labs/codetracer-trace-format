@@ -312,6 +312,7 @@ checksum = "c8d4a3bb8b1e0c1050499d1815f5ab16d04f0959b233085fb31653fbfc9d98f9"
 name = "codetracer_ctfs"
 version = "0.1.0"
 dependencies = [
+ "getrandom 0.2.17",
  "ruzstd",
  "serde",
  "serde_json",
@@ -381,10 +382,12 @@ dependencies = [
  "codetracer_trace_types",
  "codetracer_trace_writer",
  "fscommon",
+ "libc",
  "num-traits",
  "ruzstd",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "uuid",
  "zeekstd",
@@ -435,6 +438,7 @@ dependencies = [
  "ruzstd",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "zeekstd",
  "zstd",
@@ -445,10 +449,15 @@ name = "codetracer_trace_writer_ffi"
 version = "0.1.0"
 dependencies = [
  "cbindgen",
+ "cbor4ii",
+ "cc",
+ "codetracer_ctfs",
+ "codetracer_trace_reader",
  "codetracer_trace_types",
  "codetracer_trace_writer",
  "num-traits",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]

@@ -40,15 +40,7 @@ const BARE_TYPE: &str = "PackedStringArrayWithALongEnoughNameToOverrunTheRecord"
 fn bare_name_container(dir: &std::path::Path) -> std::path::PathBuf {
     let ct = dir.join("bare.ct");
     let mut w = CtfsWriter::create(&ct, 4096, 31).unwrap();
-    let meta = encode_meta_dat(
-        "01949fcc-7d92-7e9c-aaaa-bbbbbbbbbbbb",
-        "bare",
-        &[],
-        "",
-        "",
-        &["/src/game.gd".to_string()],
-        0,
-    );
+    let meta = encode_meta_dat("01949fcc-7d92-7e9c-aaaa-bbbbbbbbbbbb", "bare", &[], "", "", 0);
     let h = w.add_file("meta.dat").unwrap();
     w.write(h, &meta).unwrap();
     let mut structured_fn = Vec::new();

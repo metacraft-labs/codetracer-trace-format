@@ -1,2 +1,8 @@
 # Cross-repo siblings cloned by setup-dev-env at workspace-lock-pinned
 # revisions (see codetracer-specs/Testing/Cross-Repo-CI-Integration.md).
+codetracer-trace-format-nim
+codetracer
+codetracer-native-recorder
+codetracer-python-recorder
+codetracer-ruby-recorder
+codetracer-js-recorder

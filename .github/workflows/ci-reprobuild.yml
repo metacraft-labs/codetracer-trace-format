@@ -20,6 +20,14 @@ on:
   pull_request:
     branches: [main, dev, stable]
 
+# Cancel superseded PR runs only: a new push to a PR makes its previous run
+# moot, and stale runs otherwise hold scarce self-hosted runners. Every other
+# event (mainline push, merge_group, tag, dispatch, schedule) gets a group
+# unique to its run_id, so it is never cancelled and never cancels anything.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   reprobuild:
     name: ${{ matrix.os }}-${{ matrix.arch }} — repro build/test
@@ -29,7 +37,7 @@ jobs:
         include:
           - os: linux
             arch: x64
-            runner: eph-linux-x64
+            runner: [self-hosted, linux, x64, ephemeral, incus]
           - os: linux
             arch: arm64
             runner: eph-linux-arm64
@@ -63,25 +71,95 @@ jobs:
           private-key: ${{ secrets.CI_TOKEN_PROVIDER_PRIVATE_KEY }}
           owner: metacraft-labs
 
+      - name: Install Nix for the declared platform shell
+        if: runner.os != 'Windows'
+        uses: metacraft-labs/metacraft-github-actions/setup-nix@dev
+        with:
+          gh-token: ${{ steps.ci_token.outputs.token }}
+
+      - name: Expose the declared non-SIP shell
+        if: runner.os != 'Windows'
+        run: |
+          # Expand variables in the selected child shell, never the parent.
+          # shellcheck disable=SC2016
+          nix develop --command bash -c '
+            shell_path="$(command -v bash)"
+            case "$shell_path" in
+              /nix/store/*/bin/bash) dirname "$shell_path" >> "$GITHUB_PATH" ;;
+              *) echo "Expected declared Nix bash, got $shell_path" >&2; exit 1 ;;
+            esac
+          '
+
+      - name: Capture public SDK build resource baseline
+        # Optional public diagnostics never replace or gate the original SDK build.
+        continue-on-error: true
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          python_package="$(nix build --no-link --no-write-lock-file --print-out-paths .#ci-cross-reader-python)"
+          [[ "$python_package" =~ ^/nix/store/[a-z0-9]{32}-python3-[^[:space:]]+$ ]]
+          test "$(nix path-info --derivation "$python_package")" = "$(nix eval --raw .#ci-cross-reader-python.drvPath)"
+          printf 'TRACE_RESOURCE_PYTHON=%s/bin/python3\n' "$python_package" >> "$GITHUB_ENV"
+          "$python_package/bin/python3" ci/capture-sdk-resource-counters.py before --directory "$RUNNER_TEMP/trace-sdk-resources"
+
       - name: Setup dev env (reprobuild flavor)
         # setup-dev-env clones the siblings listed in .github/sibling-repos
-        # (codetracer-trace-format, codetracer-trace-format-nim) at the
+        # (the six recorded integration/FFI/storage dependencies) at the
         # workspace-lock-pinned revisions before materialising the env.
         uses: metacraft-labs/metacraft-github-actions/setup-dev-env@dev
         with:
           env-flavor: reprobuild
+          repro-from-source: ${{ runner.os != 'Windows' && 'true' || 'false' }}
+          # Windows installs the published release of the same revision the
+          # other platforms build from source (v0.2.23 is 9dbf4e71).
+          repro-version: v0.2.23
+          repro-build-pin: "9dbf4e710d7cc0b9a79a4bcd54c931afb6849dd0"
           gh-token: ${{ steps.ci_token.outputs.token }}
+          # The source build of repro can outlast the hour the minted token
+          # lives; the broker re-mints the Nix credential before it expires.
+          app-id: ${{ secrets.CI_TOKEN_PROVIDER_APP_ID }}
+          app-private-key: ${{ secrets.CI_TOKEN_PROVIDER_PRIVATE_KEY }}
+
+      - name: Capture public SDK build resource outcome
+        continue-on-error: true
+        if: always() && runner.os == 'Linux'
+        shell: bash
+        run: |
+          if test -n "${TRACE_RESOURCE_PYTHON:-}" && test -f "$RUNNER_TEMP/trace-sdk-resources/before.json"; then
+            "$TRACE_RESOURCE_PYTHON" ci/capture-sdk-resource-counters.py after --directory "$RUNNER_TEMP/trace-sdk-resources"
+          else
+            echo 'SDK resource baseline unavailable; termination cause remains unassigned'
+          fi
+
+      - name: Report measured Repro source identity
+        if: runner.os != 'Windows'
+        run: |
+          pwd
+          git rev-parse HEAD
+          engine_source="$(git -C .reprobuild-src rev-parse HEAD)"
+          echo "Repro source: $engine_source"
+          test "$engine_source" = 9dbf4e710d7cc0b9a79a4bcd54c931afb6849dd0
+          test -z "$(git -C .reprobuild-src status --porcelain)"
+          test "$(command -v repro)" = "$GITHUB_WORKSPACE/.reprobuild-src/build/bin/repro"
+          command -v repro
+          repro --version
 
       - name: repro build
         # Builds the conventional `build` collection declared in
         # `repro.nim`. Verifies the primary shipping artefact (the
         # recorder binary or extension) materialises through the
         # reprobuild engine identically to `just build`.
-        run: dev-exec repro build
+        run: dev-exec repro build ${{ runner.os != 'Windows' && '--tool-provisioning=nix' || '' }}
 
       - name: repro test
-        # Materialises the `test` collection.
-        run: dev-exec repro test
+        # Materialises the `test` collection. The entry-runtime constructor asks
+        # the GitHub API for the official Nim releases, as in rust.yml; the
+        # unauthenticated quota is shared by every job behind the runner's address.
+        # The workflow token lasts the whole job; the minted one may have expired.
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: dev-exec repro test ${{ runner.os != 'Windows' && '--tool-provisioning=nix' || '' }}
 
       - name: just build (cross-check)
         # Re-runs the legacy `just build` path inside the same env so
@@ -89,8 +167,39 @@ jobs:
         # and what the dev shell + Justfile produce today.
         run: dev-exec just build
 
+      - name: Prepare the declared coupled Unix runtime
+        # `just test` reads the coupled entry runtime from
+        # ENTRY_NIM_RUNTIME_AUTHORITY and ENTRY_NIM_ENVIRONMENT_ROOT. It does not
+        # look for the runtime itself, and an unset authority is refused. This is
+        # the step rust.yml runs before `just test`. The script runs the same
+        # constructor as the `entry-runtime` edge, on the same output root. It
+        # reuses the runtime `repro test` built after checking the recorded
+        # ownership, then exports the two variables and puts the runtime's
+        # selected direnv role on PATH. A fresh construction asks the GitHub API
+        # for the official Nim releases, so it gets the workflow token, as in
+        # the `repro test` step.
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: bash ci/acquire-entry-runtime.sh
+
       - name: just test (cross-check)
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: dev-exec just test
+
+      - name: Report public runtime constructor failure
+        # Diagnostics preserve the original failed action and never expose raw receipts.
+        if: failure() && runner.os == 'Linux'
+        continue-on-error: true
+        shell: bash
+        run: |
+          if test -n "${TRACE_RESOURCE_PYTHON:-}"; then
+            "$TRACE_RESOURCE_PYTHON" ci/report-runtime-constructor-failure.py "$GITHUB_WORKSPACE/.repro/build/entry-runtime"
+          else
+            echo 'Declared diagnostic Python unavailable; inner cause remains unassigned'
+          fi
 
       # Diagnostics on failure. Three things below are load-bearing:
       #

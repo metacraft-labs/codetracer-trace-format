@@ -20,37 +20,27 @@
 //! and `flush_data_block` reuses that pending block when the buffer later fills
 //! (`writer.rs`, `pending_block`). The concurrent writer had no equivalent.
 //!
-//! # Why the assertions are cross-implementation
+//! # Where the cross-implementation half is
 //!
 //! This is a *writer* defect, so a round trip through one reader could only
 //! ever prove the two halves of one crate agree with each other. §5d of
 //! `CTFS-Binary-Format.md` makes agreement between implementations the
 //! acceptance criterion. The container written here is therefore read back by
-//! both of this crate's readers *and* handed to the adjudicating Nim reader
-//! (`codetracer-trace-format-nim/tests/check_ctfs_container.nim`), the same
-//! helper `ctfs_crossread.rs` and the wasm recorder's Go tests already drive.
+//! both of this crate's readers here, and the same container is handed to the
+//! Nim reader by codetracer-trace-format-conformance's
+//! `concurrent_writer_flush_crossread`, which runs against every change to
+//! either implementation.
 //!
 //! # NO MOCKS
 //!
 //! Real containers written by the production `ConcurrentCtfsWriter` onto a real
-//! filesystem, read by the real production readers of both implementations.
-//!
-//! # Skip discipline
-//!
-//! The Rust half always runs. The Nim half runs whenever the sibling checkout
-//! is present; when it is absent it says so out loud. A checkout that is
-//! present but whose checker cannot be built is a failure, not a skip. The
-//! plumbing for it lives in `tests/nim_adjudicator/mod.rs`, shared with
-//! `writer_null_data_block.rs` so there is one copy of it rather than two.
+//! filesystem, read by this crate's real production readers.
 
 use std::path::Path;
 use std::sync::Arc;
 
 use codetracer_ctfs::{ConcurrentCtfsReader, ConcurrentCtfsWriter, CtfsReader};
 use tempfile::TempDir;
-
-mod nim_adjudicator;
-use nim_adjudicator::{nim_checker, run_nim_checker};
 
 const BS: usize = 4096;
 const MAX_ROOT_ENTRIES: u32 = 16;
@@ -241,26 +231,3 @@ fn a_reader_sees_the_flushed_prefix_byte_exact_while_the_writer_continues() {
 // ---------------------------------------------------------------------------
 // The cross-implementation half.
 // ---------------------------------------------------------------------------
-
-/// The independent Nim reader must read back exactly what the concurrent
-/// writer was told to write, across a flush at an unaligned offset.
-#[test]
-fn the_nim_reader_agrees_with_what_the_concurrent_writer_was_told_to_write() {
-    if nim_checker().is_none() {
-        return;
-    }
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("crossread-flush.ct");
-
-    let head = deterministic_bytes(51, 100);
-    let tail = deterministic_bytes(52, BS * 3 + 55);
-    let expected = write_with_flush_after_each_chunk(&path, "stream.dat", &[&head, &tail]);
-
-    let (out, ok) = run_nim_checker(dir.path(), &path, &[("stream.dat", &expected)], &["absent.dat"]);
-    assert!(
-        ok,
-        "the independent Nim reader does not agree with what the concurrent writer was told to \
-         write, so the container this crate produced is wrong rather than merely read back \
-         consistently:\n{out}"
-    );
-}

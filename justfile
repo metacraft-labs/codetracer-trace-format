@@ -1,6 +1,8 @@
-# Run all tests
+# Run all tests. The tests that compare this implementation with the Nim one
+# (and the genuine-producer entry gate) are in
+# codetracer-trace-format-conformance.
 test:
-  python3 tests/run_entry_coupled.py --nim-environment-root "${ENTRY_NIM_ENVIRONMENT_ROOT:-../codetracer-trace-format-nim}" --direnv "$(command -v direnv)" --unix-runtime-authority "${ENTRY_NIM_RUNTIME_AUTHORITY:-}"
+  cargo test --verbose
   bash codetracer_trace_writer_nim/tests/nimcache_environment.sh
   python3 -B tests/test_override_plugin_pin.py
 

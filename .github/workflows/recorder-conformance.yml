@@ -1,0 +1,121 @@
+name: Recorder conformance
+
+# Runs each recorder's own trace-storage conformance test against THIS
+# commit's `codetracer_ctfs`, so a change to the shared contract (a token
+# added to `codetracer_ctfs/src/recorder_conformance_tokens.txt`, or a change
+# to the scanner in `recorder_conformance.rs`) is held against the recorders
+# before it lands, not when a recorder's CI next happens to run.
+#
+# The checks themselves live in the recorders (the dependency points from a
+# recorder to this repo, never the other way); this workflow only runs those
+# dependents' gates from here, the way `codetracer-integration.yml` runs
+# codetracer's. Each test runs in its recorder's own dev shell, against this
+# checkout placed where the recorder's Cargo path dependencies (or, for the
+# native recorder, its Nim test) look for it.
+#
+# Path-filtered to the contract's sources: the four recorder builds are not
+# free, and nothing else here changes what these tests check.
+
+on:
+  push:
+    branches: [dev, stable]
+    paths:
+      - "codetracer_ctfs/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/recorder-conformance.yml"
+  pull_request:
+    paths:
+      - "codetracer_ctfs/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/recorder-conformance.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Cancel superseded PR runs only: a new push to a PR makes its previous run
+# moot, and stale runs otherwise hold scarce self-hosted runners. Every other
+# event (mainline push, merge_group, tag, dispatch, schedule) gets a group
+# unique to its run_id, so it is never cancelled and never cancels anything.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  recorder-conformance:
+    runs-on: [self-hosted, nixos]
+
+    steps:
+      - name: Generate CI token
+        id: app-token
+        uses: actions/create-github-app-token@v1
+        with:
+          app-id: ${{ secrets.CI_TOKEN_PROVIDER_APP_ID }}
+          private-key: ${{ secrets.CI_TOKEN_PROVIDER_PRIVATE_KEY }}
+          owner: metacraft-labs
+
+      # Checked out in a subdirectory so the copy placed beside the
+      # recorders below is the only `codetracer-trace-format` they can reach.
+      - name: Checkout codetracer-trace-format
+        uses: actions/checkout@v5
+        with:
+          path: codetracer-trace-format
+
+      # The recorders are DEPENDENTS of this repo, not dependencies: a
+      # repro.lock holds only what repro.nim derives, so this repo's lock is
+      # not where their revisions come from. Each is named at its agent
+      # mainline, `agents`, where the changes that move together with this
+      # repo's land. codetracer-trace-format-nim is the Nim library whose
+      # sources this repo's codetracer_trace_writer_nim crate (which the
+      # three Rust recorders path-depend on) compiles in its build script.
+      - name: Setup dev env
+        uses: metacraft-labs/metacraft-github-actions/setup-dev-env@dev
+        with:
+          env-flavor: nix
+          gh-token: ${{ steps.app-token.outputs.token }}
+          substituters: ${{ vars.ATTIC_SUBSTITUTER }}
+          trusted-public-keys: ${{ vars.ATTIC_TRUSTED_PUBLIC_KEY }}
+          siblings: |
+            codetracer-python-recorder=agents
+            codetracer-ruby-recorder=agents
+            codetracer-js-recorder=agents
+            codetracer-native-recorder=agents
+            codetracer-trace-format-nim=agents
+
+      # The siblings live at ${GITHUB_WORKSPACE}/../<name>, and every
+      # recorder reaches this repo at ../codetracer-trace-format from there.
+      - name: Place this commit beside the recorders
+        run: |
+          SIBLINGS="$(cd "${GITHUB_WORKSPACE}/.." && pwd)"
+          echo "SIBLINGS=${SIBLINGS}" >> "$GITHUB_ENV"
+          rm -rf "${SIBLINGS}/codetracer-trace-format"
+          cp -r "${GITHUB_WORKSPACE}/codetracer-trace-format" "${SIBLINGS}/codetracer-trace-format"
+
+      # Each step runs whatever happened to the previous one, so one red
+      # recorder does not hide the others.
+      - name: codetracer-python-recorder
+        if: success() || failure()
+        run: |
+          nix develop "${SIBLINGS}/codetracer-python-recorder" --command bash -c \
+            'cd "${SIBLINGS}/codetracer-python-recorder" && cargo test --manifest-path codetracer-python-recorder/Cargo.toml --no-default-features --test rust storage_contract_conformance'
+
+      - name: codetracer-ruby-recorder
+        if: success() || failure()
+        run: |
+          nix develop "${SIBLINGS}/codetracer-ruby-recorder" --command bash -c \
+            'cd "${SIBLINGS}/codetracer-ruby-recorder" && cargo test --manifest-path gems/codetracer-ruby-recorder/ext/native_tracer/Cargo.toml --test storage_contract_conformance'
+
+      - name: codetracer-js-recorder
+        if: success() || failure()
+        run: |
+          nix develop "${SIBLINGS}/codetracer-js-recorder" --command bash -c \
+            'cd "${SIBLINGS}/codetracer-js-recorder" && cargo test --manifest-path crates/recorder_native/Cargo.toml --test storage_contract_conformance'
+
+      # The Nim test reads the token list from ../codetracer-trace-format.
+      - name: codetracer-native-recorder
+        if: success() || failure()
+        run: |
+          nix develop "${SIBLINGS}/codetracer-native-recorder" --command bash -c \
+            'cd "${SIBLINGS}/codetracer-native-recorder/ct_recorder" && nim c -r --hints:off tests/test_recorder_storage_conformance.nim'

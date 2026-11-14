@@ -6,7 +6,7 @@
 //!
 //! `REFUSED` and `ACCEPTED` are the Nim writer's sets
 //! (`tests/test_member_names_are_encodable.nim`), which
-//! `codetracer_trace_writer_nim/tests/member_names_are_refused_alike.rs`
+//! codetracer-trace-format-conformance's `tests/member_names_are_refused_alike.rs`
 //! drives both writers over. No mocks: the real CTFS writers and readers.
 
 use codetracer_ctfs::compact::{encode_compact_container, WholeFileCompression};

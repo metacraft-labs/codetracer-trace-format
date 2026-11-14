@@ -4,7 +4,8 @@
 //! The ABI is the one `codetracer-trace-format-nim` declares in
 //! `include/codetracer_trace_writer.h`: the same symbols, signatures, return
 //! conventions and observable behaviour, so a host built against that header
-//! links against either library. `tests/c_abi_parity.rs` compiles one C host
+//! links against either library. codetracer-trace-format-conformance's
+//! `c_abi_parity` test compiles one C host
 //! against that header, links it separately against each library, and
 //! compares what the two write and answer.
 //!

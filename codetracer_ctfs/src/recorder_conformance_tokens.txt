@@ -1,0 +1,35 @@
+# Source tokens a recorder must not contain: each one marks a private copy of
+# part of the shared trace-storage contract that `trace_storage` (Rust) and
+# `codetracer_ctfs/trace_storage_config` / `managed_sender` (Nim) implement.
+# A recorder binds the shared config and sender instead of declaring its own.
+#
+# Read by `recorder_conformance` (compiled in with `include_str!`) and, as a
+# file, by the native recorder's Nim conformance test, so the Rust and Nim
+# recorders are held to one list.
+#
+# Format: one entry per line, `<kind> <token>`. The kind is one word; the
+# token is the rest of the line, matched as a plain substring of each source
+# file. Blank lines and lines starting with `#` are ignored.
+#
+# Kinds:
+#   storage-schema  a private storage placement parser or schema type
+#   sender          a private managed sender lifecycle or static API parser
+
+storage-schema struct StorageServer
+storage-schema struct StoragePool
+storage-schema struct CtfsShardPolicy
+storage-schema struct ShardPlacement
+storage-schema type StorageServer
+storage-schema type StoragePool
+storage-schema type CtfsShardPolicy
+storage-schema type ShardPlacement
+storage-schema class StorageServer
+storage-schema interface StorageServer
+
+sender struct ManagedTraceSender
+sender class ManagedTraceSender
+sender type ManagedTraceSender
+sender trait SharedSenderBackend
+sender interface SharedSenderBackend
+sender requestSliceUploadUrl(
+sender finalizeUploadSession(

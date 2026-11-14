@@ -38,11 +38,6 @@ ruzstd = "0.8.1"
 workspace = true
 
 [dev-dependencies]
-# The shared Nim adjudicator test module (codetracer_ctfs/tests/nim_adjudicator)
-# hashes the declared runtime images it is handed.
-sha2 = "0.10"
-# Portable held Unix fixture authority, resolved by normal Cargo lock tooling.
-libc = "0.2"
 tempfile = "3"
 # M-REC-1: parse and validate UUIDv7 recording_id in integration tests.
 uuid = { version = "1.10", features = ["v7"] }

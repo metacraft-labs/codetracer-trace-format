@@ -11,14 +11,3 @@ when defined(linux) or defined(macosx):
     # actual source sibling through its unchanged build.rs and declared tools.
     nixPackage "traceWriterFfi", expressionFile = "ci/locked-nim-library-profile.nix",
       executablePath = "lib/libcodetracer_trace_writer.a", lockIdentity = profileIdentity
-
-const direnvBytes = staticRead("ci/cross-reader-profiles.nix") & "\0" &
-  staticRead("ci/native-compiler-profiles.nix") & "\0" & staticRead("flake.lock")
-let direnvIdentity = "blake3:" & blake3.toHex(blake3.digest(direnvBytes))
-when defined(linux) or defined(macosx):
-  # SDK766 has no canonical Direnv package module to contribute to.
-  # This owning tool declaration binds the actual unchanged Nix constructor.
-  package direnv:
-    provisioning:
-      nixPackage "nativeDirenv", expressionFile = "ci/native-compiler-profiles.nix",
-        executablePath = "bin/direnv", lockIdentity = direnvIdentity

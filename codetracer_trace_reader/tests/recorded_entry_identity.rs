@@ -1,6 +1,7 @@
 //! Real native writer/container/owned-reader controls. No mocks or path-reopening getter.
-#[path = "common/entry_fixture_capture.rs"]
-mod entry_fixture_capture;
+//!
+//! The same reader over containers the Nim implementation wrote is checked in
+//! codetracer-trace-format-conformance (`recorded_entry_identity_crossread`).
 use codetracer_ctfs::CtfsReader;
 use codetracer_trace_reader::recorded_entry_reader::RecordedEntryReader;
 use codetracer_trace_types::*;
@@ -76,17 +77,4 @@ fn later_empty_root_cannot_take_marked_steps() {
     TraceWriter::register_return(&mut writer, ValueRecord::None { type_id: NONE_TYPE_ID });
     let error = TraceWriter::finish_writing_trace_events(&mut writer).unwrap_err();
     assert!(error.to_string().contains("entry.dat: inconsistent"), "{error}");
-}
-
-#[test]
-fn genuine_nim_images_crossread() {
-    let captured = entry_fixture_capture::capture();
-    let base = captured.path();
-    let mut marked = CtfsReader::open(&Path::new(&base).join("marked.ct")).unwrap();
-    let entry = marked.recorded_entry().unwrap().unwrap();
-    assert_eq!((entry.call_key, entry.function_id, entry.entry_step), (1, 1, 1));
-    assert!(marked.is_owned_image());
-    let mut unmarked = CtfsReader::open(&Path::new(&base).join("unmarked.ct")).unwrap();
-    assert_eq!(unmarked.recorded_entry().unwrap(), None);
-    assert!(!unmarked.is_owned_image());
 }

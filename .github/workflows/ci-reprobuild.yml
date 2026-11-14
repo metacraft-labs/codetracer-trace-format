@@ -105,7 +105,7 @@ jobs:
 
       - name: Setup dev env (reprobuild flavor)
         # setup-dev-env clones the siblings listed in .github/sibling-repos
-        # (the six recorded integration/FFI/storage dependencies) at the
+        # (the Nim implementation, this repo's one sibling dependency) at the
         # workspace-lock-pinned revisions before materialising the env.
         uses: metacraft-labs/metacraft-github-actions/setup-dev-env@dev
         with:
@@ -157,18 +157,6 @@ jobs:
 
       - name: just test (cross-check)
         run: dev-exec just test
-
-      - name: Report public runtime constructor failure
-        # Diagnostics preserve the original failed action and never expose raw receipts.
-        if: failure() && runner.os == 'Linux'
-        continue-on-error: true
-        shell: bash
-        run: |
-          if test -n "${TRACE_RESOURCE_PYTHON:-}"; then
-            "$TRACE_RESOURCE_PYTHON" ci/report-runtime-constructor-failure.py "$GITHUB_WORKSPACE/.repro/build/entry-runtime"
-          else
-            echo 'Declared diagnostic Python unavailable; inner cause remains unassigned'
-          fi
 
       # Diagnostics on failure. Three things below are load-bearing:
       #

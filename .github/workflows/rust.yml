@@ -196,42 +196,15 @@ jobs:
           echo "CODETRACER_NIM_LIB_DIR=${GITHUB_WORKSPACE}/../codetracer-trace-format-nim" >> "$GITHUB_ENV"
           echo "CODETRACER_TRACE_FORMAT_NIM_DIR=${GITHUB_WORKSPACE}/../codetracer-trace-format-nim" >> "$GITHUB_ENV"
 
-      # codetracer_ctfs/tests/trace_storage.rs walks 4 recorder siblings to
-      # enforce the "no private storage parser" contract.  codetracer-native-recorder
-      # is private; clone-repo + CI_TOKEN_PROVIDER_APP_ID handles auth.
-      - name: Clone locked codetracer-python-recorder
-        uses: metacraft-labs/metacraft-github-actions/clone-siblings@dev
-        with:
-          siblings: codetracer-python-recorder
-          gh-token: ${{ steps.app-token.outputs.token }}
-      - name: Clone locked codetracer-ruby-recorder
-        uses: metacraft-labs/metacraft-github-actions/clone-siblings@dev
-        with:
-          siblings: codetracer-ruby-recorder
-          gh-token: ${{ steps.app-token.outputs.token }}
-      - name: Clone locked codetracer-js-recorder
-        uses: metacraft-labs/metacraft-github-actions/clone-siblings@dev
-        with:
-          siblings: codetracer-js-recorder
-          gh-token: ${{ steps.app-token.outputs.token }}
-      - name: Clone locked codetracer-native-recorder
-        uses: metacraft-labs/metacraft-github-actions/clone-siblings@dev
-        with:
-          siblings: codetracer-native-recorder
-          gh-token: ${{ steps.app-token.outputs.token }}
-
       - name: Bind the complete locked Rust profile
         shell: bash
         run: bash ci/acquire-rust-profile.sh
 
       - name: Build
         run: just build
-      - name: Prepare the declared coupled Unix runtime
-        shell: bash
-        env:
-          GITHUB_TOKEN: ${{ steps.app-token.outputs.token }}
-        run: bash ci/acquire-entry-runtime.sh
-
+      # The genuine-producer entry gate, which compares this implementation's
+      # reader with the Nim producer's images, runs in
+      # codetracer-trace-format-conformance (conformance.yml here calls it).
       - name: Run tests
         run: just test
 

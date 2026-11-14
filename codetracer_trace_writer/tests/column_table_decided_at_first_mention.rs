@@ -22,7 +22,7 @@
 //!   encoding, and held by the writer as a rule rather than an array.
 //!
 //! The Nim writer applies the same rules to the byte; that is asserted in
-//! `codetracer_trace_writer_nim/tests/column_table_cross_writer.rs`.
+//! codetracer-trace-format-conformance's `tests/column_table_cross_writer.rs`.
 //!
 //! No mocks: every container is written to memory by the real writer.
 

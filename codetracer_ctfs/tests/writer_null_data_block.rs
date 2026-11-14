@@ -96,6 +96,14 @@
 //! pointers during allocation", because both implementations of the walk had
 //! the same hole and the spec did not say which reading was right.
 //!
+//! # The other implementation
+//!
+//! The bytes a successful reopened append across the level-1/level-2 boundary
+//! leaves behind are a claim about the format, so they are also read by the Nim
+//! reader: codetracer-trace-format-conformance's
+//! `writer_null_data_block_crossread`, which runs against every change to
+//! either implementation.
+//!
 //! # NO MOCKS
 //!
 //! Every case writes a real container with the production `CtfsWriter` onto a
@@ -109,9 +117,6 @@ use std::path::Path;
 
 use codetracer_ctfs::{CtfsError, CtfsReader, CtfsWriter};
 use tempfile::TempDir;
-
-mod nim_adjudicator;
-use nim_adjudicator::{nim_checker, run_nim_checker};
 
 const BS: usize = 4096;
 const MAX_ROOT_ENTRIES: u32 = 16;
@@ -588,49 +593,4 @@ fn a_reopened_append_may_still_create_the_level_2_chain_it_needs() {
     let mut r = CtfsReader::open(&path).unwrap();
     assert_eq!(r.read_file("big.dat").unwrap(), expected, "the extended stream is wrong");
     assert_eq!(r.read_file("meta.dat").unwrap(), meta);
-}
-
-/// The cross-implementation half, and the reason it is on the *control* rather
-/// than on a refusal: a refusal is a fact about one writer, whereas the bytes a
-/// successful reopened append leaves behind are a claim about the **format**,
-/// and §5d makes agreement between implementations the acceptance criterion for
-/// that.
-///
-/// The fixture is deliberately not a pure function of its inputs. The container
-/// is written, sealed, closed, reopened from disk — recovering `NextFreeBlock`
-/// from the file length rather than from any in-memory state — and only then
-/// extended across the level-1/level-2 boundary of §4. Its bytes therefore
-/// depend on the on-disk state carried across the close, which is what makes an
-/// agreement here worth asserting; a fixture built in one pass would be
-/// satisfied by any writer that is merely self-consistent.
-#[test]
-fn the_nim_reader_agrees_with_what_a_reopened_append_wrote_across_a_level_boundary() {
-    if nim_checker().is_none() {
-        return;
-    }
-    let dir = TempDir::new().unwrap();
-    let path = dir.path().join("reopened.ct");
-
-    let meta = deterministic_bytes(21, BS * 2);
-    let head = deterministic_bytes(22, BS * 510);
-    sealed_container(&path, &[("meta.dat", meta.clone()), ("big.dat", head.clone())]);
-
-    // Two separate reopen-append cycles, so the second one inherits a mapping
-    // the first one extended rather than one a single session built.
-    let tail1 = deterministic_bytes(23, BS * 3);
-    reopen_and_append(&path, "big.dat", &tail1).expect("first reopened append refused");
-    let tail2 = deterministic_bytes(24, BS + 77);
-    reopen_and_append(&path, "big.dat", &tail2).expect("second reopened append refused");
-
-    let mut expected = head;
-    expected.extend_from_slice(&tail1);
-    expected.extend_from_slice(&tail2);
-
-    let (out, ok) = run_nim_checker(dir.path(), &path, &[("meta.dat", &meta), ("big.dat", &expected)], &["absent.dat"]);
-    assert!(
-        ok,
-        "the independent Nim reader does not agree with the container two reopened appends left \
-         behind, so this crate's §4 walk across the level-1/level-2 boundary differs from the \
-         other implementation's rather than merely being self-consistent:\n{out}"
-    );
 }

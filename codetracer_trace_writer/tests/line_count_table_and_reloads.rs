@@ -6,7 +6,7 @@
 //! line-count table", §"`paths.dat` path versions", §"Extended flags
 //! (`flags_ext`)"; `trace-events.md` §"Source Reload Marker (Tag
 //! 0x08)". The agreement of these containers with the Nim writer's is asserted
-//! in `codetracer_trace_writer_nim/tests/source_reload_cross_writer.rs`; this
+//! in codetracer-trace-format-conformance's `tests/source_reload_cross_writer.rs`; this
 //! file covers the refusals, which that differential cannot reach.
 //!
 //! No mocks: every container is written to memory by the real writer and read

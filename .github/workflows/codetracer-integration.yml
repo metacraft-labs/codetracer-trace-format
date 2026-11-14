@@ -7,7 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       codetracer_ref:
-        description: 'codetracer git ref to test against (default: from the workspace lock)'
+        description: 'codetracer git ref to test against (default: its agents branch)'
         required: false
         default: ''
 
@@ -52,13 +52,18 @@ jobs:
       # per-sibling clone-repo steps.
       #
       #   * codetracer            — workflow_dispatch `codetracer_ref`
-      #                             override; empty ref (`=`) falls back to
-      #                             the workspace lock, matching the old
-      #                             resolver behaviour.
+      #                             override, else its agent mainline.
       #   * codetracer-native-recorder — required by codetracer's
       #                             db-backend build.rs at a peer location.
       #   * codetracer-trace-format-nim — Nim FFI entry point for
-      #                             codetracer_trace_writer_nim's build.rs.
+      #                             codetracer_trace_writer_nim's build.rs,
+      #                             at the revision this repo's lock pins.
+      #
+      # codetracer and codetracer-native-recorder are DEPENDENTS of this
+      # repo, not dependencies: a repro.lock holds only what repro.nim
+      # derives, so this repo's lock is not where their revisions come from.
+      # Each is named at its agent mainline, `agents`, where the changes that
+      # move together with this repo's land.
       #
       # The action clones siblings adjacent to ${{ github.workspace }}
       # (i.e. at ${GITHUB_WORKSPACE}/../<name>); downstream steps below
@@ -72,8 +77,8 @@ jobs:
           substituters: ${{ vars.ATTIC_SUBSTITUTER }}
           trusted-public-keys: ${{ vars.ATTIC_TRUSTED_PUBLIC_KEY }}
           siblings: |
-            codetracer=${{ github.event.inputs.codetracer_ref }}
-            codetracer-native-recorder
+            codetracer=${{ github.event.inputs.codetracer_ref || 'agents' }}
+            codetracer-native-recorder=agents
             codetracer-trace-format-nim
 
       # The siblings live at ${GITHUB_WORKSPACE}/../<name>. Expose that

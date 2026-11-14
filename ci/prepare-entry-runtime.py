@@ -52,6 +52,47 @@ def namespace(path):
         result[str(item.relative_to(path))] = [value.st_dev, value.st_ino, value.st_mode, value.st_uid, kind, body]
     return result
 
+OWNER_SCHEMA = 'codetracer-trace-format.entry-runtime-owner.v1'
+# The per-member fields namespace() records, in order.
+MEMBER_FIELDS = ['dev', 'ino', 'mode', 'uid', 'kind', 'body']
+# How many differing member paths a refusal names.
+REPORTED_MEMBERS = 5
+
+def correspondence_differences(recorded, current, expected_source):
+    """Name what an existing owner record does not match, so a refusal is
+    diagnosable: the top-level fields, the source files, and the members
+    that are gone, new or changed (with the names of the member fields that
+    changed). Only field names and runtime-relative member paths are reported,
+    never a recorded or observed value. Empty when the record corresponds."""
+    fields = [name for name, expected in [('schema', OWNER_SCHEMA), ('root', str(root)), ('output', str(out))]
+              if recorded.get(name) != expected]
+    result = {}
+    differing_source = sorted(name for name, value in expected_source.items() if recorded['source'].get(name) != value)
+    if differing_source:
+        fields.append('source'); result['source'] = differing_source
+    previous = recorded.get('namespace')
+    if previous != current:
+        fields.append('namespace')
+        if not isinstance(previous, dict):
+            result['namespace'] = 'malformed'
+        else:
+            gone = sorted(set(previous) - set(current))
+            new = sorted(set(current) - set(previous))
+            changed = {}
+            for name in sorted(set(previous) & set(current)):
+                before, after = previous[name], current[name]
+                if before != after:
+                    changed[name] = ([field for field, x, y in zip(MEMBER_FIELDS, before, after) if x != y]
+                                     if isinstance(before, list) and len(before) == len(MEMBER_FIELDS) else ['malformed'])
+            result['namespace'] = {
+                'gone': len(gone), 'new': len(new), 'changed': len(changed),
+                'changedFields': sorted({field for value in changed.values() for field in value}),
+                'firstGone': gone[:REPORTED_MEMBERS], 'firstNew': new[:REPORTED_MEMBERS],
+                'firstChanged': [[name, changed[name]] for name in list(changed)[:REPORTED_MEMBERS]]}
+    if fields:
+        result['fields'] = fields
+    return result
+
 def image(path):
     lexical = path.absolute()
     actual = lexical.resolve(strict=True)
@@ -232,7 +273,9 @@ try:
         if not isinstance(recorded.get('source'), dict) or set(recorded['source']) != expected_names:
             raise RuntimeError('Existing runtime owner source membership differs')
         expected_source = {name: digest(root / name) for name in expected_names}
-        if recorded.get('schema') != 'codetracer-trace-format.entry-runtime-owner.v1' or recorded.get('root') != str(root) or recorded.get('output') != str(out) or recorded.get('namespace') != current or recorded.get('source') != expected_source:
+        differences = correspondence_differences(recorded, current, expected_source)
+        if differences:
+            proof['correspondence'] = differences
             raise RuntimeError('Existing runtime output ownership correspondence refused')
         expected_images = [image(path) for path in [a.git, a.python_profile / 'bin/python3', a.direnv_profile / 'bin/direnv', a.just_profile / 'bin/just', a.nix]]
         if recorded.get('selectedImages') != expected_images:
@@ -367,7 +410,7 @@ finally:
             proof['finalGuards'] = False; proof['guardErrorType'] = type(error).__name__
         proof['finished'] = True; proof['success'] = bool(proof['success'] and proof['finalGuards']); save()
         if proof['success'] and not reused:
-            owner_record = {'schema': 'codetracer-trace-format.entry-runtime-owner.v1', 'root': str(root), 'output': str(out), 'source': source, 'selectedImages': selected_images, 'namespace': namespace(out)}
+            owner_record = {'schema': OWNER_SCHEMA, 'root': str(root), 'output': str(out), 'source': source, 'selectedImages': selected_images, 'namespace': namespace(out)}
             boundary()
             owner_fd = os.open('runtime-owner.json', os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=output_fd)
             with os.fdopen(owner_fd, 'w') as owner_stream:
@@ -386,8 +429,9 @@ if not proof['success'] and receipt_fd is None:
     # No receipt was opened: the refusal came from the reuse checks on an
     # existing output, or from a check that runs before the receipt is created.
     # Report it on stderr, or the caller sees only exit status 1. Only the
-    # constant refusal text and the exception type names are printed.
+    # constant refusal text, the exception type names and, for a correspondence
+    # refusal, the names of the differing fields and member paths are printed.
     print('prepare-entry-runtime: refused: ' + json.dumps({key: proof[key] for key in
-        ['failureType', 'failure', 'guardErrorType', 'publicationErrorType'] if key in proof}),
+        ['failureType', 'failure', 'correspondence', 'guardErrorType', 'publicationErrorType'] if key in proof}),
         file=sys.stderr, flush=True)
 sys.exit(0 if proof['success'] else 1)

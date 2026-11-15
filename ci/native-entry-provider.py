@@ -135,9 +135,18 @@ try:
             raise RuntimeError('Real provider stage failed: ' + name)
 
     inputs = []
+    def download(url, destination):
+        # An explicit User-Agent: nim-lang.org answers urllib's default
+        # ("Python-urllib/3.x") with 403 Forbidden while serving the same URL
+        # to any other client. Every archive is still verified by its pinned
+        # SHA-256 below, so the header changes nothing about what is accepted.
+        request = urllib.request.Request(url, headers={'User-Agent': 'codetracer-trace-format-ci'})
+        with urllib.request.urlopen(request, timeout=300) as response, open(destination, 'wb') as out:
+            shutil.copyfileobj(response, out)
+
     def acquire(name, url, sha):
         archive = root / (name + '.zip')
-        urllib.request.urlretrieve(url, archive)
+        download(url, archive)
         if digest(archive) != sha:
             raise RuntimeError('Declared archive digest mismatch')
         output = root / name
@@ -229,7 +238,7 @@ try:
 
     # Build the same declared Zstd version as the genuine Nim supplier shell.
     zstd_archive = root / "zstd-1.5.7.tar.gz"
-    urllib.request.urlretrieve("https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz", zstd_archive)
+    download("https://github.com/facebook/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz", zstd_archive)
     zstd_sha = "eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3"
     if digest(zstd_archive) != zstd_sha:
         raise RuntimeError("Foreign Zstd source archive")

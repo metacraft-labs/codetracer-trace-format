@@ -217,9 +217,7 @@ fn main() {
     println!("cargo:rerun-if-env-changed=CODETRACER_TRACE_FORMAT_NIM_SKIP_NIMBLE_INSTALL");
     println!("cargo:rerun-if-env-changed=CODETRACER_TRACE_FORMAT_NIM_EXTRA_PATHS");
     println!("cargo:rerun-if-env-changed=ENTRY_NIM_RUNTIME_AUTHORITY");
-    if env::var_os("CODETRACER_TRACE_FORMAT_NIM_SKIP_NIMBLE_INSTALL").is_none()
-        && env::var_os("ENTRY_NIM_RUNTIME_AUTHORITY").is_none()
-    {
+    if env::var_os("CODETRACER_TRACE_FORMAT_NIM_SKIP_NIMBLE_INSTALL").is_none() && env::var_os("ENTRY_NIM_RUNTIME_AUTHORITY").is_none() {
         let nimble_status = Command::new("nimble")
             .arg("install")
             .arg("--depsOnly")

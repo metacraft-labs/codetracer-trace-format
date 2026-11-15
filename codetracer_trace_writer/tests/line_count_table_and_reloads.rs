@@ -159,6 +159,53 @@ fn the_table_refuses_what_it_cannot_represent() {
     col.enable_column_aware_steps();
     assert!(col.enable_line_count_table().is_err(), "bits 4 and 14 are mutually exclusive");
 
+    // And in the other order, where the column-aware opt-in has no Result to
+    // refuse through: the recording fails at finish, naming both opt-ins, and
+    // the container it finalizes declares only the table it was laid out
+    // under (`internal-files.md` §"`paths.dat` line-count table":
+    // "Writers MUST NOT set both"; §"`paths.dat` Layout A": refuse "at the
+    // opt-in, or at close if the opt-in has no way to fail"). Each of the
+    // three calls that turn column awareness on is driven.
+    type ColumnOptIn = fn(&mut CtfsTraceWriter);
+    let opt_ins: [(&str, ColumnOptIn); 3] = [
+        ("enable_column_aware_steps", CtfsTraceWriter::enable_column_aware_steps),
+        ("enable_column_breakpoints_support", CtfsTraceWriter::enable_column_breakpoints_support),
+        ("enable_column_motions_support", CtfsTraceWriter::enable_column_motions_support),
+    ];
+    for (name, opt_in) in opt_ins {
+        let mut w = CtfsTraceWriter::new(name, &[]).with_output(CtfsOutput::Memory);
+        w.enable_line_count_table().expect("table");
+        opt_in(&mut w);
+        TraceWriter::begin_writing_trace_events(&mut w, Path::new(name)).expect("begin");
+        w.register_path_with_line_count(Path::new("/a.py"), 10).expect("a counted path");
+        AbstractTraceWriter::register_step(&mut w, Path::new("/a.py"), Line(2));
+        AbstractTraceWriter::register_step(&mut w, Path::new("/a.py"), Line(3));
+        let err = TraceWriter::finish_writing_trace_events(&mut w)
+            .expect_err("a recording whose two opt-ins select two paths.dat layouts must not finish as a success");
+        let text = err.to_string();
+        assert!(
+            text.contains("enable_line_count_table") && text.contains("enable_column_aware_steps"),
+            "{name}: the refusal names both opt-ins; got: {text}"
+        );
+        let bytes = w.take_container_bytes().expect("the container is still finalized");
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("both.ct");
+        std::fs::write(&p, &bytes).unwrap();
+        let mut r = CtfsReader::open(&p).unwrap();
+        let meta = r.read_file("meta.dat").unwrap();
+        let flags = u16::from_le_bytes([meta[6], meta[7]]);
+        assert_eq!(
+            flags & 0x4010,
+            0x4000,
+            "{name}: bit 14 only, never bits 4 and 14 together; flags 0x{flags:04x}"
+        );
+        assert_eq!(
+            r.read_file("paths.dat").unwrap(),
+            [5, b'/', b'a', b'.', b'p', b'y', 10],
+            "{name}: the path keeps its line count in the bit-14 layout"
+        );
+    }
+
     // A version without the table.
     let mut bare = open("bare");
     assert!(bare.register_path_version(Path::new("/a"), 3).is_err(), "versions require the table");

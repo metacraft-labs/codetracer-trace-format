@@ -436,7 +436,24 @@ pub fn read_meta_dat_flags(data: &[u8]) -> Result<u16, String> {
     // only the u16, so that an unknown EXTENDED bit refuses the container at
     // the same point an unknown u16 bit would.
     read_meta_dat_ext_flags(data)?;
-    Ok(u16::from_le_bytes([data[6], data[7]]))
+    let flags = u16::from_le_bytes([data[6], data[7]]);
+    // Bits 4 and 14 each select a `paths.dat` record layout, and a record is
+    // in one or the other: "Writers MUST NOT set both; readers MUST reject a
+    // header that does" (`internal-files.md` §"`paths.dat` line-count table").
+    // Refused here, where the header is read, so every `meta_dat_has_*`
+    // helper and `decode_meta_dat` inherit it — rather than discovered later
+    // as a malformed `paths.dat` record when a path is first asked for. The
+    // Nim reader's `readMetaDat` refuses the same header.
+    let both = FLAG_HAS_COLUMN_AWARE_STEPS | FLAG_HAS_LINE_COUNT_TABLE;
+    if flags & both == both {
+        return Err(format!(
+            "meta.dat: flags 0x{flags:04x} set both FLAG_HAS_COLUMN_AWARE_STEPS (bit 4) and \
+             FLAG_HAS_LINE_COUNT_TABLE (bit 14). Each selects a paths.dat record layout and a record is in one \
+             or the other, so the two are mutually exclusive. Spec: codetracer-trace-format-spec/internal-files.md \
+             \"`paths.dat` line-count table\""
+        ));
+    }
+    Ok(flags)
 }
 
 /// Convenience: returns whether the `has_call_stream` capability flag (bit 8)
@@ -945,6 +962,37 @@ mod tests {
         let err = read_meta_dat_ext_flags(&buf).expect_err("must refuse an unknown ext bit");
         assert!(err.contains("unknown extended flag bits"), "{err}");
         assert!(decode_meta_dat(&buf).is_err());
+    }
+
+    /// `internal-files.md` §"`paths.dat` line-count table": "Bits 4 and 14
+    /// are mutually exclusive. ... Writers MUST NOT set both; readers MUST
+    /// reject a header that does." The refusal is in the flags read, so every
+    /// `meta_dat_has_*` helper and [`decode_meta_dat`] inherit it.
+    #[test]
+    fn a_header_setting_both_paths_dat_layouts_is_refused_naming_the_bits() {
+        let header = |flags: u16| -> Vec<u8> {
+            let mut h = META_DAT_MAGIC.to_vec();
+            h.extend_from_slice(&META_DAT_VERSION.to_le_bytes());
+            h.extend_from_slice(&flags.to_le_bytes());
+            h.extend_from_slice(&0u32.to_le_bytes());
+            assert_eq!(h.len(), META_DAT_HEADER_SIZE);
+            h
+        };
+        let both = header(FLAG_HAS_COLUMN_AWARE_STEPS | FLAG_HAS_LINE_COUNT_TABLE);
+        let err = read_meta_dat_flags(&both).expect_err("a header declaring both paths.dat layouts must be refused");
+        assert!(err.contains("bit 4") && err.contains("bit 14"), "the refusal names bits 4 and 14: {err}");
+        assert!(!meta_dat_has_column_aware_steps(&both));
+        assert!(!meta_dat_has_line_count_table(&both));
+        // Each bit alone is a valid header.
+        assert_eq!(read_meta_dat_flags(&header(FLAG_HAS_COLUMN_AWARE_STEPS)), Ok(FLAG_HAS_COLUMN_AWARE_STEPS));
+        assert_eq!(read_meta_dat_flags(&header(FLAG_HAS_LINE_COUNT_TABLE)), Ok(FLAG_HAS_LINE_COUNT_TABLE));
+        // The whole-file decoder refuses it too, from any producer.
+        for flags in [FLAG_HAS_COLUMN_AWARE_STEPS, FLAG_HAS_LINE_COUNT_TABLE] {
+            let mut buf = encode_meta_dat(RID, "prog", &[], "/wd", "rec", flags);
+            assert!(decode_meta_dat(&buf).is_ok(), "control 0x{flags:04x}");
+            buf[6..8].copy_from_slice(&(FLAG_HAS_COLUMN_AWARE_STEPS | FLAG_HAS_LINE_COUNT_TABLE).to_le_bytes());
+            assert!(decode_meta_dat(&buf).is_err(), "both bits, starting from 0x{flags:04x}");
+        }
     }
 
     #[test]

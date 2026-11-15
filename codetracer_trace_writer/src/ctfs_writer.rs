@@ -1366,6 +1366,28 @@ impl CtfsTraceWriter {
     ///
     /// Mirrors the Nim writer's `enableColumnAwareSteps`.
     pub fn enable_column_aware_steps(&mut self) {
+        // Bits 4 and 14 each select a `paths.dat` record layout and are
+        // mutually exclusive (`internal-files.md` §"`paths.dat` line-count
+        // table"). `enable_line_count_table` refuses the pair through its
+        // Result; this opt-in has none, so in this order the conflict is
+        // recorded as a refusal and `finish_writing_trace_events` fails with
+        // it ("at the opt-in, or at close if the opt-in has no way to fail",
+        // §"`paths.dat` Layout A"), as the Nim writer's `close` does. The
+        // writer stays line-only, so the container it still finalizes
+        // declares bit 14 alone and keeps every recorded line count, rather
+        // than declaring both layouts. `column_aware_requested` is left
+        // untouched: it gates the line-count registrations this writer must
+        // go on accepting.
+        if self.line_count_table {
+            self.column_awareness_dropped = true;
+            const CONFLICT: &str = "enable_column_aware_steps: this writer called enable_line_count_table, and the \
+                                    two select different paths.dat record layouts (meta.dat bits 4 and 14 are \
+                                    mutually exclusive); the trace was written line-only, under the line-count table";
+            if !self.refusals.iter().any(|r| r == CONFLICT) {
+                self.refusals.push(CONFLICT.to_string());
+            }
+            return;
+        }
         self.column_aware_requested = true;
         if self.column_aware_active {
             return;
@@ -1417,10 +1439,12 @@ impl CtfsTraceWriter {
     /// not produce.
     ///
     /// A caller whose correctness depends on columns should assert this is
-    /// `false` at close. It answers `true` in exactly one reachable situation:
-    /// [`Self::enable_column_aware_steps`] was called after
-    /// `begin_writing_trace_events`, when the mode can no longer be made
-    /// trace-global. It answers `false` both when nobody asked and when the
+    /// `false` at close. It answers `true` in exactly two reachable situations:
+    /// [`Self::enable_column_aware_steps`] was called after the trace's first
+    /// record or path, when the mode can no longer be made trace-global; or it
+    /// was called on a writer that enabled the line-count table, whose layout
+    /// excludes column awareness (that one is also a refusal, failing
+    /// `finish_writing_trace_events`). It answers `false` both when nobody asked and when the
     /// request was honoured, so the signal is only meaningful where columns
     /// were requested — asserting it unconditionally would pass on every
     /// ordinary recording for the wrong reason.

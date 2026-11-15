@@ -106,7 +106,14 @@ try:
             if kind != b"blob":
                 raise RuntimeError("Unsupported supplier Git membership")
             path = directory / os.fsdecode(name)
-            blob = subprocess.check_output([git, "-C", str(directory), "cat-file", "blob", oid.decode()])
+            # The working tree holds the blob as Git checks it out, not as it
+            # is stored: on Windows `core.autocrlf=true` (Git for Windows'
+            # default) writes CRLF line endings. `--filters` applies exactly
+            # that checkout conversion for this path, so any byte that Git
+            # would not have written is still refused.
+            # https://git-scm.com/docs/git-cat-file#Documentation/git-cat-file.txt---filters
+            blob = subprocess.check_output([git, "-C", str(directory), "cat-file", "--filters",
+                                            revision + ":" + os.fsdecode(name)])
             body = os.fsencode(os.readlink(path)) if path.is_symlink() else path.read_bytes()
             if body != blob:
                 raise RuntimeError("Supplier physical source differs from declared Git body")

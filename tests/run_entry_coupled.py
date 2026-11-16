@@ -165,7 +165,11 @@ try:
                 if kind != b'blob': raise RuntimeError('Unknown supplier Git source kind')
                 path = environment / os.fsdecode(name)
                 body = os.fsencode(os.readlink(path)) if path.is_symlink() else path.read_bytes()
-                blob = subprocess.check_output(['git', '-C', str(environment), 'cat-file', 'blob', oid.decode()])
+                # Compare with the blob as Git checks it out for this path, not
+                # as stored: on Windows core.autocrlf=true writes CRLF line
+                # endings (ci/native-entry-provider.py does the same).
+                blob = subprocess.check_output(['git', '-C', str(environment), 'cat-file', '--filters',
+                                                head + ':' + os.fsdecode(name)])
                 if body != blob: raise RuntimeError('Changed actual supplier source body')
                 rows.append([os.fsdecode(name), mode.decode(), hashlib.sha256(body).hexdigest()])
             if subprocess.check_output(['git', '-C', str(environment), 'status', '--porcelain']):

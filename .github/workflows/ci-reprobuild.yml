@@ -28,6 +28,14 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Bound cargo's parallelism. The self-hosted runners cap a job's memory (24 GiB
+# on gpu-server-002), and an unbounded cargo, one rustc/link per core, exceeded
+# it while linking the test binaries: the kernel OOM-killed the job once and
+# `ld` died of SIGSEGV twice. The fleet's guidance for that cap is fewer
+# parallel builds.
+env:
+  CARGO_BUILD_JOBS: "4"
+
 jobs:
   reprobuild:
     name: ${{ matrix.os }}-${{ matrix.arch }} — repro build/test

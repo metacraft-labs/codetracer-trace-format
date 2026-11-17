@@ -120,9 +120,9 @@ jobs:
           env-flavor: reprobuild
           repro-from-source: ${{ runner.os != 'Windows' && 'true' || 'false' }}
           # Windows installs the published release of the same revision the
-          # other platforms build from source (v0.2.23 is 9dbf4e71).
-          repro-version: v0.2.23
-          repro-build-pin: "9dbf4e710d7cc0b9a79a4bcd54c931afb6849dd0"
+          # other platforms build from source (v0.2.26 is b9cf09b07).
+          repro-version: v0.2.26
+          repro-build-pin: "b9cf09b07e2c780f314c4244e4c8df7988fc2e78"
           gh-token: ${{ steps.ci_token.outputs.token }}
           # The source build of repro can outlast the hour the minted token
           # lives; the broker re-mints the Nix credential before it expires.
@@ -147,7 +147,7 @@ jobs:
           git rev-parse HEAD
           engine_source="$(git -C .reprobuild-src rev-parse HEAD)"
           echo "Repro source: $engine_source"
-          test "$engine_source" = 9dbf4e710d7cc0b9a79a4bcd54c931afb6849dd0
+          test "$engine_source" = b9cf09b07e2c780f314c4244e4c8df7988fc2e78
           test -z "$(git -C .reprobuild-src status --porcelain)"
           test "$(command -v repro)" = "$GITHUB_WORKSPACE/.reprobuild-src/build/bin/repro"
           command -v repro

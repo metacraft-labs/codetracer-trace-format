@@ -28,6 +28,14 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
+# Bound cargo's parallelism. The self-hosted runners cap a job's memory (24 GiB
+# on gpu-server-002), and an unbounded cargo, one rustc/link per core, exceeded
+# it while linking the test binaries: the kernel OOM-killed the job once and
+# `ld` died of SIGSEGV twice. The fleet's guidance for that cap is fewer
+# parallel builds.
+env:
+  CARGO_BUILD_JOBS: "4"
+
 jobs:
   reprobuild:
     name: ${{ matrix.os }}-${{ matrix.arch }} — repro build/test
@@ -111,8 +119,15 @@ jobs:
         with:
           env-flavor: reprobuild
           repro-from-source: ${{ runner.os != 'Windows' && 'true' || 'false' }}
-          repro-build-pin: "76659f5730ecf698b1963c656494d2cb66eb256d"
+          # Windows installs the published release of the same revision the
+          # other platforms build from source (v0.2.23 is 9dbf4e71).
+          repro-version: v0.2.23
+          repro-build-pin: "9dbf4e710d7cc0b9a79a4bcd54c931afb6849dd0"
           gh-token: ${{ steps.ci_token.outputs.token }}
+          # The source build of repro can outlast the hour the minted token
+          # lives; the broker re-mints the Nix credential before it expires.
+          app-id: ${{ secrets.CI_TOKEN_PROVIDER_APP_ID }}
+          app-private-key: ${{ secrets.CI_TOKEN_PROVIDER_PRIVATE_KEY }}
 
       - name: Capture public SDK build resource outcome
         continue-on-error: true
@@ -132,7 +147,7 @@ jobs:
           git rev-parse HEAD
           engine_source="$(git -C .reprobuild-src rev-parse HEAD)"
           echo "Repro source: $engine_source"
-          test "$engine_source" = 76659f5730ecf698b1963c656494d2cb66eb256d
+          test "$engine_source" = 9dbf4e710d7cc0b9a79a4bcd54c931afb6849dd0
           test -z "$(git -C .reprobuild-src status --porcelain)"
           test "$(command -v repro)" = "$GITHUB_WORKSPACE/.reprobuild-src/build/bin/repro"
           command -v repro

@@ -174,6 +174,7 @@ impl IoEventRecord {
             return Err("events.dat: truncated record (no kind)".to_string());
         }
         let kind = data[*pos];
+        event_log_kind(kind)?;
         *pos += 1;
         let step_id = decode_varint(data, pos)?;
         let metadata = decode_blob(data, pos)?;
@@ -217,6 +218,11 @@ impl IoEventStreamBuilder {
         }
     }
 
+    /// The index of the most recent exec record, or `None` before the first.
+    pub fn current_step(&self) -> Option<u64> {
+        self.current_step
+    }
+
     /// Account for one exec record written without a `Step` event (a column
     /// step, a source reload marker). Step 0 is the first exec record.
     pub fn note_exec_record(&mut self) {
@@ -247,9 +253,20 @@ impl IoEventStreamBuilder {
         }
     }
 
-    /// Number of I/O event records built so far.
+    /// Append a record built by the caller, with its own step id.
+    pub fn push_record(&mut self, record: IoEventRecord) {
+        self.records.push(record);
+    }
+
+    /// Number of I/O event records built so far and not yet taken.
     pub fn len(&self) -> usize {
         self.records.len()
+    }
+
+    /// Hand out the records built since the last call. Each is final when
+    /// built.
+    pub fn take_records(&mut self) -> Vec<IoEventRecord> {
+        std::mem::take(&mut self.records)
     }
 
     pub fn is_empty(&self) -> bool {
@@ -262,11 +279,19 @@ impl IoEventStreamBuilder {
     }
 }
 
-/// Map an [`EventLogKind`] to its stable on-disk ordinal. The ordinal is the
-/// enum's `repr(u8)` discriminant — the exact value the legacy `events.log`
-/// already carries — so `events.dat` and `events.log` agree on the kind byte.
+/// Map an [`EventLogKind`] to its on-disk ordinal: the enum's `repr(u8)`
+/// discriminant, in declaration order (`trace-events.md` §"EventLogKind (u8
+/// enum)").
 fn event_log_kind_ord(kind: EventLogKind) -> u8 {
     kind as u8
+}
+
+/// The `EventLogKind` an `events.dat` kind byte names, exactly. Values 24-255
+/// are unassigned and refused, naming the value: a reader never substitutes a
+/// kind for one it does not know.
+pub fn event_log_kind(ordinal: u8) -> Result<EventLogKind, String> {
+    EventLogKind::from_ordinal(ordinal)
+        .ok_or_else(|| format!("events.dat: record kind {ordinal} is not an assigned EventLogKind (0-23 are; 24-255 are unassigned)"))
 }
 
 /// The encoded `events.dat` stream plus its companion `events.idx`.
@@ -286,33 +311,20 @@ pub struct EncodedIoEventStream {
 /// `N % chunk_size`-th record without re-deriving sizes (records are variable
 /// length). Each chunk is independently Zstd-compressed.
 pub fn encode_io_event_stream(records: &[IoEventRecord], chunk_size: usize, zstd_level: i32) -> Result<EncodedIoEventStream, String> {
-    let chunk_size = chunk_size.max(1);
-    let mut dat: Vec<u8> = Vec::new();
-    let mut idx: Vec<u8> = Vec::new();
-    idx.extend_from_slice(&(chunk_size as u32).to_le_bytes());
-
-    let mut i = 0usize;
-    while i < records.len() {
-        let end = (i + chunk_size).min(records.len());
-        // Record the byte offset of this chunk within events.dat.
-        idx.extend_from_slice(&(dat.len() as u64).to_le_bytes());
-
-        let mut raw: Vec<u8> = Vec::new();
-        for rec in &records[i..end] {
-            let mut rec_bytes: Vec<u8> = Vec::new();
-            rec.encode(&mut rec_bytes);
-            // Length-prefix each record so the reader can index within a chunk.
-            encode_varint(rec_bytes.len() as u64, &mut raw);
-            raw.extend_from_slice(&rec_bytes);
-        }
-        // One-shot: `io_event_stream.nim` returns "cannot determine decompressed
-        // size for io event chunk" on a streaming frame, and `event_count` reads
-        // back as 0 rather than refusing. See `codetracer_ctfs::zstd_frame`.
-        let compressed = codetracer_ctfs::compress_pledged(&raw, zstd_level, "events.dat")?;
-        dat.extend_from_slice(&compressed);
-        i = end;
+    // A writer stores only an assigned kind (`trace-events.md`
+    // §"EventLogKind (u8 enum)").
+    for rec in records {
+        event_log_kind(rec.kind)?;
     }
-
+    let encoded: Vec<Vec<u8>> = records
+        .iter()
+        .map(|rec| {
+            let mut bytes = Vec::new();
+            rec.encode(&mut bytes);
+            bytes
+        })
+        .collect();
+    let (dat, idx) = crate::chunk_sink::encode_table("events.dat", encoded.iter().map(Vec::as_slice), chunk_size, zstd_level)?;
     Ok(EncodedIoEventStream {
         dat,
         idx,

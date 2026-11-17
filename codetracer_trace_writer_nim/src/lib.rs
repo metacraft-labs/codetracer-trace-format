@@ -24,9 +24,15 @@ extern "C" {
 
     fn trace_writer_last_error() -> *const std::os::raw::c_char;
 
+    fn trace_writer_build_config() -> *const std::os::raw::c_char;
+
     fn trace_writer_new(program: *const std::os::raw::c_char, format: i32) -> *mut std::ffi::c_void;
     fn trace_writer_free(handle: *mut std::ffi::c_void);
     fn trace_writer_close(handle: *mut std::ffi::c_void) -> i32;
+    fn trace_writer_begin_in_memory(handle: *mut std::ffi::c_void) -> i32;
+    fn trace_writer_container_ready(handle: *mut std::ffi::c_void) -> i32;
+    fn trace_writer_container_ptr(handle: *mut std::ffi::c_void) -> *const u8;
+    fn trace_writer_container_len(handle: *mut std::ffi::c_void) -> usize;
 
     fn trace_writer_begin_metadata(handle: *mut std::ffi::c_void, path: *const std::os::raw::c_char) -> i32;
     fn trace_writer_finish_metadata(handle: *mut std::ffi::c_void) -> i32;
@@ -37,6 +43,17 @@ extern "C" {
 
     fn trace_writer_start(handle: *mut std::ffi::c_void, path: *const std::os::raw::c_char, line: i64);
     fn trace_writer_set_workdir(handle: *mut std::ffi::c_void, workdir: *const std::os::raw::c_char);
+    fn trace_writer_set_recording_id(handle: *mut std::ffi::c_void, recording_id: *const std::os::raw::c_char) -> i32;
+    fn trace_writer_set_compact_threshold(handle: *mut std::ffi::c_void, raw_bytes: u64) -> i32;
+
+    fn ct_container_create(path: *const std::os::raw::c_char, block_size: u32) -> i32;
+    fn ct_container_append_files(
+        path: *const std::os::raw::c_char,
+        names: *const *const std::os::raw::c_char,
+        contents: *const *const u8,
+        lengths: *const usize,
+        count: usize,
+    ) -> i32;
     fn trace_writer_set_args(handle: *mut std::ffi::c_void, args: *const *const u8, arg_lens: *const usize, args_count: usize);
     fn trace_writer_register_step(handle: *mut std::ffi::c_void, path: *const std::os::raw::c_char, line: i64);
 
@@ -54,6 +71,7 @@ extern "C" {
     /// `trace_writer_register_call`.  Multiple calls accumulate; the buffer
     /// is consumed and cleared by the next `trace_writer_register_call`.
     fn trace_writer_register_call_arg(handle: *mut std::ffi::c_void, name: *const std::os::raw::c_char, cbor_data: *const u8, cbor_len: usize);
+    fn trace_writer_mark_current_call_as_entry(handle: *mut std::ffi::c_void) -> std::os::raw::c_int;
     fn trace_writer_register_return(handle: *mut std::ffi::c_void);
 
     // Kept for ABI compatibility — the `_by_type_id` form below replaced this
@@ -120,6 +138,16 @@ extern "C" {
     ) -> i32;
     fn trace_writer_register_drop_variables(handle: *mut std::ffi::c_void, names: *const *const std::os::raw::c_char, count: usize) -> i32;
     fn trace_writer_register_drop_variable(handle: *mut std::ffi::c_void, name: *const std::os::raw::c_char) -> i32;
+    // The place model, value-stream tags 1 and 4-8 (`trace-events.md`
+    // §"Value Stream"). Each returns 0, or 1 with the reason in
+    // `trace_writer_last_error`.
+    fn trace_writer_bind_variable(handle: *mut std::ffi::c_void, name: *const std::os::raw::c_char, place: i64) -> i32;
+    fn trace_writer_register_cell_value(handle: *mut std::ffi::c_void, place: i64, value_cbor: *const u8, value_cbor_len: usize) -> i32;
+    fn trace_writer_register_compound_value(handle: *mut std::ffi::c_void, place: i64, value_cbor: *const u8, value_cbor_len: usize) -> i32;
+    fn trace_writer_assign_cell(handle: *mut std::ffi::c_void, place: i64, new_value_cbor: *const u8, new_value_cbor_len: usize) -> i32;
+    fn trace_writer_assign_compound_item(handle: *mut std::ffi::c_void, place: i64, index: u64, item_place: i64) -> i32;
+    fn trace_writer_register_variable_cell(handle: *mut std::ffi::c_void, name: *const std::os::raw::c_char, place: i64) -> i32;
+    fn trace_writer_declare_source_reload(handle: *mut std::ffi::c_void) -> i32;
 
     // ----- Streaming value encoder -----
 
@@ -163,14 +191,22 @@ extern "C" {
     fn trace_writer_register_thread_exit(handle: *mut std::ffi::c_void, thread_id: u64);
     fn trace_writer_register_thread_switch(handle: *mut std::ffi::c_void, thread_id: u64);
 
+    // ----- Exceptions -----
+    //
+    // Raise and Catch exec records, and the exception a call exits by.
+    fn trace_writer_register_raise(handle: *mut std::ffi::c_void, exception_type_id: u64, message: *const u8, message_len: usize);
+    fn trace_writer_register_catch(handle: *mut std::ffi::c_void, exception_type_id: u64);
+    fn trace_writer_register_return_exception(handle: *mut std::ffi::c_void, exception_cbor: *const u8, exception_len: usize);
+
     // ----- Request / interval spans (RS-M1) -----
     //
     // A span is a bounded, labeled interval of execution — an HTTP request, a
     // process, a test — appended to the container's `spans.dat` stream instead
     // of a `codetracer_spans.jsonl` sidecar.  Spec:
     // `codetracer-specs/Trace-Files/CTFS-Request-Span-Streams.md`.  Only the
-    // multi-stream backend supports spans; registering at least one sets
-    // meta.dat bit 13 (`FlagHasSpanStream`) on the finished container.
+    // multi-stream backend supports spans. A reader finds the stream by the
+    // presence of `spans.dat`; the writer leaves meta.dat bit 13 clear, since
+    // meta.dat is written before the first span.
     fn trace_writer_register_span(
         handle: *mut std::ffi::c_void,
         span_id: u64,
@@ -193,6 +229,8 @@ extern "C" {
         metadata_count: usize,
     ) -> i32;
     fn trace_writer_flush_spans(handle: *mut std::ffi::c_void) -> i32;
+    fn trace_writer_begin_crossing(handle: *mut std::ffi::c_void, span_type: *const std::os::raw::c_char) -> u64;
+    fn trace_writer_end_crossing(handle: *mut std::ffi::c_void, span_id: u64) -> i32;
 
     // ----- Correlation markers -----
     //
@@ -266,6 +304,33 @@ extern "C" {
     // Read side: the span stream of a finished container as JSON.  Freed with
     // ct_free_buffer.
     fn ct_spans_json(path: *const std::os::raw::c_char, settled: i32, out_len: *mut usize) -> *mut u8;
+    fn ct_span_types_json(path: *const std::os::raw::c_char, out_len: *mut usize) -> *mut u8;
+
+    // Line hits and the correlation index: the writer's opt-in, and the read
+    // side over a finished container. Each reader returns 0 with a JSON
+    // document (freed with ct_free_buffer), 1 when the member is absent, -1
+    // on failure.
+    fn trace_writer_enable_linehits(handle: *mut std::ffi::c_void) -> i32;
+    fn ct_linehits_json(path: *const std::os::raw::c_char, out_buf: *mut *mut u8, out_len: *mut usize) -> i32;
+    fn ct_correlation_index_json(path: *const std::os::raw::c_char, out_buf: *mut *mut u8, out_len: *mut usize) -> i32;
+    fn ct_correlation_lookup_span(
+        path: *const std::os::raw::c_char,
+        trace_id: *const u8,
+        trace_id_len: usize,
+        span_id: *const u8,
+        span_id_len: usize,
+        out_buf: *mut *mut u8,
+        out_len: *mut usize,
+    ) -> i32;
+    fn ct_correlation_lookup_boundary(
+        path: *const std::os::raw::c_char,
+        marker_id: u64,
+        key_value: *const u8,
+        key_value_len: usize,
+        out_buf: *mut *mut u8,
+        out_len: *mut usize,
+    ) -> i32;
+    fn ct_marker_labels_json(path: *const std::os::raw::c_char, out_buf: *mut *mut u8, out_len: *mut usize) -> i32;
 
     // ----- Column-aware step mode (P6.3 / P6.4) -----
     //
@@ -329,6 +394,12 @@ extern "C" {
     // The id a bare step on `path` is attributed to now; `u64::MAX` on failure.
     fn trace_writer_current_path_id(handle: *mut std::ffi::c_void, path: *const std::os::raw::c_char) -> u64;
 
+    // Intern `path` in paths.dat now and return its id; `u64::MAX` on failure.
+    fn trace_writer_register_path(handle: *mut std::ffi::c_void, path: *const std::os::raw::c_char) -> u64;
+
+    // Intern `name` in varnames.dat now and return its id; `u64::MAX` on failure.
+    fn trace_writer_register_variable_name(handle: *mut std::ffi::c_void, name: *const std::os::raw::c_char) -> u64;
+
     // Write a SourceReload marker (tag 0x08); returns its 1-based ordinal, or
     // 0 on failure.
     fn trace_writer_register_source_reload(
@@ -381,6 +452,28 @@ extern "C" {
     ) -> i32;
     fn trace_writer_record_empty_filter_provenance(handle: *mut std::ffi::c_void) -> i32;
 
+    // ----- the other flag-gated meta.dat blocks (internal-files.md
+    // "Extended Fields"): MCR fields, replay-launch fields, layout snapshot -----
+    fn trace_writer_set_mcr_fields(
+        handle: *mut std::ffi::c_void,
+        tick_source: i32,
+        total_threads: u32,
+        atomic_mode: i32,
+        total_events: u64,
+        total_checkpoints: u32,
+        start_time_unix_us: u64,
+        platform: *const std::os::raw::c_char,
+        tick_granularity: *const std::os::raw::c_char,
+        tick_source_str: *const std::os::raw::c_char,
+        atomic_mode_str: *const std::os::raw::c_char,
+        start_time_str: *const std::os::raw::c_char,
+        hook_profile: *const std::os::raw::c_char,
+        hook_strategies: *const *const std::os::raw::c_char,
+        hook_strategies_count: usize,
+    ) -> i32;
+    fn trace_writer_set_replay_launch_fields(handle: *mut std::ffi::c_void, aslr_disabled: i32) -> i32;
+    fn trace_writer_set_layout_snapshot(handle: *mut std::ffi::c_void, layout_hash: u64, fingerprint: *const u8, fingerprint_len: usize) -> i32;
+
     // ----- meta.dat -----
 
     fn ct_write_meta_dat(handle: *mut std::ffi::c_void, recorder_id: *const u8, recorder_id_len: usize) -> i32;
@@ -390,19 +483,21 @@ extern "C" {
     fn ct_meta_dat_workdir(h: *mut std::ffi::c_void, out_len: *mut usize) -> *const u8;
     fn ct_meta_dat_args_count(h: *mut std::ffi::c_void) -> usize;
     fn ct_meta_dat_arg(h: *mut std::ffi::c_void, idx: usize, out_len: *mut usize) -> *const u8;
-    fn ct_meta_dat_paths_count(h: *mut std::ffi::c_void) -> usize;
-    fn ct_meta_dat_path(h: *mut std::ffi::c_void, idx: usize, out_len: *mut usize) -> *const u8;
     fn ct_meta_dat_recorder_id(h: *mut std::ffi::c_void, out_len: *mut usize) -> *const u8;
     fn ct_meta_dat_free(h: *mut std::ffi::c_void);
 
     // ----- Trace reader (NewTraceReader) -----
 
+    fn ct_reader_open_bytes(data: *const std::ffi::c_void, length: usize) -> *mut std::ffi::c_void;
+    fn ct_reader_refresh_bytes(h: *mut std::ffi::c_void, data: *const std::ffi::c_void, length: usize) -> i32;
     fn ct_reader_open(path: *const std::os::raw::c_char) -> *mut std::ffi::c_void;
     fn ct_reader_refresh(h: *mut std::ffi::c_void, path: *const std::os::raw::c_char) -> i32;
     fn ct_reader_close(h: *mut std::ffi::c_void);
 
     fn ct_reader_step_count(h: *mut std::ffi::c_void) -> u64;
+    fn ct_reader_logical_step_count(h: *mut std::ffi::c_void) -> u64;
     fn ct_reader_call_count(h: *mut std::ffi::c_void) -> u64;
+    fn ct_reader_recorded_entry(h: *mut std::ffi::c_void, call_key: *mut u64, function_id: *mut u64, entry_step: *mut u64) -> i32;
     fn ct_reader_event_count(h: *mut std::ffi::c_void) -> u64;
 
     fn ct_reader_path_count(h: *mut std::ffi::c_void) -> u64;
@@ -488,6 +583,11 @@ extern "C" {
     /// Layout A.  Returns 0 when no Layout A data is available for that
     /// file (the legitimate "no per-line data" sentinel).
     fn ct_reader_line_count_raw(h: *mut std::ffi::c_void, file_id: u64) -> u64;
+
+    /// What `paths.dat` records about `file_id`'s size: 0 bare, 1 line
+    /// count, 2 per-line table, 3 the conventional table (`line_count = 0`);
+    /// -1 for a NULL handle or no such path.
+    fn ct_reader_path_table_kind(h: *mut std::ffi::c_void, file_id: u64) -> i32;
 
     /// M-capability-flags — return 1 when the trace's recorder
     /// advertised support for per-column breakpoints (meta.dat bit 6),
@@ -608,6 +708,15 @@ pub fn last_error() -> String {
             CStr::from_ptr(ptr).to_string_lossy().into_owned()
         }
     }
+}
+
+/// How the linked Nim archive was compiled, as the archive itself reports it:
+/// `key:value` pairs joined by `;` (app type, threads, memory manager, release
+/// mode, process lock). See `trace_writer_build_config` in
+/// `codetracer_trace_writer.h`.
+pub fn build_config() -> String {
+    // The string is static in the archive and the call cannot fail.
+    unsafe { CStr::from_ptr(trace_writer_build_config()).to_string_lossy().into_owned() }
 }
 
 #[cfg(test)]
@@ -953,6 +1062,28 @@ mod tests {
     }
 }
 
+/// Write a new, empty CTFS container at `path` through the Nim library's
+/// `ct_container_create`; `block_size` 0 selects the default.
+pub fn container_create(path: &Path, block_size: u32) -> Result<(), Box<dyn Error>> {
+    let c_path = path_to_cstring(path);
+    check_result(unsafe { ct_container_create(c_path.as_ptr(), block_size) })
+}
+
+/// Append `files` to the closed container at `path` through the Nim
+/// library's `ct_container_append_files`, which publishes them together or
+/// not at all. A name holding a NUL cannot cross the C ABI and is refused here.
+pub fn container_append_files(path: &Path, files: &[(&str, &[u8])]) -> Result<(), Box<dyn Error>> {
+    let c_path = path_to_cstring(path);
+    let names = files
+        .iter()
+        .map(|(name, _)| CString::new(*name).map_err(|_| format!("member name {name:?} holds a NUL and cannot cross the C ABI")))
+        .collect::<Result<Vec<CString>, String>>()?;
+    let name_ptrs: Vec<*const std::os::raw::c_char> = names.iter().map(|n| n.as_ptr()).collect();
+    let content_ptrs: Vec<*const u8> = files.iter().map(|(_, c)| c.as_ptr()).collect();
+    let lengths: Vec<usize> = files.iter().map(|(_, c)| c.len()).collect();
+    check_result(unsafe { ct_container_append_files(c_path.as_ptr(), name_ptrs.as_ptr(), content_ptrs.as_ptr(), lengths.as_ptr(), files.len()) })
+}
+
 fn check_result(code: i32) -> Result<(), Box<dyn Error>> {
     if code == 0 {
         Ok(())
@@ -1101,6 +1232,84 @@ pub fn read_span_stream_json(path: &Path, settled: bool) -> Result<String, Box<d
     Ok(String::from_utf8(bytes)?)
 }
 
+/// Decode the span-type index (`spantype.ns`) of the `.ct` container at `path`
+/// into JSON through the canonical Nim decoder: an array of
+/// `{"type_id", "name", "span_ids"}` objects in the index's order.
+pub fn read_span_types_json(path: &Path) -> Result<String, Box<dyn Error>> {
+    ensure_nim_initialized();
+    let c_path = path_to_cstring(path);
+    let mut out_len: usize = 0;
+    let buf = unsafe { ct_span_types_json(c_path.as_ptr(), &mut out_len) };
+    if buf.is_null() {
+        return Err(format!("ct_span_types_json({}): {}", path.display(), last_error()).into());
+    }
+    let bytes = unsafe { std::slice::from_raw_parts(buf, out_len) }.to_vec();
+    unsafe { ct_free_buffer(buf) };
+    Ok(String::from_utf8(bytes)?)
+}
+
+/// What a Nim read-side call over a container member answered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MemberAnswer {
+    /// The member is present and was read: its JSON document.
+    Document(String),
+    /// The container has no such member.
+    Absent,
+    /// The member is present and could not be read: the reason.
+    Refused(String),
+}
+
+fn member_answer(what: &str, call: impl FnOnce(*mut *mut u8, *mut usize) -> i32) -> MemberAnswer {
+    ensure_nim_initialized();
+    let mut buf: *mut u8 = std::ptr::null_mut();
+    let mut len: usize = 0;
+    match call(&mut buf, &mut len) {
+        0 => {
+            let bytes = unsafe { std::slice::from_raw_parts(buf, len) }.to_vec();
+            unsafe { ct_free_buffer(buf) };
+            MemberAnswer::Document(String::from_utf8_lossy(&bytes).into_owned())
+        }
+        1 => MemberAnswer::Absent,
+        _ => MemberAnswer::Refused(format!("{what}: {}", last_error())),
+    }
+}
+
+/// The Nim reader's `linehits.tc`: `[{"position":P,"steps":[...]},...]`.
+pub fn read_line_hits_json(path: &Path) -> MemberAnswer {
+    let c_path = path_to_cstring(path);
+    member_answer("ct_linehits_json", |b, l| unsafe { ct_linehits_json(c_path.as_ptr(), b, l) })
+}
+
+/// The Nim reader's `corrmark.ns`, every entry in key and bucket order.
+pub fn read_correlation_index_json(path: &Path) -> MemberAnswer {
+    let c_path = path_to_cstring(path);
+    member_answer("ct_correlation_index_json", |b, l| unsafe {
+        ct_correlation_index_json(c_path.as_ptr(), b, l)
+    })
+}
+
+/// The Nim reader's confirmed kind-0 entries for a span.
+pub fn lookup_correlation_span_json(path: &Path, trace_id: &[u8; 16], span_id: &[u8; 8]) -> MemberAnswer {
+    let c_path = path_to_cstring(path);
+    member_answer("ct_correlation_lookup_span", |b, l| unsafe {
+        ct_correlation_lookup_span(c_path.as_ptr(), trace_id.as_ptr(), 16, span_id.as_ptr(), 8, b, l)
+    })
+}
+
+/// The Nim reader's confirmed kind-1 entries for a boundary crossing.
+pub fn lookup_correlation_boundary_json(path: &Path, marker_id: u64, key_value: &[u8]) -> MemberAnswer {
+    let c_path = path_to_cstring(path);
+    member_answer("ct_correlation_lookup_boundary", |b, l| unsafe {
+        ct_correlation_lookup_boundary(c_path.as_ptr(), marker_id, key_value.as_ptr(), key_value.len(), b, l)
+    })
+}
+
+/// The Nim reader's marker labels, each as lowercase hex.
+pub fn read_marker_labels_json(path: &Path) -> MemberAnswer {
+    let c_path = path_to_cstring(path);
+    member_answer("ct_marker_labels_json", |b, l| unsafe { ct_marker_labels_json(c_path.as_ptr(), b, l) })
+}
+
 // ---------------------------------------------------------------------------
 // StreamingValueEncoder — Rust wrapper for the Nim C FFI
 // ---------------------------------------------------------------------------
@@ -1244,9 +1453,17 @@ impl StreamingValueEncoder {
         self.check(unsafe { ct_value_begin_tuple(self.handle, type_id.0 as u64, count as i32) });
     }
 
-    /// End a compound value (sequence or tuple) started by
+    /// Begin a struct with a known field count without resetting its enclosing
+    /// value. Must be followed by exactly `count` field value encodings and one
+    /// [`end_compound`](Self::end_compound) call, including for an empty struct.
+    pub fn begin_struct(&mut self, type_id: TypeId, count: usize) {
+        self.check(unsafe { ct_value_begin_struct(self.handle, type_id.0 as u64, count as i32) });
+    }
+
+    /// End a compound value (sequence, tuple or struct) started by
     /// [`begin_sequence`](Self::begin_sequence) or
-    /// [`begin_tuple`](Self::begin_tuple).
+    /// [`begin_tuple`](Self::begin_tuple) or
+    /// [`begin_struct`](Self::begin_struct).
     pub fn end_compound(&mut self) {
         self.check(unsafe { ct_value_end_compound(self.handle) });
     }
@@ -1417,6 +1634,11 @@ pub struct NimTraceWriter {
     /// does not repeat it after an explicit `close()`.  Kept separate from
     /// `discarded_records` so that reporting never destroys the tally.
     discards_reported: bool,
+    /// Call arguments staged by [`arg`](NimTraceWriter::arg) for the next
+    /// [`register_call`](NimTraceWriter::register_call), which registers them
+    /// as step variables once the caller's step is flushed, so they attach to
+    /// the callee's first step.
+    pending_arg_variables: Vec<(String, ValueRecord)>,
 }
 
 /// Set this to `1` (or `true`) to make an unsupported record a hard error
@@ -1468,6 +1690,7 @@ impl NimTraceWriter {
             discarded_records: std::collections::BTreeMap::new(),
             strict: strict_from_env_value(std::env::var(STRICT_ENV).ok().as_deref()),
             deferred_error: None,
+            pending_arg_variables: Vec::new(),
             discards_reported: false,
         }
     }
@@ -1644,6 +1867,76 @@ impl NimTraceWriter {
     pub fn record_empty_filter_provenance(&mut self) -> Result<(), Box<dyn Error>> {
         check_result(unsafe { trace_writer_record_empty_filter_provenance(self.handle) })
     }
+
+    /// Write the MCR fields block (`meta.dat` flag bit 0) with these values.
+    /// Like every flag-gated block, it is set after `begin_writing_trace_events`
+    /// and before the first record, which writes `meta.dat`; later it is refused.
+    pub fn set_mcr_fields(&mut self, f: &NimMcrFields) -> Result<(), Box<dyn Error>> {
+        let text = |s: &str| CString::new(s).map_err(|e| -> Box<dyn Error> { format!("MCR field {s:?}: {e}").into() });
+        let strings = [
+            f.platform,
+            f.tick_granularity,
+            f.tick_source_str,
+            f.atomic_mode_str,
+            f.start_time_str,
+            f.hook_profile,
+        ]
+        .into_iter()
+        .map(text)
+        .collect::<Result<Vec<_>, _>>()?;
+        let strategies = f.hook_strategies.iter().map(|s| text(s)).collect::<Result<Vec<_>, _>>()?;
+        let strategy_ptrs: Vec<_> = strategies.iter().map(|s| s.as_ptr()).collect();
+        check_result(unsafe {
+            trace_writer_set_mcr_fields(
+                self.handle,
+                i32::from(f.tick_source),
+                f.total_threads,
+                i32::from(f.atomic_mode),
+                f.total_events,
+                f.total_checkpoints,
+                f.start_time_unix_us,
+                strings[0].as_ptr(),
+                strings[1].as_ptr(),
+                strings[2].as_ptr(),
+                strings[3].as_ptr(),
+                strings[4].as_ptr(),
+                strings[5].as_ptr(),
+                strategy_ptrs.as_ptr(),
+                strategy_ptrs.len(),
+            )
+        })
+    }
+
+    /// Write the replay-launch fields block (`meta.dat` flag bit 1); set as
+    /// [`set_mcr_fields`](Self::set_mcr_fields) is.
+    pub fn set_replay_launch_fields(&mut self, aslr_disabled: bool) -> Result<(), Box<dyn Error>> {
+        check_result(unsafe { trace_writer_set_replay_launch_fields(self.handle, i32::from(aslr_disabled)) })
+    }
+
+    /// Write the layout snapshot block (`meta.dat` flag bit 2); set as
+    /// [`set_mcr_fields`](Self::set_mcr_fields) is.
+    pub fn set_layout_snapshot(&mut self, layout_hash: u64, fingerprint: &[u8]) -> Result<(), Box<dyn Error>> {
+        check_result(unsafe { trace_writer_set_layout_snapshot(self.handle, layout_hash, fingerprint.as_ptr(), fingerprint.len()) })
+    }
+}
+
+/// The MCR fields block of `meta.dat` (`internal-files.md` §"Extended
+/// Fields", flag bit 0), as [`NimTraceWriter::set_mcr_fields`] takes it.
+/// `tick_source` and `atomic_mode` are the enumerations' ordinals.
+pub struct NimMcrFields<'a> {
+    pub tick_source: u8,
+    pub total_threads: u32,
+    pub atomic_mode: u8,
+    pub total_events: u64,
+    pub total_checkpoints: u32,
+    pub start_time_unix_us: u64,
+    pub platform: &'a str,
+    pub tick_granularity: &'a str,
+    pub tick_source_str: &'a str,
+    pub atomic_mode_str: &'a str,
+    pub start_time_str: &'a str,
+    pub hook_profile: &'a str,
+    pub hook_strategies: &'a [String],
 }
 
 impl Drop for NimTraceWriter {
@@ -1683,6 +1976,28 @@ impl NimTraceWriter {
         check_result(unsafe { trace_writer_begin_events(self.handle, c_path.as_ptr()) })
     }
 
+    /// Write the container in memory instead of to a file: chosen instead of
+    /// [`begin_writing_trace_events`](Self::begin_writing_trace_events), and
+    /// read back with [`container_bytes`](Self::container_bytes) after
+    /// [`close`](Self::close).
+    pub fn begin_in_memory(&mut self) -> Result<(), Box<dyn Error>> {
+        check_result(unsafe { trace_writer_begin_in_memory(self.handle) })
+    }
+
+    /// The finished container of an in-memory writer; `None` before it is
+    /// closed, or for a writer that wrote a file.
+    pub fn container_bytes(&self) -> Option<Vec<u8>> {
+        if self.handle.is_null() || unsafe { trace_writer_container_ready(self.handle) } == 0 {
+            return None;
+        }
+        let len = unsafe { trace_writer_container_len(self.handle) };
+        let ptr = unsafe { trace_writer_container_ptr(self.handle) };
+        if ptr.is_null() {
+            return None;
+        }
+        Some(unsafe { std::slice::from_raw_parts(ptr, len) }.to_vec())
+    }
+
     pub fn finish_writing_trace_events(&mut self) -> Result<(), Box<dyn Error>> {
         check_result(unsafe { trace_writer_finish_events(self.handle) })
     }
@@ -1694,6 +2009,25 @@ impl NimTraceWriter {
 
     pub fn finish_writing_trace_paths(&mut self) -> Result<(), Box<dyn Error>> {
         check_result(unsafe { trace_writer_finish_paths(self.handle) })
+    }
+
+    /// Pin the recording's UUIDv7 identity instead of having one minted.
+    /// Refused once the trace has begun, naming the reason.
+    pub fn set_recording_id(&mut self, recording_id: &str) -> Result<(), Box<dyn Error>> {
+        let c_id = str_to_cstring(recording_id);
+        if unsafe { trace_writer_set_recording_id(self.handle, c_id.as_ptr()) } != 0 {
+            return Err(last_error().into());
+        }
+        Ok(())
+    }
+
+    /// Choose the container profile at close (`ctfs-container.md` §1e):
+    /// compact when the compact container's members -- every zstd frame
+    /// inflated -- total fewer than `raw_bytes`, full otherwise; `0` writes
+    /// the full profile always. Refused for a writer that is not writing a
+    /// CTFS container.
+    pub fn set_compact_threshold(&mut self, raw_bytes: u64) -> Result<(), Box<dyn Error>> {
+        check_result(unsafe { trace_writer_set_compact_threshold(self.handle, raw_bytes) })
     }
 
     pub fn set_workdir(&mut self, workdir: &Path) {
@@ -1784,7 +2118,25 @@ impl NimTraceWriter {
         // it carries `VariableId(0)` (the Nim backend manages IDs
         // internally) and the values are already staged via `arg()`.
         // We keep the parameter to preserve the abstract trait signature.
+        //
+        // The FFI call flushes the caller's open step before opening the
+        // call, so the arguments registered as step variables afterwards are
+        // staged with no step open and attach to the callee's first step
+        // (`trace-events.md` §"Recorder Integration — Staging Values").
         unsafe { trace_writer_register_call(self.handle, function_id.0) }
+        for (name, value) in std::mem::take(&mut self.pending_arg_variables) {
+            self.register_variable_with_full_value(&name, value);
+        }
+    }
+
+    /// Mark the actual active call through the checked supplier API.
+    pub fn mark_current_call_as_entry(&mut self) -> Result<(), Box<dyn Error>> {
+        let status = unsafe { trace_writer_mark_current_call_as_entry(self.handle) };
+        if status == 0 {
+            Ok(())
+        } else {
+            Err(last_error().into())
+        }
     }
 
     pub fn register_return(&mut self, return_value: ValueRecord) {
@@ -1888,12 +2240,31 @@ impl NimTraceWriter {
         unsafe { trace_writer_register_thread_switch(self.handle, thread_id) }
     }
 
+    /// Register a `Raise` exec record: an exception of the interned type
+    /// `exception_type_id` is raised, with `message`. As
+    /// `CtfsTraceWriter::register_raise`.
+    pub fn register_raise(&mut self, exception_type_id: u64, message: &[u8]) {
+        unsafe { trace_writer_register_raise(self.handle, exception_type_id, message.as_ptr(), message.len()) }
+    }
+
+    /// Register a `Catch` exec record. As `CtfsTraceWriter::register_catch`.
+    pub fn register_catch(&mut self, exception_type_id: u64) {
+        unsafe { trace_writer_register_catch(self.handle, exception_type_id) }
+    }
+
+    /// The innermost call exits by `exception`: its call record carries it,
+    /// and no return value.
+    pub fn register_return_exception(&mut self, exception: &ValueRecord) {
+        let cbor = place_model_cbor(exception);
+        unsafe { trace_writer_register_return_exception(self.handle, cbor.as_ptr(), cbor.len()) }
+    }
+
     /// Append one span to the container's `spans.dat` stream (RS-M1).
     ///
     /// This is what a recorder's HTTP middleware calls instead of writing a
-    /// `codetracer_spans.jsonl` sidecar.  Registering at least one span sets
-    /// `meta.dat` bit 13 (`FlagHasSpanStream`) at close; a recording that
-    /// registers none is byte-for-byte unchanged.  Only the multi-stream
+    /// `codetracer_spans.jsonl` sidecar.  The first span creates `spans.dat`
+    /// and `spans.idx`; a recording that registers none has neither, and
+    /// `meta.dat` bit 13 stays clear either way.  Only the multi-stream
     /// (CTFS) backend supports spans — any other format returns an error.
     ///
     /// To publish an in-flight interval, call once with
@@ -1954,6 +2325,29 @@ impl NimTraceWriter {
         let rc = unsafe { trace_writer_flush_spans(self.handle) };
         if rc != 0 {
             return Err(format!("trace_writer_flush_spans: {}", last_error()).into());
+        }
+        Ok(())
+    }
+
+    /// Open a native-to-VM crossing: a span of type `span_type` starting at
+    /// the next step, published at once as an open record. Returns the span
+    /// id the writer minted, to pass to [`end_crossing`](Self::end_crossing).
+    pub fn begin_crossing(&mut self, span_type: &str) -> Result<u64, Box<dyn Error>> {
+        let c_span_type = str_to_cstring(span_type);
+        let id = unsafe { trace_writer_begin_crossing(self.handle, c_span_type.as_ptr()) };
+        if id == 0 {
+            return Err(format!("trace_writer_begin_crossing: {}", last_error()).into());
+        }
+        Ok(id)
+    }
+
+    /// Close the innermost open crossing, which must be `span_id`: its
+    /// settled record ends at the last step recorded, and is published at
+    /// once.
+    pub fn end_crossing(&mut self, span_id: u64) -> Result<(), Box<dyn Error>> {
+        let rc = unsafe { trace_writer_end_crossing(self.handle, span_id) };
+        if rc != 0 {
+            return Err(format!("trace_writer_end_crossing: {}", last_error()).into());
         }
         Ok(())
     }
@@ -2268,6 +2662,16 @@ impl NimTraceWriter {
         Ok(PathId(0))
     }
 
+    /// Keep a `linehits.tc` index from this call on. Call after
+    /// `begin_writing_trace_events`.
+    pub fn enable_line_hits(&mut self) -> Result<(), Box<dyn Error>> {
+        let rc = unsafe { trace_writer_enable_linehits(self.handle) };
+        if rc != 0 {
+            return Err(last_error().into());
+        }
+        Ok(())
+    }
+
     /// Opt this writer into recording a per-file line count in every
     /// `paths.dat` record (`meta.dat` bit 14).
     ///
@@ -2396,22 +2800,40 @@ impl NimTraceWriter {
 
     // --- Methods that are no-ops in the Nim backend ---
 
-    pub fn ensure_path_id(&mut self, _path: &Path) -> PathId {
-        // The Nim library manages path IDs internally
-        PathId(0)
+    /// Intern `path` and return the id the Nim writer gave it.
+    ///
+    /// A path is interned when it is registered, not when a step first
+    /// reaches it, so the ids — and `paths.dat`, `funcs.dat` and every step
+    /// address derived from them — follow the recorder's registrations, as
+    /// they do in the native Nim writer and the pure-Rust writer.
+    pub fn ensure_path_id(&mut self, path: &Path) -> PathId {
+        let c_path = path_to_cstring(path);
+        let id = unsafe { trace_writer_register_path(self.handle, c_path.as_ptr()) };
+        if id == u64::MAX {
+            self.discard_with_reason("register_path", "trace_writer_register_path reported a failure");
+        }
+        PathId(id as usize)
     }
 
     pub fn ensure_raw_type_id(&mut self, typ: TypeRecord) -> TypeId {
         self.ensure_type_id(typ.kind, &typ.lang_type)
     }
 
-    pub fn ensure_variable_id(&mut self, _variable_name: &str) -> VariableId {
-        // The Nim library manages variable IDs internally
-        VariableId(0)
+    /// Intern `variable_name` and return the id the Nim writer gave it; a
+    /// name is interned when it is registered, not when a value first uses
+    /// it.
+    pub fn ensure_variable_id(&mut self, variable_name: &str) -> VariableId {
+        let c_name = str_to_cstring(variable_name);
+        let id = unsafe { trace_writer_register_variable_name(self.handle, c_name.as_ptr()) };
+        if id == u64::MAX {
+            self.discard_with_reason("register_variable_name", "trace_writer_register_variable_name reported a failure");
+        }
+        VariableId(id as usize)
     }
 
-    pub fn register_path(&mut self, _path: &Path) {
-        // Handled internally by the Nim library
+    /// Intern `path` now (see [`Self::ensure_path_id`]).
+    pub fn register_path(&mut self, path: &Path) {
+        self.ensure_path_id(path);
     }
 
     pub fn register_function(&mut self, name: &str, path: &Path, line: Line) {
@@ -2421,17 +2843,20 @@ impl NimTraceWriter {
 
     pub fn arg(&mut self, name: &str, value: ValueRecord) -> FullValueRecord {
         // Two effects:
-        //   1. The argument is registered as a step variable on the
-        //      *current* step so it appears in `ct/load-locals` for the
-        //      caller.  This matches the historical behaviour of the
-        //      single-stream writer.
+        //   1. The argument becomes a step variable of the callee's first
+        //      step.  It is held here and registered by the next
+        //      `register_call`, after the caller's step is flushed: a
+        //      line-driven recorder still has the caller's step open at this
+        //      point, and registering now would show the callee's argument
+        //      as a variable of the caller (in a recursive call, a second
+        //      value for the caller's own parameter).
         //   2. The argument is also staged on the writer's pending-args
         //      buffer so the next `register_call` attaches it to the
         //      call record.  Without this the call record would have
         //      empty `args`, and the frontend's calltrace pane would
         //      render the call as `format_board()` instead of
         //      `format_board(board=[[5,3,4,...]])`.
-        self.register_variable_with_full_value(name, value.clone());
+        self.pending_arg_variables.push((name.to_string(), value.clone()));
 
         let cbor = self.encode_value(&value).unwrap_or_default();
         let c_name = str_to_cstring(name);
@@ -2482,9 +2907,9 @@ impl NimTraceWriter {
         self.discard_unsupported("register_asm");
     }
 
-    pub fn register_variable_name(&mut self, _variable_name: &str) {
-        // Genuinely handled inside Nim (every `register_*` call that takes a
-        // name interns it there), so nothing is lost — not a discard.
+    /// Intern `variable_name` now (see [`Self::ensure_variable_id`]).
+    pub fn register_variable_name(&mut self, variable_name: &str) {
+        self.ensure_variable_id(variable_name);
     }
 
     /// Persist a value by variable id.
@@ -2514,24 +2939,58 @@ impl NimTraceWriter {
         self.register_variable_with_full_value(&name, value);
     }
 
-    pub fn register_compound_value(&mut self, _place: Place, _value: ValueRecord) {
-        self.discard_unsupported("register_compound_value");
+    /// Tag 5 `CompoundValue`. The value is CBOR-encoded here exactly as the
+    /// pure-Rust writer encodes it, so the two writers' `values.dat` agree.
+    pub fn register_compound_value(&mut self, place: Place, value: ValueRecord) {
+        let cbor = place_model_cbor(&value);
+        let rc = unsafe { trace_writer_register_compound_value(self.handle, place.0, cbor.as_ptr(), cbor.len()) };
+        self.check_place_model(rc, "register_compound_value");
     }
 
-    pub fn register_cell_value(&mut self, _place: Place, _value: ValueRecord) {
-        self.discard_unsupported("register_cell_value");
+    /// Tag 4 `CellValue`.
+    pub fn register_cell_value(&mut self, place: Place, value: ValueRecord) {
+        let cbor = place_model_cbor(&value);
+        let rc = unsafe { trace_writer_register_cell_value(self.handle, place.0, cbor.as_ptr(), cbor.len()) };
+        self.check_place_model(rc, "register_cell_value");
     }
 
-    pub fn assign_compound_item(&mut self, _place: Place, _index: usize, _item_place: Place) {
-        self.discard_unsupported("assign_compound_item");
+    /// Tag 7 `AssignCompoundItem`.
+    pub fn assign_compound_item(&mut self, place: Place, index: usize, item_place: Place) {
+        let rc = unsafe { trace_writer_assign_compound_item(self.handle, place.0, index as u64, item_place.0) };
+        self.check_place_model(rc, "assign_compound_item");
     }
 
-    pub fn assign_cell(&mut self, _place: Place, _new_value: ValueRecord) {
-        self.discard_unsupported("assign_cell");
+    /// Tag 6 `AssignCell`.
+    pub fn assign_cell(&mut self, place: Place, new_value: ValueRecord) {
+        let cbor = place_model_cbor(&new_value);
+        let rc = unsafe { trace_writer_assign_cell(self.handle, place.0, cbor.as_ptr(), cbor.len()) };
+        self.check_place_model(rc, "assign_cell");
     }
 
-    pub fn register_variable(&mut self, _variable_name: &str, _place: Place) {
-        self.discard_unsupported("register_variable");
+    /// Tag 8 `VariableCell`: `variable_name` is the cell at `place`.
+    pub fn register_variable(&mut self, variable_name: &str, place: Place) {
+        let c_name = str_to_cstring(variable_name);
+        let rc = unsafe { trace_writer_register_variable_cell(self.handle, c_name.as_ptr(), place.0) };
+        self.check_place_model(rc, "register_variable");
+    }
+
+    /// A place-model entry point that refused: the record is not in the
+    /// trace, so the loss is counted and named rather than passed over.
+    fn check_place_model(&mut self, rc: i32, op: &'static str) {
+        if rc != 0 {
+            let reason = last_error();
+            self.discard_with_reason(op, &reason);
+        }
+    }
+
+    /// Declare, before the first record, that this trace may carry source
+    /// reload markers (`meta.dat` `flags_ext` bit 0). Refused after the first
+    /// record, naming the reason.
+    pub fn declare_source_reload(&mut self) -> Result<(), Box<dyn Error>> {
+        if unsafe { trace_writer_declare_source_reload(self.handle) } != 0 {
+            return Err(last_error().into());
+        }
+        Ok(())
     }
 
     /// Record that one variable has ended its life.
@@ -2591,8 +3050,11 @@ impl NimTraceWriter {
         }
     }
 
-    pub fn bind_variable(&mut self, _variable_name: &str, _place: Place) {
-        self.discard_unsupported("bind_variable");
+    /// Tag 1 `BindVariable`: `variable_name` is bound to `place`.
+    pub fn bind_variable(&mut self, variable_name: &str, place: Place) {
+        let c_name = str_to_cstring(variable_name);
+        let rc = unsafe { trace_writer_bind_variable(self.handle, c_name.as_ptr(), place.0) };
+        self.check_place_model(rc, "bind_variable");
     }
 
     /// Record a scope exit: `variable_names` are going out of scope together.
@@ -2918,6 +3380,11 @@ pub trait TraceWriter: Send {
 
     fn register_call(&mut self, function_id: FunctionId, args: Vec<FullValueRecord>);
     fn arg(&mut self, name: &str, value: ValueRecord) -> FullValueRecord;
+    /// Optional recorded entry identity requires explicit writer support.
+    fn mark_current_call_as_entry(&mut self) -> Result<(), Box<dyn Error>> {
+        Err("entry.dat: writer does not support recorded entry identity".into())
+    }
+
     fn register_return(&mut self, return_value: ValueRecord);
     fn register_special_event(&mut self, kind: EventLogKind, metadata: &str, content: &str);
 
@@ -3023,7 +3490,7 @@ pub trait TraceWriter: Send {
     /// RS-M1: append one span — a bounded, labeled interval of execution — to
     /// the container's `spans.dat` stream.  See
     /// [`NimTraceWriter::register_span`] for the contract (open records,
-    /// last-record-wins, the `meta.dat` bit 13 side effect).
+    /// last-record-wins, lazily created members).
     ///
     /// The default implementation ERRORS rather than silently dropping the
     /// span: a middleware that believes it recorded a request must not be told
@@ -3224,6 +3691,10 @@ impl TraceWriter for NimTraceWriter {
     fn arg(&mut self, name: &str, value: ValueRecord) -> FullValueRecord {
         NimTraceWriter::arg(self, name, value)
     }
+    fn mark_current_call_as_entry(&mut self) -> Result<(), Box<dyn Error>> {
+        NimTraceWriter::mark_current_call_as_entry(self)
+    }
+
     fn register_return(&mut self, return_value: ValueRecord) {
         NimTraceWriter::register_return(self, return_value)
     }
@@ -3390,6 +3861,12 @@ impl TraceWriter for NimTraceWriter {
     }
 }
 
+/// The CBOR of a place-model value, encoded as the pure-Rust writer's
+/// `value_stream` encodes it.
+fn place_model_cbor(value: &ValueRecord) -> Vec<u8> {
+    cbor4ii::serde::to_vec(Vec::new(), value).expect("CBOR encode of a ValueRecord failed")
+}
+
 // ---------------------------------------------------------------------------
 // MetaDatReader — read binary meta.dat blobs
 // ---------------------------------------------------------------------------
@@ -3455,27 +3932,6 @@ impl MetaDatReader {
         }
     }
 
-    /// Number of source paths recorded.
-    pub fn paths_count(&self) -> usize {
-        unsafe { ct_meta_dat_paths_count(self.handle) }
-    }
-
-    /// Get the source path at `idx`, or `None` if out of range.
-    pub fn path(&self, idx: usize) -> Option<&str> {
-        if idx >= self.paths_count() {
-            return None;
-        }
-        unsafe {
-            let mut len: usize = 0;
-            let ptr = ct_meta_dat_path(self.handle, idx, &mut len);
-            if ptr.is_null() {
-                None
-            } else {
-                Some(std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len)))
-            }
-        }
-    }
-
     /// The recorder identifier string.
     pub fn recorder_id(&self) -> &str {
         unsafe {
@@ -3499,6 +3955,21 @@ impl Drop for MetaDatReader {
 // NimTraceReaderHandle — safe wrapper for the Nim ct_reader_* FFI
 // ---------------------------------------------------------------------------
 
+/// What a container's `paths.dat` records about one file's size
+/// (`internal-files.md` §"Interning Tables").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PathTableKind {
+    /// A bare record: no size (neither `meta.dat` bit 4 nor 14).
+    Bare,
+    /// A line count (bit 14).
+    LineCount,
+    /// A per-line table (bit 4, `line_count > 0`).
+    Lines,
+    /// The conventional table, 100000 lines of 1024 positions (bit 4,
+    /// `line_count = 0`).
+    Conventional,
+}
+
 /// Read-only handle for a `.ct` trace file, backed by the Nim `NewTraceReader`.
 ///
 /// All complex data (steps, values, calls, IO events) is returned as JSON
@@ -3517,11 +3988,19 @@ impl std::fmt::Debug for NimTraceReaderHandle {
 unsafe impl Send for NimTraceReaderHandle {}
 
 /// Helper: read a heap-allocated buffer from Nim into a Rust `String`, then free it.
+///
+/// A null pointer is the C ABI's failure signal and callers check it first;
+/// an empty name is a NON-null buffer of length 0, which still has to be
+/// freed. Freeing only when `len > 0` leaked every empty name's buffer.
 fn read_nim_buffer(ptr: *mut u8, len: usize) -> String {
-    if ptr.is_null() || len == 0 {
+    if ptr.is_null() {
         return String::new();
     }
-    let s = unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len)) }.to_string();
+    let s = if len == 0 {
+        String::new()
+    } else {
+        unsafe { std::str::from_utf8_unchecked(std::slice::from_raw_parts(ptr, len)) }.to_string()
+    };
     unsafe { ct_free_buffer(ptr) };
     s
 }
@@ -3534,6 +4013,9 @@ fn read_nim_buffer(ptr: *mut u8, len: usize) -> String {
 /// whether it is the exit step or the depth.
 pub type CallFields = (u64, i64, u64, u64, u32, u64);
 
+/// Checked recorded entry fields: `(call_key, function_id, entry_step)`.
+pub type RecordedEntryFields = (u64, u64, u64);
+
 impl NimTraceReaderHandle {
     /// Open a `.ct` trace file for reading.
     pub fn open(path: &str) -> Result<Self, Box<dyn Error>> {
@@ -3544,6 +4026,29 @@ impl NimTraceReaderHandle {
             Err(last_error().into())
         } else {
             Ok(Self { handle: h })
+        }
+    }
+
+    /// Open a CTFS image through the supplier's checked owned-byte parser.
+    /// The supplier copies the bytes before returning; it never reopens a path.
+    pub fn from_bytes(data: &[u8]) -> Result<Self, Box<dyn Error>> {
+        ensure_nim_initialized();
+        let handle = unsafe { ct_reader_open_bytes(data.as_ptr().cast(), data.len()) };
+        if handle.is_null() {
+            Err(last_error().into())
+        } else {
+            Ok(Self { handle })
+        }
+    }
+
+    /// Replace the owned image only after the complete candidate parses.
+    /// A rejected candidate leaves this handle's previous image intact.
+    pub fn refresh_from_bytes(&mut self, data: &[u8]) -> Result<(), Box<dyn Error>> {
+        let result = unsafe { ct_reader_refresh_bytes(self.handle, data.as_ptr().cast(), data.len()) };
+        if result != 0 {
+            Err(last_error().into())
+        } else {
+            Ok(())
         }
     }
 
@@ -3561,8 +4066,26 @@ impl NimTraceReaderHandle {
 
     // --- Counts ---
 
+    /// The exec-record count, which the value, call and I/O event streams
+    /// are indexed by.
     pub fn step_count(&self) -> u64 {
         unsafe { ct_reader_step_count(self.handle) }
+    }
+
+    /// The trace's step count: the number of step records, without the
+    /// raise, catch, thread, column-only and source-reload records.
+    pub fn logical_step_count(&self) -> u64 {
+        unsafe { ct_reader_logical_step_count(self.handle) }
+    }
+
+    /// Return the entry identity checked against the supplier's owned image.
+    pub fn recorded_entry(&self) -> Result<Option<RecordedEntryFields>, Box<dyn Error>> {
+        let (mut key, mut function, mut step) = (0, 0, 0);
+        match unsafe { ct_reader_recorded_entry(self.handle, &mut key, &mut function, &mut step) } {
+            0 => Ok(None),
+            1 => Ok(Some((key, function, step))),
+            _ => Err(last_error().into()),
+        }
     }
 
     pub fn call_count(&self) -> u64 {
@@ -3845,13 +4368,29 @@ impl NimTraceReaderHandle {
         }
     }
 
-    /// Number of lines in `file_id` per paths.dat Layout A.  Returns
-    /// `0` when no per-line data is available for that file — the same
-    /// legitimate "no data" sentinel [`line_length_raw`] uses.
+    /// Number of lines in `file_id` per paths.dat Layout A — 100000 for the
+    /// conventional table (see [`Self::path_table_kind`]).  Returns `0` when
+    /// no per-line data is available for that file — the same legitimate
+    /// "no data" sentinel [`line_length_raw`] uses.
     ///
     /// [`line_length_raw`]: Self::line_length_raw
     pub fn line_count_raw(&self, file_id: u64) -> u64 {
         unsafe { ct_reader_line_count_raw(self.handle, file_id) }
+    }
+
+    /// What `paths.dat` records about `file_id`'s size; `None` when there is
+    /// no such path. A column-aware record of `line_count = 0` is
+    /// [`PathTableKind::Conventional`], for which [`Self::line_count_raw`]
+    /// answers 100000 and [`Self::line_length_raw`] 1024 per line, by the
+    /// rule (`internal-files.md` §"`paths.dat` Layout A").
+    pub fn path_table_kind(&self, file_id: u64) -> Option<PathTableKind> {
+        match unsafe { ct_reader_path_table_kind(self.handle, file_id) } {
+            0 => Some(PathTableKind::Bare),
+            1 => Some(PathTableKind::LineCount),
+            2 => Some(PathTableKind::Lines),
+            3 => Some(PathTableKind::Conventional),
+            _ => None,
+        }
     }
 
     /// M-capability-flags — true when the trace's recorder
@@ -3963,7 +4502,7 @@ impl NimTraceReaderHandle {
     }
 
     /// Get the fields of an IO event.
-    /// Returns (kind, step_id, data). kind: 0=stdout, 1=stderr, 2=file_op, 3=error.
+    /// Returns (kind, step_id, data); `kind` is the exact `EventLogKind` ordinal.
     pub fn event_fields(&self, index: u64) -> Result<(u8, u64, Vec<u8>), Box<dyn Error>> {
         let mut kind: u8 = 0;
         let mut step_id: u64 = 0;

@@ -12,7 +12,13 @@ repro exec ~/metacraft/codetracer-trace-format -- cargo test --workspace
 Run the full test suite:
 ```
 cargo test --workspace
+bash codetracer_trace_writer_nim/tests/nimcache_environment.sh
 ```
+
+The second check runs the real Cargo/Nim build with two short temporary-directory
+overrides and an overlong one (`TMPDIR` on POSIX; `TMP`/`TEMP`/`SYSTEMTEMP` on
+Windows) to verify environment invalidation and the short-cache fallback.
+`just test` (also run by CI) includes it after the Rust tests.
 
 ## Working on zeekstd
 

@@ -8,6 +8,13 @@ repository = "https://github.com/metacraft-labs/runtime_tracing"
 license = "MIT"
 keywords = ["debugging", "development-tools"]
 
+# The zstd codec of every stream reader here is `codetracer_ctfs`'s, chosen by
+# feature on every target (`chunk_codec`). `pure-rust-zstd` wins when both are
+# on, as it does in `codetracer_ctfs`.
+[features]
+default = []
+pure-rust-zstd = ["codetracer_ctfs/pure-rust-zstd", "codetracer_trace_writer/pure-rust-zstd"]
+
 [dependencies]
 codetracer_trace_types.workspace = true
 codetracer_trace_format_capnp.workspace = true
@@ -31,6 +38,11 @@ ruzstd = "0.8.1"
 workspace = true
 
 [dev-dependencies]
+# The shared Nim adjudicator test module (codetracer_ctfs/tests/nim_adjudicator)
+# hashes the declared runtime images it is handed.
+sha2 = "0.10"
+# Portable held Unix fixture authority, resolved by normal Cargo lock tooling.
+libc = "0.2"
 tempfile = "3"
 # M-REC-1: parse and validate UUIDv7 recording_id in integration tests.
 uuid = { version = "1.10", features = ["v7"] }

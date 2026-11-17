@@ -18,32 +18,21 @@
 //!
 //! # Independent chunk decode
 //!
-//! Each chunk is decoded with its own running absolute `global_line_index`
-//! (reset to `None` at the chunk start), because the writer guarantees the
-//! first `Step` record of every chunk is AbsoluteStep
-//! (`step_stream::encode_step_stream`, encoding rule 5). DeltaStep records
-//! within a chunk resolve against the running absolute carried forward inside
-//! that chunk only — so any chunk decodes correctly without touching its
-//! neighbours.
+//! Each chunk is decoded with its own cursor, starting without one: the first
+//! position record of every chunk is an AbsoluteStep (`trace-events.md`
+//! §"Encoding Rules"), and deltas resolve against the cursor carried forward
+//! inside that chunk only — so any chunk decodes without touching its
+//! neighbours. A DeltaStep or DeltaColumn before the chunk's first
+//! AbsoluteStep is refused, naming the chunk: resolving it against `0`, or
+//! against the previous chunk, would invent positions nobody recorded.
 
-use codetracer_ctfs::CtfsReader;
+use crate::ChunkForm;
+use codetracer_ctfs::{CtfsReader, MemberBytes};
 use codetracer_trace_writer::meta_dat::{FLAG_EXT_HAS_SOURCE_RELOAD, read_meta_dat_ext_flags};
 use codetracer_trace_writer::step_stream::{StepStreamRecord, decode_record_declared};
 
-#[cfg(not(target_arch = "wasm32"))]
 fn decode_zstd_chunk(compressed: &[u8]) -> Result<Vec<u8>, String> {
-    zstd::decode_all(std::io::Cursor::new(compressed)).map_err(|e| format!("steps.dat: zstd decode failed: {e}"))
-}
-
-#[cfg(target_arch = "wasm32")]
-fn decode_zstd_chunk(compressed: &[u8]) -> Result<Vec<u8>, String> {
-    use std::io::Read;
-
-    let mut decoder =
-        ruzstd::decoding::StreamingDecoder::new(std::io::Cursor::new(compressed)).map_err(|e| format!("steps.dat: zstd decode failed: {e}"))?;
-    let mut raw = Vec::new();
-    decoder.read_to_end(&mut raw).map_err(|e| format!("steps.dat: zstd decode failed: {e}"))?;
-    Ok(raw)
+    crate::chunk_codec::inflate("steps.dat", compressed)
 }
 
 /// A loaded `steps.idx`: the per-chunk byte offsets into `steps.dat`.
@@ -98,36 +87,134 @@ pub fn decode_chunk_records(compressed: &[u8]) -> Result<Vec<StepStreamRecord>, 
 }
 
 /// [`decode_chunk_records`], accepting tag 8 exactly when
-/// `allow_source_reload`.
+/// `allow_source_reload`. A caller that knows the chunk's number uses
+/// [`decode_chunk_records_at`], whose refusals name it.
 pub fn decode_chunk_records_declared(compressed: &[u8], allow_source_reload: bool) -> Result<Vec<StepStreamRecord>, String> {
     let raw = decode_zstd_chunk(compressed)?;
     let mut records = Vec::new();
+    decode_raw_records(&raw, allow_source_reload, &mut records)?;
+    Ok(records)
+}
+
+/// Decode an inflated chunk's records into `records`, replacing its contents.
+fn decode_raw_records(raw: &[u8], allow_source_reload: bool, records: &mut Vec<StepStreamRecord>) -> Result<(), String> {
+    records.clear();
     let mut pos = 0usize;
     let mut prev_abs: Option<u64> = None;
     while pos < raw.len() {
-        let (rec, next) = decode_record_declared(&raw, &mut pos, prev_abs, allow_source_reload)?;
+        let (rec, next) = decode_record_declared(raw, &mut pos, prev_abs, allow_source_reload)?;
         prev_abs = next;
         records.push(rec);
     }
-    Ok(records)
+    Ok(())
+}
+
+/// [`decode_chunk_records_declared`] for chunk number `chunk`, whose refusals
+/// name the chunk.
+pub fn decode_chunk_records_at(compressed: &[u8], chunk: usize, allow_source_reload: bool) -> Result<Vec<StepStreamRecord>, String> {
+    decode_chunk_records_declared(compressed, allow_source_reload).map_err(|e| format!("steps.dat chunk {chunk}: {e}"))
+}
+
+/// How many records apart [`StepChunk`] notes where decoding can restart.
+const CHECKPOINT_EVERY: usize = 64;
+
+/// Where the decode of an inflated chunk stands: the next record, its offset
+/// in the chunk and the position deltas resolve against there.
+#[derive(Debug, Clone, Copy, Default)]
+struct Cursor {
+    record: usize,
+    pos: usize,
+    prev_abs: Option<u64>,
+}
+
+/// One inflated `steps.dat` chunk, decoded as far as reads have reached.
+///
+/// A record's position can depend on every record before it in its chunk
+/// (deltas resolve against the last absolute position), so a chunk is decoded
+/// from its start. The cursor every [`CHECKPOINT_EVERY`]th record passed is
+/// kept, so a read behind the cursor resumes from the last checkpoint at or
+/// before it rather than from the start of the chunk.
+#[derive(Debug, Default)]
+struct StepChunk {
+    raw: Vec<u8>,
+    cursor: Cursor,
+    checkpoints: Vec<Cursor>,
+}
+
+impl StepChunk {
+    /// Start over on a freshly inflated `raw`.
+    fn reset(&mut self) {
+        self.cursor = Cursor::default();
+        self.checkpoints.clear();
+    }
+
+    /// Decode the record under the cursor and move past it, or `None` at the
+    /// end of the chunk.
+    fn next(&mut self, allow_source_reload: bool) -> Result<Option<StepStreamRecord>, String> {
+        let c = &mut self.cursor;
+        if c.pos >= self.raw.len() {
+            return Ok(None);
+        }
+        if c.record.is_multiple_of(CHECKPOINT_EVERY) && self.checkpoints.len() == c.record / CHECKPOINT_EVERY {
+            self.checkpoints.push(*c);
+        }
+        let (rec, prev_abs) = decode_record_declared(&self.raw, &mut c.pos, c.prev_abs, allow_source_reload)?;
+        c.prev_abs = prev_abs;
+        c.record += 1;
+        Ok(Some(rec))
+    }
+
+    /// Record `within` of the chunk, or `None` when the chunk holds fewer.
+    fn record(&mut self, within: usize, allow_source_reload: bool) -> Result<Option<StepStreamRecord>, String> {
+        if within < self.cursor.record {
+            // Every checkpoint up to the cursor has been passed and noted.
+            self.cursor = self.checkpoints[within / CHECKPOINT_EVERY];
+        }
+        while self.cursor.record < within {
+            if self.next(allow_source_reload)?.is_none() {
+                return Ok(None);
+            }
+        }
+        self.next(allow_source_reload)
+    }
 }
 
 /// A seekable reader over a container's `steps.dat` stream.
 ///
 /// The index (`steps.idx`) and the raw `steps.dat` bytes are loaded once; each
 /// `read(index)` decompresses only the single chunk that holds the target
-/// record. A simple last-chunk cache avoids re-decompressing when reads are
-/// sequential or clustered within a chunk.
+/// record, and decodes it only as far as that record. The last chunk is kept,
+/// so sequential reads decode each record once and reads clustered within a
+/// chunk inflate it once.
 pub struct StepStreamReader {
     index: StepsIndex,
-    dat: Vec<u8>,
+    /// `steps.dat`, shared with the container when it is in memory.
+    dat: MemberBytes,
     /// Total number of records.
     record_count: u64,
-    /// Cache of the most-recently-decompressed chunk: (chunk_number, records).
-    cached_chunk: Option<(usize, Vec<StepStreamRecord>)>,
+    /// The chunk `chunk` holds, `None` until the first read.
+    cached_chunk: Option<usize>,
+    /// The most recently inflated chunk; its buffers are reused.
+    chunk: StepChunk,
     /// Whether `meta.dat` declares `FLAG_EXT_HAS_SOURCE_RELOAD`, which is what
     /// admits tag 8 to this stream.
     allow_source_reload: bool,
+    /// Whether a chunk is a frame to inflate or its content.
+    form: ChunkForm,
+    /// Chunks inflated so far; see [`StepStreamReader::inflations`].
+    inflations: u64,
+}
+
+/// Inflate chunk `chunk_number` of the stream `index` locates in `dat` into
+/// `chunk`, and start its decode over.
+fn inflate_chunk(index: &StepsIndex, dat: &MemberBytes, form: ChunkForm, chunk_number: usize, chunk: &mut StepChunk) -> Result<(), String> {
+    let start = index.chunk_offsets[chunk_number] as usize;
+    let end = crate::follow::chunk_end("steps.dat", form, dat, &index.chunk_offsets, chunk_number)?;
+    let frame = dat.get(start, end).map_err(|e| format!("steps.dat: chunk {chunk_number}: {e}"))?;
+    form.content_into(&frame, &mut chunk.raw)
+        .map_err(|e| format!("steps.dat chunk {chunk_number}: steps.dat: zstd decode failed: {e}"))?;
+    chunk.reset();
+    Ok(())
 }
 
 /// Whether a `meta.dat` declares source reload markers. An absent `meta.dat`
@@ -146,6 +233,18 @@ impl StepStreamReader {
     /// were sourced (local file, follow source, HTTP range, overlay) while
     /// preserving the exact same decode/cache path as [`Self::open`].
     pub fn from_files(meta: &[u8], dat: Vec<u8>, idx: Vec<u8>) -> Result<Option<StepStreamReader>, String> {
+        Self::from_member(meta, MemberBytes::from(dat), &idx)
+    }
+
+    /// [`Self::from_files`] over a `steps.dat` the reader shares with its
+    /// container rather than owns.
+    pub fn from_member(meta: &[u8], dat: MemberBytes, idx: &[u8]) -> Result<Option<StepStreamReader>, String> {
+        Self::from_member_as(meta, dat, idx, ChunkForm::Framed)
+    }
+
+    /// [`Self::from_member`] over chunks stored in `form`: the form of the
+    /// container the members came from ([`ChunkForm::of`]).
+    pub fn from_member_as(meta: &[u8], dat: MemberBytes, idx: &[u8], form: ChunkForm) -> Result<Option<StepStreamReader>, String> {
         // Existence is answered by STRUCTURAL PRESENCE — the caller resolved
         // `steps.dat` / `steps.idx` by `findFile` + `FileEntry.Size` and handed
         // their bytes here. The `meta.dat` `has_step_stream` hint bit (bit 9) is
@@ -155,31 +254,99 @@ impl StepStreamReader {
         // gate"). `meta` is read only for its extended flags, which decide
         // whether tag 8 is admitted.
         let allow_source_reload = meta_declares_source_reload(meta)?;
-        let index = StepsIndex::parse(&idx)?;
-
-        // Compute the total record count: all chunks but the last hold
-        // chunk_size records; the last holds however many records decode out of
-        // it. Empty stream ⇒ zero records.
-        let record_count = if index.chunk_offsets.is_empty() {
-            0
-        } else {
-            let last_chunk = index.chunk_offsets.len() - 1;
-            let start = index.chunk_offsets[last_chunk] as usize;
-            let end = dat.len();
-            if start > end {
-                return Err("steps.idx: last chunk offset past end of steps.dat".to_string());
-            }
-            let last_records = decode_chunk_records_declared(&dat[start..end], allow_source_reload)?.len();
-            (last_chunk * index.chunk_size + last_records) as u64
-        };
-
-        Ok(Some(StepStreamReader {
+        let index = StepsIndex::parse(idx)?;
+        let mut reader = StepStreamReader {
             index,
             dat,
-            record_count,
+            record_count: 0,
             cached_chunk: None,
+            chunk: StepChunk::default(),
             allow_source_reload,
-        }))
+            form,
+            inflations: 0,
+        };
+
+        // Compute the total record count. Counting is not a read: the cache
+        // starts empty, as `cached_chunk` reports.
+        let mut scratch = std::mem::take(&mut reader.chunk);
+        let index = std::mem::replace(
+            &mut reader.index,
+            StepsIndex {
+                chunk_size: 1,
+                chunk_offsets: Vec::new(),
+            },
+        );
+        let counted = reader.count_records(&index, &reader.dat, &mut scratch);
+        reader.index = index;
+        reader.chunk = scratch;
+        reader.record_count = counted?;
+        if !reader.index.chunk_offsets.is_empty() {
+            reader.inflations += 1;
+        }
+        Ok(Some(reader))
+    }
+
+    /// Inflate chunk `chunk_number` into `chunk`, unless it already holds it.
+    fn inflate(&mut self, chunk_number: usize) -> Result<(), String> {
+        if self.cached_chunk == Some(chunk_number) {
+            return Ok(());
+        }
+        self.cached_chunk = None;
+        inflate_chunk(&self.index, &self.dat, self.form, chunk_number, &mut self.chunk)?;
+        self.inflations += 1;
+        self.cached_chunk = Some(chunk_number);
+        Ok(())
+    }
+
+    /// The records the stream holds when its index is `index` and its data
+    /// `dat`: every chunk but the last holds `chunk_size`, and the last as many
+    /// as decode out of it, decoded into `scratch`.
+    fn count_records(&self, index: &StepsIndex, dat: &MemberBytes, scratch: &mut StepChunk) -> Result<u64, String> {
+        let Some(last_chunk) = index.chunk_offsets.len().checked_sub(1) else {
+            return Ok(0);
+        };
+        if index.chunk_offsets[last_chunk] as usize > dat.len() {
+            return Err("steps.idx: last chunk offset past end of steps.dat".to_string());
+        }
+        inflate_chunk(index, dat, self.form, last_chunk, scratch)?;
+        while scratch
+            .next(self.allow_source_reload)
+            .map_err(|e| format!("steps.dat chunk {last_chunk}: {e}"))?
+            .is_some()
+        {}
+        Ok((last_chunk * index.chunk_size + scratch.cursor.record) as u64)
+    }
+
+    /// Follow a container that is being written: extend this reader by the
+    /// chunks `reader`'s container has published since it was opened or last
+    /// refreshed (`ctfs-container.md` §6). Only the new last chunk is decoded,
+    /// to count its records; chunks already read stay as they were read. A
+    /// re-read index that does not extend the one already read is refused.
+    pub fn refresh(&mut self, reader: &mut CtfsReader) -> Result<(), String> {
+        let (dat, idx) = crate::follow::read_published(reader, "steps")?;
+        let index = StepsIndex::parse(&idx)?;
+        crate::follow::check_extends(
+            "steps.idx",
+            self.index.chunk_size,
+            &self.index.chunk_offsets,
+            index.chunk_size,
+            &index.chunk_offsets,
+            dat.len(),
+        )?;
+        if index.chunk_offsets.len() != self.index.chunk_offsets.len() {
+            let mut scratch = StepChunk::default();
+            self.record_count = self.count_records(&index, &dat, &mut scratch)?;
+            self.inflations += 1;
+        }
+        self.index = index;
+        self.dat = dat;
+        Ok(())
+    }
+
+    /// How many chunks this reader has inflated: reads, counting the last
+    /// chunk at open, and counting a new last chunk at a refresh.
+    pub fn inflations(&self) -> u64 {
+        self.inflations
     }
 
     /// Open the step stream from an already-open CTFS reader. Returns
@@ -187,7 +354,8 @@ impl StepStreamReader {
     /// by STRUCTURAL PRESENCE of the stream file, not by the `has_step_stream`
     /// hint bit (see [`Self::from_files`]).
     pub fn open(reader: &mut CtfsReader) -> Result<Option<StepStreamReader>, String> {
-        let dat = match reader.read_file("steps.dat") {
+        crate::retired_streams::refuse_retired_members(reader)?;
+        let dat = match reader.read_member("steps.dat") {
             Ok(d) => d,
             Err(_) => return Ok(None),
         };
@@ -195,7 +363,7 @@ impl StepStreamReader {
             .read_file("steps.idx")
             .map_err(|e| format!("steps.idx missing despite steps.dat presence: {e}"))?;
         let meta = reader.read_file("meta.dat").unwrap_or_default();
-        StepStreamReader::from_files(&meta, dat, idx)
+        StepStreamReader::from_member_as(&meta, dat, &idx, ChunkForm::of(reader))
     }
 
     /// Total number of execution-stream records in the stream.
@@ -215,7 +383,7 @@ impl StepStreamReader {
     /// `None` if nothing has been decompressed yet. Lets a downstream reader
     /// observe exactly which chunks were inflated (bounded-decompression probe).
     pub fn cached_chunk(&self) -> Option<usize> {
-        self.cached_chunk.as_ref().map(|(c, _)| *c)
+        self.cached_chunk
     }
 
     /// Read the execution-stream record at `index`, decompressing only its
@@ -228,27 +396,30 @@ impl StepStreamReader {
         let chunk_number = (index as usize) / self.index.chunk_size;
         let within = (index as usize) % self.index.chunk_size;
 
-        // Use the cache when the target chunk is already decompressed.
-        let need_decompress = !matches!(&self.cached_chunk, Some((c, _)) if *c == chunk_number);
-        if need_decompress {
-            let start = self.index.chunk_offsets[chunk_number] as usize;
-            let end = if chunk_number + 1 < self.index.chunk_offsets.len() {
-                self.index.chunk_offsets[chunk_number + 1] as usize
-            } else {
-                self.dat.len()
-            };
-            if start > end || end > self.dat.len() {
-                return Err("steps.dat: chunk offsets out of range".to_string());
+        self.inflate(chunk_number)?;
+        match self.chunk.record(within, self.allow_source_reload) {
+            Ok(Some(rec)) => Ok(rec),
+            Ok(None) => Err(format!("step record {within} missing in chunk {chunk_number}")),
+            Err(e) => {
+                // The cursor stopped inside the record that failed; a later
+                // read starts the chunk over and meets the same refusal.
+                self.cached_chunk = None;
+                Err(format!("steps.dat chunk {chunk_number}: {e}"))
             }
-            let records = decode_chunk_records_declared(&self.dat[start..end], self.allow_source_reload)?;
-            self.cached_chunk = Some((chunk_number, records));
         }
+    }
 
-        let records = &self.cached_chunk.as_ref().unwrap().1;
-        if within >= records.len() {
-            return Err(format!("step record {within} missing in chunk {chunk_number}"));
+    /// The trace's step count: the number of step records, and no other exec
+    /// record (`trace-events.md` §"Which exec records are steps"). [`Self::count`]
+    /// is the exec-record count, which the other streams are indexed by.
+    pub fn logical_step_count(&mut self) -> Result<u64, String> {
+        let mut n = 0;
+        for i in 0..self.record_count {
+            if self.read(i)?.is_step() {
+                n += 1;
+            }
         }
-        Ok(records[within].clone())
+        Ok(n)
     }
 
     /// Read all execution-stream records (convenience for tests / small traces).

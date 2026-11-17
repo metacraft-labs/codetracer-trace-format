@@ -177,6 +177,12 @@ pub struct InterningTablesBuilder {
     /// The line count the NEXT `Path` event's record carries and its file is
     /// sized with. Consumed by that event.
     next_path_line_count: Option<u64>,
+    /// The bytes a name stands for when they are not UTF-8: a function,
+    /// type or variable name interned under a key of this map is recorded as
+    /// these bytes. See [`InterningTablesBuilder::register_raw_name`].
+    raw_names: std::collections::HashMap<String, Vec<u8>>,
+    /// Recorded path bytes for logical keys that cannot be host OS strings.
+    raw_paths: std::collections::HashMap<std::path::PathBuf, Vec<u8>>,
 }
 
 impl InterningTablesBuilder {
@@ -230,6 +236,23 @@ impl InterningTablesBuilder {
         self.path_line_lengths[path_id] = line_lengths.to_vec();
     }
 
+    /// Record the name interned under `key` as `bytes`. Interning tables
+    /// store names as bytes, which need not be UTF-8; a writer whose events
+    /// carry names as `String` interns such a name under a key no UTF-8 name
+    /// equals and registers its bytes here.
+    pub fn register_raw_name(&mut self, key: String, bytes: Vec<u8>) {
+        self.raw_names.insert(key, bytes);
+    }
+
+    /// Bind a collision-free logical path key to its original wire bytes.
+    pub fn register_raw_path(&mut self, key: std::path::PathBuf, bytes: Vec<u8>) {
+        self.raw_paths.insert(key, bytes);
+    }
+
+    fn name_bytes(&self, name: &str) -> Vec<u8> {
+        self.raw_names.get(name).cloned().unwrap_or_else(|| name.as_bytes().to_vec())
+    }
+
     /// Feed one event in stream order. Only the four interning events contribute
     /// records; all others are ignored. The legacy `Variable` event (tag 3) is a
     /// backward-compat alias of `VariableName` and is interned the same way so
@@ -237,7 +260,12 @@ impl InterningTablesBuilder {
     pub fn observe(&mut self, event: &TraceLowLevelEvent) {
         match event {
             TraceLowLevelEvent::Path(path) => {
-                self.paths.push(path.to_string_lossy().into_owned().into_bytes());
+                self.paths.push(
+                    self.raw_paths
+                        .get(path)
+                        .cloned()
+                        .unwrap_or_else(|| path.as_os_str().as_encoded_bytes().to_vec()),
+                );
                 match self.next_path_line_count.take() {
                     Some(count) => {
                         self.space.push_file(count);
@@ -251,18 +279,20 @@ impl InterningTablesBuilder {
             }
             TraceLowLevelEvent::Function(FunctionRecord { path_id, line, name }) => {
                 let gli = self.space.global_index(path_id.0, line.0);
-                self.funcs.push((gli, name.clone().into_bytes()));
+                let name = self.name_bytes(name);
+                self.funcs.push((gli, name));
             }
             TraceLowLevelEvent::Type(TypeRecord {
                 kind,
                 lang_type,
                 specific_info,
             }) => {
-                self.types
-                    .push((*kind as u8, lang_type.clone().into_bytes(), serialize_specific_info(specific_info)));
+                let lang_type = self.name_bytes(lang_type);
+                self.types.push((*kind as u8, lang_type, serialize_specific_info(specific_info)));
             }
             TraceLowLevelEvent::VariableName(name) | TraceLowLevelEvent::Variable(name) => {
-                self.varnames.push(name.clone().into_bytes());
+                let name = self.name_bytes(name);
+                self.varnames.push(name);
             }
             _ => {}
         }
@@ -288,57 +318,82 @@ impl InterningTablesBuilder {
         self.varnames.len()
     }
 
+    /// Append record `id` of table `table` (0 `paths`, 1 `funcs`, 2 `types`,
+    /// 3 `varnames`) to `out`.
+    pub fn append_record(&self, table: usize, id: usize, out: &mut Vec<u8>) {
+        match table {
+            0 if !self.column_aware && !self.line_count_table => out.extend_from_slice(&self.paths[id]),
+            0 => out.extend_from_slice(&self.path_record(id)),
+            1 => {
+                let (gli, name) = &self.funcs[id];
+                encode_func_record(*gli, name, out);
+            }
+            2 => {
+                let (kind, lang_type, specific_info) = &self.types[id];
+                encode_type_record(*kind, lang_type, specific_info, out);
+            }
+            _ => out.extend_from_slice(&self.varnames[id]),
+        }
+    }
+
+    /// The number of records table `table` holds (numbered as in
+    /// [`Self::append_record`]).
+    pub fn count(&self, table: usize) -> usize {
+        match table {
+            0 => self.paths.len(),
+            1 => self.funcs.len(),
+            2 => self.types.len(),
+            _ => self.varnames.len(),
+        }
+    }
+
+    /// The `paths.dat` record of path `id`, in the trace's layout.
+    pub fn path_record(&self, id: usize) -> Vec<u8> {
+        let raw_path = &self.paths[id];
+        if self.column_aware {
+            let empty: Vec<u32> = Vec::new();
+            let lls = self.path_line_lengths.get(id).unwrap_or(&empty);
+            crate::column_aware::encode_path_bytes_record_layout_a(raw_path, lls)
+        } else if self.line_count_table {
+            let mut rec = Vec::with_capacity(raw_path.len() + 12);
+            encode_varint(raw_path.len() as u64, &mut rec);
+            rec.extend_from_slice(raw_path);
+            encode_varint(self.path_line_counts.get(id).copied().unwrap_or(0), &mut rec);
+            rec
+        } else {
+            raw_path.clone()
+        }
+    }
+
+    /// The `funcs.dat` record of function `id`: `global_line_index` + name.
+    pub fn func_record(&self, id: usize) -> Vec<u8> {
+        let (gli, name) = &self.funcs[id];
+        let mut rec = Vec::new();
+        encode_func_record(*gli, name, &mut rec);
+        rec
+    }
+
+    /// The `types.dat` record of type `id`: kind + lang_type + specific_info.
+    pub fn type_record(&self, id: usize) -> Vec<u8> {
+        let (kind, lang_type, specific_info) = &self.types[id];
+        let mut rec = Vec::new();
+        encode_type_record(*kind, lang_type, specific_info, &mut rec);
+        rec
+    }
+
+    /// The `varnames.dat` record of name `id`: its raw bytes.
+    pub fn varname_record(&self, id: usize) -> Vec<u8> {
+        self.varnames[id].clone()
+    }
+
     /// Finalize: encode all four `.dat` data files and their `.off` offset
     /// indices.
     pub fn finish(self) -> EncodedInterningTables {
-        // varnames.dat is a raw-byte table in both modes.
-        let (varnames_dat, varnames_off) = encode_raw_table(&self.varnames);
-
-        // paths.dat is raw bytes in line-only mode and Layout A in
-        // column-aware mode. The `.off` framing is identical either way — only
-        // the record contents change — so a reader that has the flag can parse
-        // and one that does not is required by spec to have refused the trace.
-        let (paths_dat, paths_off) = if self.column_aware {
-            let mut records: Vec<Vec<u8>> = Vec::with_capacity(self.paths.len());
-            for (id, raw_path) in self.paths.iter().enumerate() {
-                let path = String::from_utf8_lossy(raw_path);
-                let empty: Vec<u32> = Vec::new();
-                let lls = self.path_line_lengths.get(id).unwrap_or(&empty);
-                records.push(crate::column_aware::encode_path_record_layout_a(&path, lls));
-            }
-            encode_raw_table(&records)
-        } else if self.line_count_table {
-            let mut records: Vec<Vec<u8>> = Vec::with_capacity(self.paths.len());
-            for (id, raw_path) in self.paths.iter().enumerate() {
-                let mut rec = Vec::with_capacity(raw_path.len() + 12);
-                encode_varint(raw_path.len() as u64, &mut rec);
-                rec.extend_from_slice(raw_path);
-                encode_varint(self.path_line_counts.get(id).copied().unwrap_or(0), &mut rec);
-                records.push(rec);
-            }
-            encode_raw_table(&records)
-        } else {
-            encode_raw_table(&self.paths)
-        };
-
-        // funcs.dat: each record is global_line_index + name.
-        let mut func_records: Vec<Vec<u8>> = Vec::with_capacity(self.funcs.len());
-        for (gli, name) in &self.funcs {
-            let mut rec = Vec::new();
-            encode_func_record(*gli, name, &mut rec);
-            func_records.push(rec);
-        }
-        let (funcs_dat, funcs_off) = encode_raw_table(&func_records);
-
-        // types.dat: each record is kind + lang_type + specific_info.
-        let mut type_records: Vec<Vec<u8>> = Vec::with_capacity(self.types.len());
-        for (kind, lang_type, specific_info) in &self.types {
-            let mut rec = Vec::new();
-            encode_type_record(*kind, lang_type, specific_info, &mut rec);
-            type_records.push(rec);
-        }
-        let (types_dat, types_off) = encode_raw_table(&type_records);
-
+        let table = |n: usize, f: &dyn Fn(usize) -> Vec<u8>| encode_raw_table(&(0..n).map(f).collect::<Vec<_>>());
+        let (paths_dat, paths_off) = table(self.paths.len(), &|i| self.path_record(i));
+        let (funcs_dat, funcs_off) = table(self.funcs.len(), &|i| self.func_record(i));
+        let (types_dat, types_off) = table(self.types.len(), &|i| self.type_record(i));
+        let (varnames_dat, varnames_off) = table(self.varnames.len(), &|i| self.varname_record(i));
         EncodedInterningTables {
             paths_dat,
             paths_off,
@@ -400,6 +455,39 @@ mod tests {
         assert_eq!(read_record(&dat, &off, 2), b"hello");
         // Trailing sentinel == total length.
         assert_eq!(read_off(&off, 3) as usize, dat.len());
+    }
+
+    #[test]
+    fn recorded_raw_paths_keep_bytes_in_every_layout() {
+        let raw = b"/src/b\xff\xfed.py";
+        let key = PathBuf::from("\0raw-path:test");
+        let replacement = PathBuf::from("/src/b\u{fffd}\u{fffd}d.py");
+        for layout in 0..3 {
+            let mut b = InterningTablesBuilder::new();
+            b.set_column_aware(layout == 2);
+            b.set_line_count_table(layout == 1);
+            b.register_raw_path(key.clone(), raw.to_vec());
+            b.set_next_path_line_count(7);
+            b.observe(&TraceLowLevelEvent::Path(key.clone()));
+            b.set_path_line_lengths(0, &[2, 5]);
+            b.set_next_path_line_count(7);
+            b.observe(&TraceLowLevelEvent::Path(replacement.clone()));
+            b.set_path_line_lengths(1, &[2, 5]);
+            let expected = match layout {
+                0 => raw.to_vec(),
+                1 => {
+                    let mut r = vec![];
+                    encode_varint(raw.len() as u64, &mut r);
+                    r.extend_from_slice(raw);
+                    encode_varint(7, &mut r);
+                    r
+                }
+                _ => crate::column_aware::encode_path_bytes_record_layout_a(raw, &[2, 5]),
+            };
+            let t = b.finish();
+            assert_eq!(read_record(&t.paths_dat, &t.paths_off, 0), expected);
+            assert_ne!(read_record(&t.paths_dat, &t.paths_off, 0), read_record(&t.paths_dat, &t.paths_off, 1));
+        }
     }
 
     #[test]

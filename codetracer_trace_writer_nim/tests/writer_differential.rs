@@ -178,18 +178,20 @@ struct Pos {
 
 /// Three files with deliberately uneven line tables:
 ///
-/// * file 0 — one line of 8 columns: the "everything on line 1" minified case,
-///   and the origin of the whole address space.
+/// * file 0 — one line of 200 columns: the "everything on line 1" minified
+///   case, the origin of the address space, and wide enough that every later
+///   position is at least 128 — two varint bytes — so a one-byte delta is
+///   strictly shorter than the position and the rule's delta forms are
+///   exercised (`trace-events.md` §"Encoding Rules").
 /// * file 1 — three lines of 64 / 70 / 3: the long lines exist so the fixture
-///   can produce position deltas of **exactly ±63, ±64 and ±65** and pin Nim's
-///   delta window. With the original 5/12/3 table every delta in the trace was
-///   under 7, and widening the window from 63 to 64 changed no byte — the
-///   mutation matrix caught that and this is the repair.
+///   can produce position deltas of **exactly ±63, ±64 and ±65**, the edge of
+///   a one-byte zigzag varint, where the rule flips between a delta and a tie
+///   that goes to the absolute.
 /// * file 2 — one line of 4 columns: a file boundary late in the trace.
 ///
-/// Total addressable positions: 8 + 137 + 4 = 149.
+/// Total addressable positions: 200 + 137 + 4 = 341.
 fn fixture_line_lengths() -> Vec<Vec<u32>> {
-    vec![vec![8], vec![64, 70, 3], vec![4]]
+    vec![vec![200], vec![64, 70, 3], vec![4]]
 }
 
 fn fixture_paths() -> Vec<PathBuf> {
@@ -202,48 +204,49 @@ fn fixture_paths() -> Vec<PathBuf> {
 
 /// The operation sequence.
 ///
-/// File bases are 0 / 8 / 145, so the positions below are, in order:
-/// 0, 3, 7, 8, 71, 8, 72, 8, 73, 8, then a thread switch, then a column move
-/// to 11, then 78, 145, 148. The deltas that matter:
+/// File bases are 0 / 200 / 337, so the positions below are, in order:
+/// 0, 3, 7, 200, 263, 200, 264, 200, 265, 200, then a thread switch, then a
+/// column move to 203, then 270, 337, 340. Every position from 200 on is two
+/// varint bytes, so under the rule (a delta exactly when its varint is
+/// strictly shorter; a tie goes to the absolute):
 ///
 /// | from → to | delta | expected encoding |
 /// |---|---|---|
-/// | 8 → 71 | +63 | `DeltaStep` — the last value inside Nim's window |
-/// | 71 → 8 | -63 | `DeltaStep` |
-/// | 8 → 72 | +64 | **`AbsoluteStep`** — one past the window |
-/// | 72 → 8 | -64 | `DeltaStep` — the last value inside on the negative side |
-/// | 8 → 73 | +65 | `AbsoluteStep` |
-/// | 73 → 8 | -65 | `AbsoluteStep` — one past on the negative side |
+/// | 200 → 263 | +63 | `DeltaStep` — one byte against two |
+/// | 263 → 200 | -63 | `DeltaStep` |
+/// | 200 → 264 | +64 | **`AbsoluteStep`** — two bytes each: a tie |
+/// | 264 → 200 | -64 | `DeltaStep` — the last one-byte delta on the negative side |
+/// | 200 → 265 | +65 | `AbsoluteStep` |
+/// | 265 → 200 | -65 | `AbsoluteStep` — a tie on the negative side |
+/// | 200 → 203 | +3 (column) | `DeltaColumn` |
 ///
-/// Those six rows are what make a `NIM_DELTA_MAX` or `NIM_DELTA_MIN` off by one
-/// visible in the bytes.
+/// Those rows are what make an off-by-one in the length comparison, or a tie
+/// that goes to the delta, visible in the bytes.
 fn fixture_ops() -> Vec<Op> {
     vec![
-        // A thread switch BEFORE the first step. Both writers count it as a
-        // step slot, and `step_count` is what decides "the first step is
-        // absolute" — so the step after it encodes as a `DeltaStep` from
-        // position 0, not as an `AbsoluteStep`. Without this op in the fixture,
-        // making the counter stop counting changed no byte.
+        // A thread switch BEFORE the first step: the chunk opens with a
+        // thread record, and its first POSITION record must still be an
+        // AbsoluteStep — the anchor a reader decodes the chunk from.
         Op::ThreadSwitch { thread_id: 1 },
-        Op::Step { file: 0, line: 1, column: 1 }, // 0   — first step, absolute
-        Op::Step { file: 0, line: 1, column: 4 }, // 3   — +3
-        Op::Step { file: 0, line: 1, column: 8 }, // 7   — +4
-        Op::Step { file: 1, line: 1, column: 1 }, // 8   — +1, crosses a file
+        Op::Step { file: 0, line: 1, column: 1 }, // 0   — the chunk's first position, absolute
+        Op::Step { file: 0, line: 1, column: 4 }, // 3   — +3, one byte each: absolute
+        Op::Step { file: 0, line: 1, column: 8 }, // 7   — +4, absolute
+        Op::Step { file: 1, line: 1, column: 1 }, // 200 — crosses a file
         Op::Step {
             file: 1,
             line: 1,
             column: 64,
-        }, // 71  — +63, window edge
-        Op::Step { file: 1, line: 1, column: 1 }, // 8   — -63
-        Op::Step { file: 1, line: 2, column: 1 }, // 72  — +64, one past
-        Op::Step { file: 1, line: 1, column: 1 }, // 8   — -64, window edge
-        Op::Step { file: 1, line: 2, column: 2 }, // 73  — +65
-        Op::Step { file: 1, line: 1, column: 1 }, // 8   — -65, one past
+        }, // 263 — +63, a one-byte delta
+        Op::Step { file: 1, line: 1, column: 1 }, // 200 — -63
+        Op::Step { file: 1, line: 2, column: 1 }, // 264 — +64, a tie: absolute
+        Op::Step { file: 1, line: 1, column: 1 }, // 200 — -64, a one-byte delta
+        Op::Step { file: 1, line: 2, column: 2 }, // 265 — +65
+        Op::Step { file: 1, line: 1, column: 1 }, // 200 — -65, a tie: absolute
         Op::ThreadSwitch { thread_id: 7 },        // flushes the pending step
-        Op::Column { delta: 3 },                  // 11  — standalone tag 0x07
-        Op::Step { file: 1, line: 2, column: 7 }, // 78
-        Op::Step { file: 2, line: 1, column: 1 }, // 145 — crosses a file
-        Op::Step { file: 2, line: 1, column: 4 }, // 148
+        Op::Column { delta: 3 },                  // 203 — standalone tag 0x07
+        Op::Step { file: 1, line: 2, column: 7 }, // 270
+        Op::Step { file: 2, line: 1, column: 1 }, // 337 — crosses a file
+        Op::Step { file: 2, line: 1, column: 4 }, // 340
     ]
 }
 
@@ -956,11 +959,20 @@ fn the_two_writers_meta_dat_agrees_on_every_field_except_the_minted_recording_id
     // with args — including dropping them. The fixture passes two now.
     assert_eq!(n.args.len(), FIXTURE_ARGS.len(), "control: the fixture passes real args");
     assert_eq!(n.recorder_id, r.recorder_id, "recorder_id");
-    assert_eq!(n.paths, r.paths, "paths");
     assert_eq!(n.trailing, r.trailing, "trailing extension blocks");
-    // Non-degeneracy: `paths` is the one multi-valued field here, and comparing
-    // two empty vectors would prove nothing.
-    assert_eq!(n.paths.len(), 3, "control: the fixture registers three paths");
+    // `meta.dat` carries no path list (version 6); the paths are `paths.dat`'s,
+    // compared as decoded strings here.
+    let paths_of = |ct: &std::path::Path| -> Vec<String> {
+        let mut rd = codetracer_ctfs::CtfsReader::open(ct).expect("open");
+        let t = codetracer_trace_reader::interning_tables_reader::InterningTablesReader::open(&mut rd)
+            .expect("interning tables decode")
+            .expect("interning tables present");
+        (0..t.path_count() as u64).map(|i| t.path_str(i).expect("path")).collect()
+    };
+    let (np, rp) = (paths_of(&nim_ct), paths_of(&rust_ct));
+    assert_eq!(np, rp, "paths");
+    // Non-degeneracy: comparing two empty lists would prove nothing.
+    assert_eq!(np.len(), 3, "control: the fixture registers three paths");
 
     // The inherent one. Both must be well-formed UUIDs and they must differ,
     // or the exclusion below is not describing reality.
@@ -1378,13 +1390,15 @@ fn a_line_only_trace_still_uses_the_legacy_paths_dat_record() {
 #[test]
 fn a_late_column_request_is_refused_and_reported() {
     // `dropped_column_awareness` has to be able to answer BOTH ways or it is
-    // not a signal. This is the reachable `true`: the mode is trace-global, so
-    // a request that arrives after the trace opened cannot be honoured, and
-    // silently half-applying it would produce a container no reader can parse.
+    // not a signal. This is the reachable `true`: the mode is trace-global and
+    // `meta.dat`, which declares it, is written by the first record, so a
+    // request that arrives after that cannot be honoured, and silently
+    // half-applying it would produce a container no reader can parse.
     let dir = tempfile::tempdir().expect("tempdir");
     let mut writer = CtfsTraceWriter::new("late_request", &[]);
     let out = dir.path().join("late_request");
     TraceWriter::begin_writing_trace_events(&mut writer, &out).expect("begin");
+    AbstractTraceWriter::register_step(&mut writer, std::path::Path::new("/src/a.rs"), Line(1));
     writer.enable_column_aware_steps();
     assert!(writer.dropped_column_awareness(), "a post-begin request must be reported as dropped");
     assert!(!writer.column_aware_steps_enabled(), "and must not half-apply");
@@ -1392,9 +1406,17 @@ fn a_late_column_request_is_refused_and_reported() {
     assert!(err.contains("column-aware"), "{err}");
     TraceWriter::finish_writing_trace_events(&mut writer).expect("finish");
 
-    // The `false` side, on a writer that asked in time.
+    // The `false` side, on writers that asked in time: before the trace
+    // opened, and after it opened but before its first record, as the Nim
+    // writer allows.
     let mut ok = CtfsTraceWriter::new("timely_request", &[]);
     ok.enable_column_aware_steps();
     assert!(!ok.dropped_column_awareness());
     assert!(ok.column_aware_steps_enabled());
+    let mut opened = CtfsTraceWriter::new("opened_request", &[]);
+    TraceWriter::begin_writing_trace_events(&mut opened, &dir.path().join("opened_request")).expect("begin");
+    opened.enable_column_aware_steps();
+    assert!(!opened.dropped_column_awareness(), "a request before the first record is honoured");
+    assert!(opened.column_aware_steps_enabled());
+    TraceWriter::finish_writing_trace_events(&mut opened).expect("finish");
 }

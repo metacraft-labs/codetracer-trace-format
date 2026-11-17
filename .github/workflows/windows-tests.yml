@@ -3,6 +3,15 @@ on:
   push:
     branches: [main, dev, stable]
   pull_request:
+  workflow_dispatch:
+
+# Cancel superseded PR runs only: a new push to a PR makes its previous run
+# moot, and stale runs otherwise hold scarce self-hosted runners. Every other
+# event (mainline push, merge_group, tag, dispatch, schedule) gets a group
+# unique to its run_id, so it is never cancelled and never cancels anything.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   windows-test:
@@ -10,10 +19,12 @@ jobs:
       fail-fast: false
       matrix:
         runner: [eph-win-x64, eph-win-arm64]
-    runs-on: ${{ matrix.runner }}
+    # The x64 ephemeral pool is paused; use the served Windows x64 class.
+    runs-on: ${{ matrix.runner == 'eph-win-x64' && fromJSON('["self-hosted", "Windows", "X64", "dev-env-ready"]') || matrix.runner }}
+    env:
+      REPRO_TOOL_PROVISIONING: tarball
     steps:
       - uses: actions/checkout@v5
-      - uses: dtolnay/rust-toolchain@stable
 
       - name: Generate CI token
         id: ci_token
@@ -23,85 +34,120 @@ jobs:
           private-key: ${{ secrets.CI_TOKEN_PROVIDER_PRIVATE_KEY }}
           owner: metacraft-labs
 
-      # Cap'n Proto comes from codetracer's pinned `ensure-capnp.ps1`
-      # component, NOT from Chocolatey.
-      #
-      # WHY THIS CHANGED. The previous step was `choco install capnproto -y`,
-      # and it failed on every self-hosted Windows run it ever reached.
-      # Crucially it was never an INSTALL error. Two successive signatures,
-      # both "not on the box":
-      #
-      #   earlier runs -> "pwsh: command not found"
-      #                   The step never executed at all: `shell: pwsh` has to
-      #                   resolve before the script is written, so these runs
-      #                   say nothing about Chocolatey one way or the other.
-      #   later runs   -> "The term 'choco' is not recognized as a name of a
-      #                   cmdlet..." -- the step ran, and Chocolatey was absent.
-      #
-      # The message changed because the runner image gained pwsh in between,
-      # letting the job get one step further. Only the later runs are evidence
-      # about Chocolatey, and what they show is that it is simply not
-      # installed.
-      #
-      # The general point is the one in
-      # Reprobuild-Windows-Runners.runbook.md:297-300: a tool named in a
-      # recipe is pinned and lockable, whereas `choco install` is "whatever
-      # that box happened to get" -- and here the box happened to get nothing.
-      #
-      # `ensure-capnp.ps1` downloads the pinned official archive named by
-      # CAPNP_VERSION and verifies it against CAPNP_WIN_X64_SHA256 from
-      # codetracer's toolchain-versions.env, then writes
-      # `capnp.install.relative-path` and `capnp.install.meta` so a second
-      # run is a cache hit rather than a re-download.
-      #
-      # WINDOWS_DIY_ONLY names the one component this repo wants. It is a
-      # positive allowlist rather than a list of WINDOWS_DIY_SKIP_* variables
-      # for the other twenty-one, because a subtractive list would silently
-      # start installing a twenty-third component the day one is added.
-      - name: Provision Cap'n Proto from the pinned component
-        uses: metacraft-labs/metacraft-github-actions/setup-dev-env@dev
-        with:
-          env-flavor: windows-diy
-          gh-token: ${{ steps.ci_token.outputs.token }}
-          # Empty ref: resolve codetracer from the workspace lock, matching
-          # the convention in codetracer-integration.yml.
-          siblings: |
-            codetracer=
-          env-ps1-path: ../codetracer/env.ps1
-        env:
-          WINDOWS_DIY_ONLY: CAPNP
-
-      - name: Verify capnp came from the pinned component, not choco
+      # The pinned Cap'n Proto constructor builds from source on native ARM64.
+      # Supply its declared CMake prerequisite from exact official archive pins.
+      - name: Provision pinned native CMake
         shell: pwsh
-        # Asserts the provenance requirement directly on the runner rather than
-        # trusting the step above: the pointer/meta files ensure-capnp.ps1
-        # writes must exist, and `capnp` must resolve inside the install root
-        # it names. A capnp that came from anywhere else fails here.
         run: |
-          $installRoot = $env:WINDOWS_DIY_INSTALL_ROOT
-          if ([string]::IsNullOrWhiteSpace($installRoot)) {
-            throw "env.ps1 did not export WINDOWS_DIY_INSTALL_ROOT."
+          $architecture = switch ([System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()) {
+            "Arm64" { "arm64" }
+            "X64" { "x64" }
+            default { throw "Unsupported native Windows CMake architecture." }
           }
-          $pointer = Get-ChildItem -Path $installRoot -Recurse -Filter "capnp.install.relative-path" -ErrorAction SilentlyContinue |
-            Select-Object -First 1
-          if ($null -eq $pointer) {
-            throw "ensure-capnp.ps1 wrote no capnp.install.relative-path under '$installRoot'."
-          }
-          $meta = Join-Path $pointer.DirectoryName "capnp.install.meta"
-          if (-not (Test-Path -LiteralPath $meta -PathType Leaf)) {
-            throw "ensure-capnp.ps1 wrote no capnp.install.meta beside '$($pointer.FullName)'."
-          }
-          Write-Host "pointer: $($pointer.FullName)"
-          Get-Content -LiteralPath $meta | ForEach-Object { Write-Host "  meta: $_" }
+          $destination = Join-Path $env:RUNNER_TEMP ("trace-capnp-cmake-" + [Guid]::NewGuid().ToString("N"))
+          ./ci/ensure-native-cmake.ps1 -Architecture $architecture -Destination $destination
 
-          $capnp = Get-Command capnp -CommandType Application -ErrorAction SilentlyContinue |
-            Select-Object -First 1
-          if ($null -eq $capnp) { throw "capnp is not on PATH after provisioning." }
-          if (-not $capnp.Source.StartsWith($installRoot, [StringComparison]::OrdinalIgnoreCase)) {
-            throw "capnp resolved to '$($capnp.Source)', which is outside the pinned install root '$installRoot'."
-          }
-          Write-Host "capnp: $($capnp.Source)"
-          & $capnp.Source --version
+      - name: Setup dev env (reprobuild)
+        uses: metacraft-labs/metacraft-github-actions/setup-dev-env@26448a158691e2ce4858c10312618a306a333b8e
+        with:
+          env-flavor: reprobuild
+          sibling-strategy: repro-lock
+          repro-version: v0.2.23
+          gh-token: ${{ steps.ci_token.outputs.token }}
+
+      - name: Verify the declared Cap'n Proto executable
+        shell: bash
+        run: dev-exec capnp --version
+
+      - name: Preserve declared provisioning identities
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-provisioning-identities-${{ matrix.runner }}
+          path: |
+            .repro/dev-env/**/*tool-identities.inspect.json
+            .repro/build/**/*tool-identities.inspect.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 7
+
+      # Keep the original workspace exclusions below. Exercise this specific
+      # foreign-host archive contract additively with the normal provisioned
+      # Nim/Cargo/MSVC tools, in both supported C-runtime modes.
+      - name: Verify Nim archive MSVC runtime interoperability
+        id: nim_crt
+        shell: pwsh
+        run: dev-exec pwsh -NoProfile -File ./codetracer_trace_writer_nim/tests/msvc_runtime.ps1
+
+      - name: Preserve MSVC runtime interoperability evidence
+        if: always() && steps.nim_crt.outputs.evidence_dir != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: nim-msvc-runtime-${{ matrix.runner }}
+          path: ${{ steps.nim_crt.outputs.evidence_dir }}
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: Provision the declared native entry-gate Python
+        id: entry_python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: 3.13.16
+          architecture: ${{ matrix.runner == 'eph-win-arm64' && 'arm64' || 'x64' }}
+
+      - name: Select the locked entry-gate Nim supplier
+        id: entry_nim
+        shell: pwsh
+        env:
+          ENTRY_GATE_PYTHON: ${{ steps.entry_python.outputs.python-path }}
+        run: '& $env:ENTRY_GATE_PYTHON -I -B ci/select-entry-nim-supplier.py'
+
+      - name: Materialize the real locked Nim supplier
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          repository: metacraft-labs/codetracer-trace-format-nim
+          ref: ${{ steps.entry_nim.outputs.revision }}
+          token: ${{ steps.ci_token.outputs.token }}
+          path: .ci-entry-nim-supplier
+          persist-credentials: false
+
+      - name: Provision the declared native entry compiler and Zstd
+        shell: pwsh
+        env:
+          ENTRY_GATE_PYTHON: ${{ steps.entry_python.outputs.python-path }}
+        run: |
+          & $env:ENTRY_GATE_PYTHON -I -B ci/native-entry-provider.py --output "$env:RUNNER_TEMP/entry-provider-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.runner }}" --nim-supplier .ci-entry-nim-supplier --nim-revision "${{ steps.entry_nim.outputs.revision }}"
+
+      - name: Provision the matching LLVM Rust target
+        shell: pwsh
+        env:
+          ENTRY_GATE_PYTHON: ${{ steps.entry_python.outputs.python-path }}
+        run: |
+          $machine = & $env:ENTRY_GATE_PYTHON -I -B -c "import platform; print(platform.machine().upper())"
+          if ($LASTEXITCODE -ne 0) { throw 'Declared native Python host probe failed' }
+          $target = switch ($machine.Trim()) { 'ARM64' { 'aarch64-pc-windows-gnullvm' }; 'AMD64' { 'x86_64-pc-windows-gnullvm' }; default { throw 'Unsupported actual native host' } }
+          rustup target add $target
+
+      - name: Run the required native coupled entry and sealed gate
+        shell: pwsh
+        env:
+          ENTRY_GATE_PYTHON: ${{ steps.entry_python.outputs.python-path }}
+        run: |
+          & $env:ENTRY_GATE_PYTHON -I -B tests/run_entry_coupled.py --work-root "$env:RUNNER_TEMP/entry-gate-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.runner }}" --nim-environment-root .ci-entry-nim-supplier --windows-provider "$env:RUNNER_TEMP/entry-provider-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.runner }}/frontend-component.json"
+
+      - name: Preserve native entry-provider evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-entry-provider-${{ matrix.runner }}
+          path: |
+            ${{ runner.temp }}/entry-provider-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.runner }}/**/*.json
+            ${{ runner.temp }}/entry-provider-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.runner }}/*.stdout
+            ${{ runner.temp }}/entry-provider-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.runner }}/*.stderr
+            ${{ runner.temp }}/entry-gate-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.runner }}/nim-images/*.ct
+            ${{ runner.temp }}/entry-gate-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.runner }}/rust-images/*.ct
+          if-no-files-found: error
+
       # Two crates are excluded on Windows:
       #
       # * codetracer_trace_writer_nim: links against libcodetracer_trace_writer.a
@@ -116,6 +162,6 @@ jobs:
       - name: Test
         shell: bash
         run: |
-          cargo test --workspace \
+          dev-exec cargo test --workspace \
             --exclude codetracer_trace_writer_nim \
             --exclude codetracer_ctfs

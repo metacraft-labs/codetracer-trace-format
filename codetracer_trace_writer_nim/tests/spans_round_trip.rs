@@ -200,14 +200,21 @@ fn open_span_and_completion_collapse_to_one_settled_span() {
 }
 
 #[test]
-fn spans_are_rejected_by_a_backend_that_cannot_store_them() {
+fn the_nim_writer_refuses_the_formats_of_the_combined_stream() {
     let _guard = NIM_TEST_LOCK.lock().unwrap();
 
-    // The JSON backend has no span stream.  A middleware must be told so rather
-    // than believing a request was recorded — hence an error, not a no-op.
-    let mut writer = NimTraceWriter::new("span_unsupported", &[], TraceEventsFileFormat::Json);
-    let err = writer
-        .register_span(&web_request_span(1, 0, 1, false))
-        .expect_err("the JSON backend must reject spans");
-    assert!(err.to_string().contains("spans"), "the error should name the missing capability: {err}");
+    // `Json` and `BinaryV0` selected the single combined `events.log` stream,
+    // which is not part of the trace format; the C ABI refuses to create such
+    // a writer, naming the stream, instead of writing one.
+    for format in [TraceEventsFileFormat::Json, TraceEventsFileFormat::BinaryV0] {
+        let Err(refused) = std::panic::catch_unwind(|| NimTraceWriter::new("retired", &[], format)) else {
+            panic!("{format:?}: a writer for the combined stream was created");
+        };
+        let why = refused
+            .downcast_ref::<String>()
+            .cloned()
+            .or_else(|| refused.downcast_ref::<&str>().map(|s| s.to_string()))
+            .unwrap_or_default();
+        assert!(why.contains("events.log"), "{format:?}: the refusal does not name events.log: {why}");
+    }
 }

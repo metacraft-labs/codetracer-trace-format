@@ -41,15 +41,24 @@ impl BlockBound {
     /// `ConcurrentCtfsReader` may be following a live producer, and a bound
     /// captured at open would refuse blocks the writer has since materialised.
     pub(crate) fn of(file: &File, block_size: u32) -> Result<Self, CtfsError> {
-        let file_len = file.metadata()?.len();
-        Ok(BlockBound {
+        Ok(Self::with_len(file.metadata()?.len(), block_size))
+    }
+
+    /// The bound for a container of `file_len` bytes.
+    pub(crate) fn with_len(file_len: u64, block_size: u32) -> Self {
+        BlockBound {
             // floor, never `+ block_size - 1`: rounding up would make the
             // incomplete final block addressable, which is the one arithmetic
             // §5d forbids.
             whole_blocks: file_len / block_size as u64,
             file_len,
             block_size,
-        })
+        }
+    }
+
+    /// The number of whole blocks the container holds.
+    pub(crate) fn whole_blocks(&self) -> u64 {
+        self.whole_blocks
     }
 
     /// Refuse a block number at or past the container's whole blocks, **before**
@@ -59,9 +68,11 @@ impl BlockBound {
     /// internal file meta.dat", "data block 3 of internal file z.dat", …) so a
     /// consumer learns which stream it lost and why, which is what the Nim and
     /// Go readers report for the same file.
-    pub(crate) fn check(&self, block: u64, what: &str) -> Result<(), CtfsError> {
+    /// `what` is built only for a refusal: this check runs once per block a
+    /// read resolves.
+    pub(crate) fn check(&self, block: u64, what: impl FnOnce() -> String) -> Result<(), CtfsError> {
         if block >= self.whole_blocks {
-            return Err(self.out_of_bounds(block, what));
+            return Err(self.out_of_bounds(block, &what()));
         }
         Ok(())
     }
@@ -83,8 +94,9 @@ impl BlockBound {
     /// out-of-range number: the container is typically intact — a whole number
     /// of blocks — and blaming truncation would point whoever reads the
     /// message, or a repair tool, at damage that is not there.
-    pub(crate) fn check_mapping_root(&self, block: u64, what: &str) -> Result<(), CtfsError> {
+    pub(crate) fn check_mapping_root(&self, block: u64, what: impl FnOnce() -> String) -> Result<(), CtfsError> {
         if block == 0 {
+            let what = what();
             return Err(CtfsError::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidData,
                 format!(
@@ -94,6 +106,33 @@ impl BlockBound {
             )));
         }
         self.check(block, what)
+    }
+
+    /// The checks for a member's single data block (`MapBlock` carrying
+    /// `CTFS_DIRECT`, `ctfs-container.md` §2): every check a data-block
+    /// pointer is subject to — not null, inside the container — plus the one
+    /// the form adds, that one block holds the member's `Size`.
+    pub(crate) fn check_direct_member(&self, block: u64, size: u64, name: &str) -> Result<(), CtfsError> {
+        if size > self.block_size as u64 {
+            return Err(CtfsError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "internal file {name} is stored as a single data block (its MapBlock carries the direct tag) \
+                     but its Size is {size} bytes, more than one {}-byte block can hold",
+                    self.block_size
+                ),
+            )));
+        }
+        if block == 0 {
+            return Err(CtfsError::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!(
+                    "the data block of internal file {name} (single-block form) is null; block 0 is the \
+                     container's root directory and no stream may name it"
+                ),
+            )));
+        }
+        self.check(block, || format!("data block 0 of internal file {name}"))
     }
 
     fn out_of_bounds(&self, block: u64, what: &str) -> CtfsError {

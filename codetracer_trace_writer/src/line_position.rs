@@ -112,19 +112,28 @@ impl std::error::Error for LinePositionError {}
 /// Built once per trace and shared by the encode and the decode sides so they
 /// cannot answer differently. See the module header for the arithmetic and for
 /// why there is only one scheme.
+///
+/// The files are held in two parts: those with a stated size, as prefix sums,
+/// then a run of files of [`DEFAULT_LINES_PER_FILE`] lines each, as a count. A
+/// trace that states no sizes is all run, so its space costs nothing per file
+/// and a position in it resolves by division.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LinePositionSpace {
-    /// `prefix_sum[i]` is the first address of file `i`; the last element is
-    /// one past the highest address. Length is `file_count + 1` (and 1 for an
-    /// empty space, holding the single element 0).
+    /// `prefix_sum[i]` is the first address of file `i`, for the files before
+    /// the default-sized run; the last element is one past the highest of
+    /// their addresses. Length is the number of those files + 1 (1 when there
+    /// are none, holding the single element 0). It never ends with a file of
+    /// the default size: that file is part of the run, so that two spaces of
+    /// the same files compare equal.
     prefix_sum: Vec<u64>,
+    /// The files after those, [`DEFAULT_LINES_PER_FILE`] lines each.
+    default_run: usize,
 }
 
 impl Default for LinePositionSpace {
     /// The empty space. Spelled out rather than derived: the invariant is
-    /// `prefix_sum.len() == file_count + 1`, so the empty space still holds the
-    /// single element `0`, and a derived `Vec::default()` would break every
-    /// accessor.
+    /// that `prefix_sum` holds at least the element `0`, and a derived
+    /// `Vec::default()` would break every accessor.
     fn default() -> Self {
         LinePositionSpace::new()
     }
@@ -133,14 +142,20 @@ impl Default for LinePositionSpace {
 impl LinePositionSpace {
     /// An empty space: no files, no addresses.
     pub fn new() -> Self {
-        LinePositionSpace { prefix_sum: vec![0] }
+        LinePositionSpace {
+            prefix_sum: vec![0],
+            default_run: 0,
+        }
     }
 
     /// The space of a trace with `file_count` files whose real line counts are
     /// unknown — every line-only trace today. Each file gets
     /// [`DEFAULT_LINES_PER_FILE`] addresses.
     pub fn uniform(file_count: usize) -> Self {
-        Self::from_line_counts(&vec![DEFAULT_LINES_PER_FILE; file_count])
+        LinePositionSpace {
+            prefix_sum: vec![0],
+            default_run: file_count,
+        }
     }
 
     /// The space of a trace whose files have the given line counts, in file-id
@@ -150,14 +165,21 @@ impl LinePositionSpace {
     /// This is the constructor the real-line-counts follow-on needs; nothing
     /// else about the scheme changes when the counts become real.
     pub fn from_line_counts(line_counts: &[u64]) -> Self {
-        let mut prefix_sum = Vec::with_capacity(line_counts.len() + 1);
+        let sized = line_counts
+            .iter()
+            .rposition(|c| (*c).max(1) != DEFAULT_LINES_PER_FILE)
+            .map_or(0, |i| i + 1);
+        let mut prefix_sum = Vec::with_capacity(sized + 1);
         let mut running: u64 = 0;
         prefix_sum.push(0);
-        for count in line_counts {
+        for count in &line_counts[..sized] {
             running = running.saturating_add((*count).max(1));
             prefix_sum.push(running);
         }
-        LinePositionSpace { prefix_sum }
+        LinePositionSpace {
+            prefix_sum,
+            default_run: line_counts.len() - sized,
+        }
     }
 
     /// Extend the space so file id `file_id` is registered, giving any newly
@@ -169,9 +191,8 @@ impl LinePositionSpace {
     /// sees the step, before it knows how many files the trace will end up
     /// having.
     pub fn ensure_file(&mut self, file_id: usize) {
-        while self.file_count() <= file_id {
-            let top = self.total_lines();
-            self.prefix_sum.push(top.saturating_add(DEFAULT_LINES_PER_FILE));
+        if file_id >= self.file_count() {
+            self.default_run = file_id + 1 - self.sized_count();
         }
     }
 
@@ -179,19 +200,40 @@ impl LinePositionSpace {
     /// [`from_line_counts`](Self::from_line_counts)) and return its id.
     /// Base-preserving, like [`ensure_file`](Self::ensure_file).
     pub fn push_file(&mut self, line_count: u64) -> usize {
-        let top = self.total_lines();
-        self.prefix_sum.push(top.saturating_add(line_count.max(1)));
+        let size = line_count.max(1);
+        if size == DEFAULT_LINES_PER_FILE {
+            self.default_run += 1;
+        } else {
+            // The run is no longer last: its files become sized ones.
+            for _ in 0..std::mem::take(&mut self.default_run) {
+                let top = self.sized_top();
+                self.prefix_sum.push(top.saturating_add(DEFAULT_LINES_PER_FILE));
+            }
+            let top = self.sized_top();
+            self.prefix_sum.push(top.saturating_add(size));
+        }
         self.file_count() - 1
+    }
+
+    /// Files before the default-sized run.
+    fn sized_count(&self) -> usize {
+        self.prefix_sum.len() - 1
+    }
+
+    /// One past the highest address of the files before the run.
+    fn sized_top(&self) -> u64 {
+        *self.prefix_sum.last().unwrap_or(&0)
     }
 
     /// Number of files this space covers.
     pub fn file_count(&self) -> usize {
-        self.prefix_sum.len() - 1
+        self.sized_count() + self.default_run
     }
 
     /// One past the highest address this space can hold.
     pub fn total_lines(&self) -> u64 {
-        *self.prefix_sum.last().unwrap_or(&0)
+        self.sized_top()
+            .saturating_add((self.default_run as u64).saturating_mul(DEFAULT_LINES_PER_FILE))
     }
 
     /// The first address of file `file_id`, or `None` when it is not registered.
@@ -199,7 +241,15 @@ impl LinePositionSpace {
         if file_id >= self.file_count() {
             return None;
         }
-        Some(self.prefix_sum[file_id])
+        Some(self.base(file_id))
+    }
+
+    /// The base of a file the space holds, or of the one after the last.
+    fn base(&self, file_id: usize) -> u64 {
+        match file_id.checked_sub(self.sized_count()) {
+            None => self.prefix_sum[file_id],
+            Some(k) => self.sized_top().saturating_add((k as u64).saturating_mul(DEFAULT_LINES_PER_FILE)),
+        }
     }
 
     /// How many addresses file `file_id` owns, or `None` when it is not
@@ -208,7 +258,7 @@ impl LinePositionSpace {
         if file_id >= self.file_count() {
             return None;
         }
-        Some(self.prefix_sum[file_id + 1] - self.prefix_sum[file_id])
+        Some(self.base(file_id + 1) - self.base(file_id))
     }
 
     /// The address of `(file_id, line)`: the file's base plus the line's 0-based
@@ -222,7 +272,7 @@ impl LinePositionSpace {
     pub fn global_index(&mut self, file_id: usize, line: i64) -> u64 {
         self.ensure_file(file_id);
         let offset = if line <= 1 { 0 } else { (line - 1) as u64 };
-        self.prefix_sum[file_id].saturating_add(offset)
+        self.base(file_id).saturating_add(offset)
     }
 
     /// The address of `(file_id, line)` without extending the space — `None`
@@ -252,8 +302,15 @@ impl LinePositionSpace {
                 file_count: self.file_count(),
             });
         }
+        let top = self.sized_top();
+        if position >= top {
+            // Inside the default-sized run, whose files are all one size.
+            let within = position - top;
+            let k = within / DEFAULT_LINES_PER_FILE;
+            return Ok((self.sized_count() + k as usize, (within % DEFAULT_LINES_PER_FILE) as i64 + 1));
+        }
         // Largest `i` with `prefix_sum[i] <= position`. `prefix_sum[0] == 0` and
-        // `position < prefix_sum[file_count]`, so the answer is a real file id.
+        // `position < prefix_sum[sized_count]`, so the answer is a sized file.
         let file_id = self.prefix_sum.partition_point(|base| *base <= position) - 1;
         Ok((file_id, (position - self.prefix_sum[file_id]) as i64 + 1))
     }
@@ -263,6 +320,47 @@ impl LinePositionSpace {
 #[allow(clippy::unwrap_used, clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// The addresses every file gets when the sizes are summed one by one.
+    fn naive_bases(sizes: &[u64]) -> Vec<u64> {
+        let mut bases = vec![0u64];
+        for size in sizes {
+            bases.push(bases.last().unwrap() + (*size).max(1));
+        }
+        bases
+    }
+
+    #[test]
+    fn default_sized_files_answer_as_the_prefix_sum_spelled_out() {
+        const D: u64 = DEFAULT_LINES_PER_FILE;
+        for sizes in [vec![], vec![D, D, D], vec![D, 7, D, D, 3, D, D], vec![0, D], vec![5, 9], vec![D, D, 1]] {
+            let bases = naive_bases(&sizes);
+            let mut pushed = LinePositionSpace::new();
+            for size in &sizes {
+                pushed.push_file(*size);
+            }
+            let counted = LinePositionSpace::from_line_counts(&sizes);
+            assert_eq!(pushed, counted, "{sizes:?}: one space, however it was built");
+            assert_eq!(counted.file_count(), sizes.len());
+            assert_eq!(counted.total_lines(), *bases.last().unwrap(), "{sizes:?}");
+            for (file, window) in bases.windows(2).enumerate() {
+                let (base, top) = (window[0], window[1]);
+                assert_eq!(counted.file_base(file), Some(base), "{sizes:?} file {file}");
+                assert_eq!(counted.file_size(file), Some(top - base), "{sizes:?} file {file}");
+                for at in [base, base + (top - base) / 2, top - 1] {
+                    let line = (at - base) as i64 + 1;
+                    assert_eq!(counted.resolve(at), Ok((file, line)), "{sizes:?} address {at}");
+                    assert_eq!(counted.global_index_of(file, line), Some(at));
+                }
+            }
+            assert!(counted.resolve(*bases.last().unwrap()).is_err());
+        }
+        // A trace that states no sizes, grown by addressing, is the uniform space.
+        let mut grown = LinePositionSpace::new();
+        assert_eq!(grown.global_index(4, 2), 4 * D + 1);
+        assert_eq!(grown, LinePositionSpace::uniform(5));
+        assert_eq!(LinePositionSpace::uniform(3), LinePositionSpace::from_line_counts(&[D, D, D]));
+    }
 
     /// Encode and decode are inverses at every line of every file, including
     /// the first and last line of each range — the boundary the off-by-one form

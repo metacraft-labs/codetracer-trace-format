@@ -38,10 +38,10 @@ use codetracer_ctfs::CtfsReader;
 use codetracer_trace_reader::call_stream_reader::CallStreamReader;
 use codetracer_trace_reader::io_event_stream_reader::IoEventStreamReader;
 use codetracer_trace_reader::step_stream_reader::StepStreamReader;
-use codetracer_trace_types::{EventLogKind, FunctionId, Line, TraceLowLevelEvent, TypeKind, ValueRecord};
+use codetracer_trace_types::{EventLogKind, FunctionId, Line, PathId, StepRecord, TraceLowLevelEvent, TypeKind, ValueRecord};
 use codetracer_trace_writer::abstract_trace_writer::AbstractTraceWriter;
 use codetracer_trace_writer::ctfs_writer::CtfsTraceWriter;
-use codetracer_trace_writer::meta_dat::{decode_meta_dat, FLAG_EXT_HAS_SOURCE_RELOAD, FLAG_HAS_LINE_COUNT_TABLE, META_DAT_VERSION_EXTENDED_FLAGS};
+use codetracer_trace_writer::meta_dat::{decode_meta_dat, FLAG_EXT_HAS_SOURCE_RELOAD, FLAG_HAS_LINE_COUNT_TABLE, META_DAT_VERSION};
 use codetracer_trace_writer::step_stream::{SourceReloadChange, StepStreamRecord};
 use codetracer_trace_writer::trace_writer::TraceWriter;
 use codetracer_trace_writer_nim::{NimTraceWriter, TraceEventsFileFormat};
@@ -83,6 +83,7 @@ fn record(writer: Writer, dir: &Path) -> PathBuf {
             w.begin_writing_trace_metadata(&dir.join("m.json")).expect("nim begin_metadata");
             w.begin_writing_trace_paths(&dir.join("p.json")).expect("nim begin_paths");
             w.enable_line_count_table().expect("nim enable_line_count_table");
+            w.declare_source_reload().expect("nim declare_source_reload");
             w.register_path_with_line_count(&game, 12).expect("nim game");
             w.register_path_with_line_count(&util, 6).expect("nim util");
             w.register_function("helper", &util, Line(3));
@@ -124,6 +125,7 @@ fn record(writer: Writer, dir: &Path) -> PathBuf {
         Writer::Rust => {
             let mut w = CtfsTraceWriter::new(PROGRAM, &[]);
             let out = dir.join(PROGRAM);
+            w.declare_source_reload().expect("rust declare_source_reload");
             TraceWriter::begin_writing_trace_events(&mut w, &out).expect("rust begin_events");
             w.enable_line_count_table().expect("rust enable_line_count_table");
             w.register_path_with_line_count(&game, 12).expect("rust game");
@@ -162,6 +164,16 @@ fn record(writer: Writer, dir: &Path) -> PathBuf {
             out.with_extension("ct")
         }
     }
+}
+
+/// The source paths of a container, from `paths.dat` — the only list of them
+/// (`internal-files.md` §"`meta.dat` carries no path list").
+fn paths_of(ct: &Path) -> Vec<String> {
+    let mut r = CtfsReader::open(ct).unwrap_or_else(|e| panic!("open {}: {e:?}", ct.display()));
+    let t = codetracer_trace_reader::interning_tables_reader::InterningTablesReader::open(&mut r)
+        .expect("interning tables decode")
+        .expect("interning tables present");
+    (0..t.path_count() as u64).map(|i| t.path_str(i).expect("path")).collect()
 }
 
 fn read_internal(ct: &Path, name: &str) -> Vec<u8> {
@@ -242,14 +254,11 @@ fn both_writers_record_the_reload_as_the_spec_states() {
 
     for (label, ct) in [("nim", &nim), ("rust", &rust)] {
         let meta = decode_meta_dat(&read_internal(ct, "meta.dat")).unwrap_or_else(|e| panic!("{label}: meta.dat: {e}"));
-        assert_eq!(
-            meta.version, META_DAT_VERSION_EXTENDED_FLAGS,
-            "{label}: a container with a reload is version 5"
-        );
+        assert_eq!(meta.version, META_DAT_VERSION, "{label}: meta.dat version");
         assert_eq!(meta.ext_flags, FLAG_EXT_HAS_SOURCE_RELOAD, "{label}: flags_ext");
         assert!(meta.flags & FLAG_HAS_LINE_COUNT_TABLE != 0, "{label}: bit 14");
         assert_eq!(
-            meta.paths,
+            paths_of(ct),
             vec![GAME, UTIL, GAME],
             "{label}: the version is a second record for the same path"
         );
@@ -323,16 +332,89 @@ fn the_rust_reader_reads_both_containers_alike() {
     );
 }
 
+/// The reload marker and the path versions it minted, which no event spells,
+/// are reported alike for both containers.
+#[test]
+fn the_rust_reader_reports_the_reload_of_both_containers_alike() {
+    use codetracer_trace_reader::interning_tables_reader::PathVersion;
+    let _g = nim_lock();
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (nim, rust) = both(dir.path());
+    let read = |ct: &Path| {
+        let mut r = CtfsReader::open(ct).expect("open");
+        codetracer_trace_reader::split_stream_reader::read_trace_with_details(&mut r).expect("split-stream read")
+    };
+    let (a, b) = (read(&nim), read(&rust));
+    assert_eq!(a.details, b.details, "the two containers report different details");
+    let markers: Vec<_> = a
+        .details
+        .source_reloads
+        .iter()
+        .map(|m| (m.step_index, m.reload_ordinal, m.changed.clone(), m.in_flight_frames))
+        .collect();
+    assert_eq!(
+        markers,
+        vec![(
+            2,
+            1,
+            vec![SourceReloadChange {
+                old_path_id: 0,
+                new_path_id: 2,
+                generation: 2,
+            }],
+            1
+        )],
+        "the marker, at its exec index"
+    );
+    let m = &a.details.source_reloads[0];
+    assert!(
+        matches!(
+            a.events[m.event_index],
+            TraceLowLevelEvent::Step(StepRecord {
+                path_id: PathId(2),
+                line: Line(14)
+            })
+        ),
+        "the marker sits right before the first step of the new version"
+    );
+    assert_eq!(
+        a.details.path_versions,
+        vec![
+            PathVersion { ordinal: 0, count: 2 },
+            PathVersion { ordinal: 0, count: 1 },
+            PathVersion { ordinal: 1, count: 2 },
+        ],
+        "game.gd v1, util.gd, game.gd v2"
+    );
+    assert_eq!(
+        a.details.calls.iter().map(|c| (c.call_key, c.parent_key)).collect::<Vec<_>>(),
+        vec![(0, None)],
+        "the one call, a root"
+    );
+}
+
 /// The production Nim reader reads the Rust container to the same document it
 /// reads the Nim container to.
 #[test]
 fn the_nim_reader_reads_both_containers_alike() {
     let _g = nim_lock();
-    let ct_print = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../codetracer-trace-format-nim/ct-print");
+    // The checkout `build.rs` compiles the Nim library from: the
+    // `CODETRACER_TRACE_FORMAT_NIM_DIR` override, or the sibling repo.
+    let nim_repo = std::env::var("CODETRACER_TRACE_FORMAT_NIM_DIR")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../codetracer-trace-format-nim"));
+    // `repro test` names the reader explicitly: `repro.nim` passes the one its
+    // entry-runtime constructor built in the locked Nim peer, the revision the
+    // sibling checkout is locked to.
+    let ct_print = std::env::var("CODETRACER_TRACE_FORMAT_NIM_CT_PRINT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| nim_repo.join("ct-print"));
     assert!(
         ct_print.exists(),
-        "{} is not built; this is the only check that the Nim reader accepts a Rust-written reload",
-        ct_print.display()
+        "{} is not built (`nimble buildCtPrint` in {}); this is the only check that the Nim reader accepts a \
+         Rust-written reload",
+        ct_print.display(),
+        nim_repo.display()
     );
     let dir = tempfile::tempdir().expect("tempdir");
     let (nim, rust) = both(dir.path());
@@ -500,7 +582,7 @@ fn an_undeclared_reload_marker_is_refused_by_name() {
         "control: the declared stream reads whole"
     );
 
-    let undeclared = codetracer_trace_writer::meta_dat::encode_meta_dat("01949fcc-7d92-7e9c-aaaa-bbbbbbbbbbbb", PROGRAM, &[], "", "", &[], 0);
+    let undeclared = codetracer_trace_writer::meta_dat::encode_meta_dat("01949fcc-7d92-7e9c-aaaa-bbbbbbbbbbbb", PROGRAM, &[], "", "", 0);
     let err = match StepStreamReader::from_files(&undeclared, dat, idx) {
         Err(e) => e,
         Ok(Some(mut r)) => r.read_all().expect_err("an undeclared tag 8 must be refused, not skipped"),
@@ -633,16 +715,13 @@ fn a_function_before_its_file_is_written_alike_by_both_writers() {
         let nim = function_before_its_file(Writer::Nim, layout, &nd);
         let rust = function_before_its_file(Writer::Rust, layout, &rd);
 
-        let (mn, mr) = (
-            decode_meta_dat(&read_internal(&nim, "meta.dat")).unwrap(),
-            decode_meta_dat(&read_internal(&rust, "meta.dat")).unwrap(),
-        );
+        let (mn, mr) = (paths_of(&nim), paths_of(&rust));
         let mut want = vec!["/src/main.ex", "/src/nested.ex"];
         if layout == FnLayout::ColumnAware {
             want.push("/src/orphan.ex");
         }
-        assert_eq!(mn.paths, want, "{layout:?}: nim path ids follow the recorder's registrations");
-        assert_eq!(mr.paths, mn.paths, "{layout:?}: path ids differ between the writers");
+        assert_eq!(mn, want, "{layout:?}: nim path ids follow the recorder's registrations");
+        assert_eq!(mr, mn, "{layout:?}: path ids differ between the writers");
         for name in ["paths.dat", "paths.off", "funcs.dat", "funcs.off"] {
             assert_eq!(
                 read_internal(&nim, name),

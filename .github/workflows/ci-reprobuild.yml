@@ -123,6 +123,11 @@ jobs:
           # other platforms build from source (v0.2.26 is b9cf09b07).
           repro-version: v0.2.26
           repro-build-pin: "b9cf09b07e2c780f314c4244e4c8df7988fc2e78"
+          # The RunQuota revision that reprobuild revision's flake.lock pins
+          # (`runquota-src`). The source build overrides that input with the
+          # provisioned checkout, which defaults to RunQuota's `dev`; v0.2.26
+          # needs modules `dev` does not have yet.
+          repro-runquota-pin: "98ea3e58df67f736a8527788d1563e31291a4881"
           gh-token: ${{ steps.ci_token.outputs.token }}
           # The source build of repro can outlast the hour the minted token
           # lives; the broker re-mints the Nix credential before it expires.

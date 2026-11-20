@@ -21,6 +21,17 @@ jobs:
         runner: [eph-win-x64, eph-win-arm64]
     # The x64 ephemeral pool is paused; use the served Windows x64 class.
     runs-on: ${{ matrix.runner == 'eph-win-x64' && fromJSON('["self-hosted", "Windows", "X64", "dev-env-ready"]') || matrix.runner }}
+    # Without this, GitHub's 360-minute default applied. On 2026-11-16 a hung
+    # arm64 run (43797515204) held its m3 GARM guest, and with it m3's
+    # deployment cordon and every macOS runner, for hours. The longest run
+    # in the 40 before it that ended by itself took 83 minutes; the hung ones
+    # ran 121 to 1440 minutes before someone cancelled them.
+    #
+    # The arm64 leg needs more time. On 2026-11-19, run 43832795322 used 37 min
+    # for the dev-env setup and 59 min for the MSVC interop check, so Test was
+    # cancelled at 120 min while still running. arm64 gets 240 min; x64 keeps 120.
+    # timeout-justify: windows-test (eph-win-arm64 dev-env + MSVC interop take ~100 min before Test)
+    timeout-minutes: ${{ matrix.runner == 'eph-win-arm64' && 240 || 120 }}
     env:
       REPRO_TOOL_PROVISIONING: tarball
     steps:

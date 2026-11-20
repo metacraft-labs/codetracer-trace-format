@@ -214,11 +214,23 @@ package codetracer_trace_format:
       after = @[testsBuild.action],
       extraInputs = workspaceInputs & @["target/debug/deps"])
 
-    when defined(linux):
-      for action in [workspaceBuild, testsBuild.action, testsRun.action]:
+    # The tools the workspace's Cargo build scripts run, on every host: the
+    # capnp crate's build.rs runs `capnp` over `src/trace.capnp`, and the
+    # Nim writer's build.rs runs `nimble install --depsOnly` (which fetches
+    # with `git`) and `nim` over the sibling FFI entry point. A typed `cargo`
+    # edge runs with the tools it declares and no others, so each of these
+    # has to be declared here, or the build script finds no such program.
+    # Linux adds its declared native compilers ahead of them, and Unix hosts
+    # the libzstd and pkg-config the zstd link step consults; on Windows
+    # zstd-sys builds libzstd from source with the MSVC toolchain instead.
+    for action in [workspaceBuild, testsBuild.action, testsRun.action]:
+      when defined(linux):
         appendRegisteredActionToolIdentityRefs(action.id,
-          ["traceformat_native_clang", "traceformat_native_gcc",
-           "nim", "nimble", "git", "capnp", "zstd", "pkg-config"])
+          ["traceformat_native_clang", "traceformat_native_gcc"])
+      appendRegisteredActionToolIdentityRefs(action.id,
+        ["nim", "nimble", "git", "capnp"])
+      when not defined(windows):
+        appendRegisteredActionToolIdentityRefs(action.id, ["zstd", "pkg-config"])
 
     when not defined(windows):
       # The durability and failed-flush tests spawn ``sh``.

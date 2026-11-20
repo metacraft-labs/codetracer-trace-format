@@ -205,9 +205,20 @@ fn main() {
     // arranged for the .nimble's ``requires`` packages (stew, results)
     // to be on Nim's path via ``--nim-path`` flags or
     // ``CODETRACER_TRACE_FORMAT_NIM_EXTRA_PATHS``.
+    //
+    // The install is also skipped under the coupled entry runtime
+    // (``ENTRY_NIM_RUNTIME_AUTHORITY`` set). There ``NIMBLE_DIR`` names the
+    // runtime's own `.nimble`, which its constructor already filled with the
+    // requirements and then sealed. Nimble rewrites that directory's
+    // `nimbledata2.json` even when there is nothing to install, so the next
+    // runtime acquisition would refuse the runtime because a sealed member
+    // changed. The conformance suite (codetracer-trace-format-conformance)
+    // builds this crate inside that runtime, and its C ABI parity check and
+    // entry gate skip the install for the same reason.
     println!("cargo:rerun-if-env-changed=CODETRACER_TRACE_FORMAT_NIM_SKIP_NIMBLE_INSTALL");
     println!("cargo:rerun-if-env-changed=CODETRACER_TRACE_FORMAT_NIM_EXTRA_PATHS");
-    if env::var_os("CODETRACER_TRACE_FORMAT_NIM_SKIP_NIMBLE_INSTALL").is_none() {
+    println!("cargo:rerun-if-env-changed=ENTRY_NIM_RUNTIME_AUTHORITY");
+    if env::var_os("CODETRACER_TRACE_FORMAT_NIM_SKIP_NIMBLE_INSTALL").is_none() && env::var_os("ENTRY_NIM_RUNTIME_AUTHORITY").is_none() {
         let nimble_status = Command::new("nimble")
             .arg("install")
             .arg("--depsOnly")

@@ -2,6 +2,9 @@ name: CodeTracer Integration Tests
 
 on:
   pull_request:
+    # Named bases: an unfiltered trigger also runs on pull requests into `agents`,
+    # which runs no CI (branching policy, "`agents` Has No CI").
+    branches: [main, master, dev, stable]
   push:
     branches: [main, master, dev, stable]
   workflow_dispatch:

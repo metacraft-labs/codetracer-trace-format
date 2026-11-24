@@ -4,6 +4,9 @@ on:
   push:
     branches: ["master", "main", "dev", "stable"]
   pull_request:
+    # Named bases: an unfiltered trigger also runs on pull requests into `agents`,
+    # which runs no CI (branching policy, "`agents` Has No CI").
+    branches: ["master", "main", "dev", "stable"]
 
 env:
   CARGO_TERM_COLOR: always

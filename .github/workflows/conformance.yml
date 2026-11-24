@@ -10,6 +10,9 @@ name: Conformance
 
 on:
   pull_request:
+    # Named bases: an unfiltered trigger also runs on pull requests into `agents`,
+    # which runs no CI (branching policy, "`agents` Has No CI").
+    branches: [dev, stable]
   push:
     branches: [dev, stable]
   workflow_dispatch:

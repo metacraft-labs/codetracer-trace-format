@@ -25,6 +25,9 @@ on:
       - "Cargo.lock"
       - ".github/workflows/recorder-conformance.yml"
   pull_request:
+    # Named bases: an unfiltered trigger also runs on pull requests into `agents`,
+    # which runs no CI (branching policy, "`agents` Has No CI").
+    branches: [dev, stable]
     paths:
       - "codetracer_ctfs/**"
       - "Cargo.toml"

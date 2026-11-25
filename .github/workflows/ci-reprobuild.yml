@@ -116,15 +116,22 @@ jobs:
         # (the Nim implementation, this repo's one sibling dependency) at the
         # workspace-lock-pinned revisions before materialising the env.
         uses: metacraft-labs/metacraft-github-actions/setup-dev-env@dev
+        env:
+          WINDOWS_DIY_ARCH_OVERRIDE: ${{ runner.os == 'Windows' && runner.arch == 'ARM64' && 'x64' || '' }}
         with:
           env-flavor: reprobuild
-          repro-from-source: ${{ runner.os != 'Windows' && 'true' || 'false' }}
-          # Windows installs the published release of the same revision the
-          # other platforms build from source (v0.2.31 is 7618e3cb2). The
-          # source build provisions the RunQuota revision that reprobuild
-          # revision's flake.lock pins, so no separate RunQuota pin is needed.
-          repro-version: v0.2.31
-          repro-build-pin: "7618e3cb21ce17f5c86fbd290f501d60d52e9be1"
+          # The Reprobuild engine is the fleet pin: `pins/reprobuild.json` in
+          # metacraft-labs/metacraft-github-actions (d1bf1f06, v0.2.34). Every
+          # leg builds that revision from source (Windows ARM64 as x64 under
+          # emulation), so CI runs the engine the fleet runs; it has no release
+          # archive to install. The companion pins are that revision's own
+          # flake.lock entries. These literals follow that pin file and move
+          # with it.
+          repro-from-source: "true"
+          repro-build-pin: "d1bf1f065aca01b90c3bbdddc57d14e977f49e1a"
+          repro-runquota-pin: "6ff973131e7f715f0237cb0f08b8dd16cbeba0dc"
+          repro-io-mon-pin: "b1c32599f9cd671b150f68de2b21bdc9ae0c42be"
+          repro-stackable-hooks-pin: "c34e3252d413361a0f250d8921e00c119d30e114"
           gh-token: ${{ steps.ci_token.outputs.token }}
           # The source build of repro can outlast the hour the minted token
           # lives; the broker re-mints the Nix credential before it expires.
@@ -149,7 +156,7 @@ jobs:
           git rev-parse HEAD
           engine_source="$(git -C .reprobuild-src rev-parse HEAD)"
           echo "Repro source: $engine_source"
-          test "$engine_source" = b9cf09b07e2c780f314c4244e4c8df7988fc2e78
+          test "$engine_source" = d1bf1f065aca01b90c3bbdddc57d14e977f49e1a
           test -z "$(git -C .reprobuild-src status --porcelain)"
           test "$(command -v repro)" = "$GITHUB_WORKSPACE/.reprobuild-src/build/bin/repro"
           command -v repro

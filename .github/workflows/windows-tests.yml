@@ -52,10 +52,22 @@ jobs:
 
       - name: Setup dev env (reprobuild)
         uses: metacraft-labs/metacraft-github-actions/setup-dev-env@26448a158691e2ce4858c10312618a306a333b8e
+        env:
+          WINDOWS_DIY_ARCH_OVERRIDE: ${{ runner.arch == 'ARM64' && 'x64' || '' }}
         with:
           env-flavor: reprobuild
           sibling-strategy: repro-lock
-          repro-version: v0.2.31
+          # The Reprobuild engine is the fleet pin: `pins/reprobuild.json` in
+          # metacraft-labs/metacraft-github-actions (d1bf1f06, v0.2.34), built
+          # from source (ARM64 as x64 under emulation) so CI runs the engine the
+          # fleet runs; it has no release archive to install. The companion
+          # pins are that revision's own flake.lock entries. These literals
+          # follow that pin file and move with it.
+          repro-from-source: "true"
+          repro-build-pin: "d1bf1f065aca01b90c3bbdddc57d14e977f49e1a"
+          repro-runquota-pin: "6ff973131e7f715f0237cb0f08b8dd16cbeba0dc"
+          repro-io-mon-pin: "b1c32599f9cd671b150f68de2b21bdc9ae0c42be"
+          repro-stackable-hooks-pin: "c34e3252d413361a0f250d8921e00c119d30e114"
           gh-token: ${{ steps.ci_token.outputs.token }}
 
       - name: Verify the declared Cap'n Proto executable

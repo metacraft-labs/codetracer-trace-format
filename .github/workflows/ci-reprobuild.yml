@@ -115,23 +115,16 @@ jobs:
         # setup-dev-env clones the siblings listed in .github/sibling-repos
         # (the Nim implementation, this repo's one sibling dependency) at the
         # workspace-lock-pinned revisions before materialising the env.
+        id: dev-env
         uses: metacraft-labs/metacraft-github-actions/setup-dev-env@dev
         env:
           WINDOWS_DIY_ARCH_OVERRIDE: ${{ runner.os == 'Windows' && runner.arch == 'ARM64' && 'x64' || '' }}
         with:
           env-flavor: reprobuild
-          # The Reprobuild engine is the fleet pin: `pins/reprobuild.json` in
-          # metacraft-labs/metacraft-github-actions (d1bf1f06, v0.2.34). Every
-          # leg builds that revision from source (Windows ARM64 as x64 under
-          # emulation), so CI runs the engine the fleet runs; it has no release
-          # archive to install. The companion pins are that revision's own
-          # flake.lock entries. These literals follow that pin file and move
-          # with it.
-          repro-from-source: "true"
-          repro-build-pin: "d1bf1f065aca01b90c3bbdddc57d14e977f49e1a"
-          repro-runquota-pin: "6ff973131e7f715f0237cb0f08b8dd16cbeba0dc"
-          repro-io-mon-pin: "b1c32599f9cd671b150f68de2b21bdc9ae0c42be"
-          repro-stackable-hooks-pin: "c34e3252d413361a0f250d8921e00c119d30e114"
+          # The Reprobuild engine is the fleet pin, the action's default:
+          # `pins/reprobuild.json` in metacraft-labs/metacraft-github-actions,
+          # with the companion revisions that pinned revision locks. Windows
+          # ARM64 runs it as x64 under emulation.
           gh-token: ${{ steps.ci_token.outputs.token }}
           # The source build of repro can outlast the hour the minted token
           # lives; the broker re-mints the Nix credential before it expires.
@@ -150,15 +143,29 @@ jobs:
           fi
 
       - name: Report measured Repro source identity
+        # setup-dev-env reports the engine it installed. It is the pin, not an
+        # override, and a source build (macOS; Linux when the binary cache
+        # misses) is a clean checkout of that commit. A Linux cache hit
+        # installs the pinned commit's Nix package, which has no checkout.
         if: runner.os != 'Windows'
+        env:
+          REPRO_COMMIT: ${{ steps.dev-env.outputs.repro-commit }}
+          REPRO_ORIGIN: ${{ steps.dev-env.outputs.repro-origin }}
+          REPRO_INSTALL_SOURCE: ${{ steps.dev-env.outputs.repro-install-source }}
         run: |
+          set -euo pipefail
           pwd
           git rev-parse HEAD
-          engine_source="$(git -C .reprobuild-src rev-parse HEAD)"
-          echo "Repro source: $engine_source"
-          test "$engine_source" = d1bf1f065aca01b90c3bbdddc57d14e977f49e1a
-          test -z "$(git -C .reprobuild-src status --porcelain)"
-          test "$(command -v repro)" = "$GITHUB_WORKSPACE/.reprobuild-src/build/bin/repro"
+          echo "Repro engine: ${REPRO_COMMIT} (origin ${REPRO_ORIGIN}, ${REPRO_INSTALL_SOURCE})"
+          [[ "${REPRO_COMMIT}" =~ ^[0-9a-f]{40}$ ]]
+          test "${REPRO_ORIGIN}" = pin
+          if [ "${REPRO_INSTALL_SOURCE}" = source ]; then
+            engine_source="$(git -C .reprobuild-src rev-parse HEAD)"
+            echo "Repro source: $engine_source"
+            test "$engine_source" = "${REPRO_COMMIT}"
+            test -z "$(git -C .reprobuild-src status --porcelain)"
+            test "$(command -v repro)" = "$GITHUB_WORKSPACE/.reprobuild-src/build/bin/repro"
+          fi
           command -v repro
           repro --version
 

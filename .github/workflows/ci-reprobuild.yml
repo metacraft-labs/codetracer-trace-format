@@ -113,16 +113,18 @@ jobs:
 
       - name: Setup dev env (reprobuild flavor)
         # setup-dev-env clones the siblings listed in .github/sibling-repos
-        # (the six recorded integration/FFI/storage dependencies) at the
+        # (the Nim implementation, this repo's one sibling dependency) at the
         # workspace-lock-pinned revisions before materialising the env.
+        id: dev-env
         uses: metacraft-labs/metacraft-github-actions/setup-dev-env@dev
+        env:
+          WINDOWS_DIY_ARCH_OVERRIDE: ${{ runner.os == 'Windows' && runner.arch == 'ARM64' && 'x64' || '' }}
         with:
           env-flavor: reprobuild
-          repro-from-source: ${{ runner.os != 'Windows' && 'true' || 'false' }}
-          # Windows installs the published release of the same revision the
-          # other platforms build from source (v0.2.23 is 9dbf4e71).
-          repro-version: v0.2.23
-          repro-build-pin: "9dbf4e710d7cc0b9a79a4bcd54c931afb6849dd0"
+          # The Reprobuild engine is the fleet pin, the action's default:
+          # `pins/reprobuild.json` in metacraft-labs/metacraft-github-actions,
+          # with the companion revisions that pinned revision locks. Windows
+          # ARM64 runs it as x64 under emulation.
           gh-token: ${{ steps.ci_token.outputs.token }}
           # The source build of repro can outlast the hour the minted token
           # lives; the broker re-mints the Nix credential before it expires.
@@ -141,15 +143,29 @@ jobs:
           fi
 
       - name: Report measured Repro source identity
+        # setup-dev-env reports the engine it installed. It is the pin, not an
+        # override, and a source build (macOS; Linux when the binary cache
+        # misses) is a clean checkout of that commit. A Linux cache hit
+        # installs the pinned commit's Nix package, which has no checkout.
         if: runner.os != 'Windows'
+        env:
+          REPRO_COMMIT: ${{ steps.dev-env.outputs.repro-commit }}
+          REPRO_ORIGIN: ${{ steps.dev-env.outputs.repro-origin }}
+          REPRO_INSTALL_SOURCE: ${{ steps.dev-env.outputs.repro-install-source }}
         run: |
+          set -euo pipefail
           pwd
           git rev-parse HEAD
-          engine_source="$(git -C .reprobuild-src rev-parse HEAD)"
-          echo "Repro source: $engine_source"
-          test "$engine_source" = 9dbf4e710d7cc0b9a79a4bcd54c931afb6849dd0
-          test -z "$(git -C .reprobuild-src status --porcelain)"
-          test "$(command -v repro)" = "$GITHUB_WORKSPACE/.reprobuild-src/build/bin/repro"
+          echo "Repro engine: ${REPRO_COMMIT} (origin ${REPRO_ORIGIN}, ${REPRO_INSTALL_SOURCE})"
+          [[ "${REPRO_COMMIT}" =~ ^[0-9a-f]{40}$ ]]
+          test "${REPRO_ORIGIN}" = pin
+          if [ "${REPRO_INSTALL_SOURCE}" = source ]; then
+            engine_source="$(git -C .reprobuild-src rev-parse HEAD)"
+            echo "Repro source: $engine_source"
+            test "$engine_source" = "${REPRO_COMMIT}"
+            test -z "$(git -C .reprobuild-src status --porcelain)"
+            test "$(command -v repro)" = "$GITHUB_WORKSPACE/.reprobuild-src/build/bin/repro"
+          fi
           command -v repro
           repro --version
 
@@ -161,12 +177,7 @@ jobs:
         run: dev-exec repro build ${{ runner.os != 'Windows' && '--tool-provisioning=nix' || '' }}
 
       - name: repro test
-        # Materialises the `test` collection. The entry-runtime constructor asks
-        # the GitHub API for the official Nim releases, as in rust.yml; the
-        # unauthenticated quota is shared by every job behind the runner's address.
-        # The workflow token lasts the whole job; the minted one may have expired.
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
+        # Materialises the `test` collection.
         run: dev-exec repro test ${{ runner.os != 'Windows' && '--tool-provisioning=nix' || '' }}
 
       - name: just build (cross-check)
@@ -175,39 +186,8 @@ jobs:
         # and what the dev shell + Justfile produce today.
         run: dev-exec just build
 
-      - name: Prepare the declared coupled Unix runtime
-        # `just test` reads the coupled entry runtime from
-        # ENTRY_NIM_RUNTIME_AUTHORITY and ENTRY_NIM_ENVIRONMENT_ROOT. It does not
-        # look for the runtime itself, and an unset authority is refused. This is
-        # the step rust.yml runs before `just test`. The script runs the same
-        # constructor as the `entry-runtime` edge, on the same output root. It
-        # reuses the runtime `repro test` built after checking the recorded
-        # ownership, then exports the two variables and puts the runtime's
-        # selected direnv role on PATH. A fresh construction asks the GitHub API
-        # for the official Nim releases, so it gets the workflow token, as in
-        # the `repro test` step.
-        if: runner.os != 'Windows'
-        shell: bash
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
-        run: bash ci/acquire-entry-runtime.sh
-
       - name: just test (cross-check)
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
         run: dev-exec just test
-
-      - name: Report public runtime constructor failure
-        # Diagnostics preserve the original failed action and never expose raw receipts.
-        if: failure() && runner.os == 'Linux'
-        continue-on-error: true
-        shell: bash
-        run: |
-          if test -n "${TRACE_RESOURCE_PYTHON:-}"; then
-            "$TRACE_RESOURCE_PYTHON" ci/report-runtime-constructor-failure.py "$GITHUB_WORKSPACE/.repro/build/entry-runtime"
-          else
-            echo 'Declared diagnostic Python unavailable; inner cause remains unassigned'
-          fi
 
       # Diagnostics on failure. Three things below are load-bearing:
       #

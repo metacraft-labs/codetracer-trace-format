@@ -35,23 +35,8 @@ serde_json = "1.0"
 
 [dev-dependencies]
 tempfile = "3"
-# M4 — cross-reader consistency test drives the same column-aware
-# fixture through both the Nim `decodeGlobalPositionIndex` (via this
-# crate's FFI) and the pure-Rust port in `codetracer_trace_reader`,
-# then asserts the two decoders agree byte-for-byte.  Lives here
-# rather than in `codetracer_trace_reader/tests/` because constructing
-# the fixture requires the Nim writer.
-codetracer_trace_reader = { path = "../codetracer_trace_reader" }
-# The cross-WRITER differential (`tests/writer_differential.rs`) drives the
-# same fixture through the Nim writer (this crate) and the pure-Rust
-# `CtfsTraceWriter`, then compares the two containers' streams byte-for-byte.
-# It has to live here for the same reason the cross-READER test does: only this
-# crate can build the Nim side.
-codetracer_trace_writer = { path = "../codetracer_trace_writer" }
-# Opens the produced `.ct` containers and pulls out individual internal files
-# (`steps.dat`, `paths.dat`, `meta.dat`, …) as raw bytes.
-codetracer_ctfs = { path = "../codetracer_ctfs" }
-# The framing negative control compresses a chunk payload BOTH ways and asserts
-# which one the Nim writer emits, so the differential pins the one-shot
-# `ZSTD_compress` call rather than trusting a comment about it.
+# `the_archive_is_the_librarys_own_build` trains a dictionary and round-trips a
+# payload through it, to check the archive links with the host's libzstd. The tests that read what the
+# adapter's Nim writer wrote with the Rust readers, or compare it with the Rust
+# writer's output, live in codetracer-trace-format-conformance.
 zstd = "0.13"

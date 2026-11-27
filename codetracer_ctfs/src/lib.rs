@@ -30,6 +30,10 @@ pub mod mmap_info;
 pub mod platform_info;
 pub(crate) mod pread_compat;
 pub mod reader;
+// The recorders' conformance check of the shared trace-storage contract (a
+// filesystem walk over a recorder checkout); host-only, like `trace_storage`.
+#[cfg(not(target_arch = "wasm32"))]
+pub mod recorder_conformance;
 // `trace_storage` performs HTTP uploads of finalized CTFS containers via
 // `ureq` + `rustls` + `ring`.  None of that stack compiles for
 // `wasm32-unknown-unknown` (ring vendors C code that requires a real

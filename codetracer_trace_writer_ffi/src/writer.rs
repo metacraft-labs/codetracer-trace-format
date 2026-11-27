@@ -910,7 +910,16 @@ fn column_capability(name: &str, handle: *mut TraceWriterHandle, enable: impl Fn
         };
         let dropped = w.dropped_column_awareness();
         enable(w);
-        if w.dropped_column_awareness() && !dropped {
+        // A writer under the line-count table refuses every column opt-in
+        // (meta.dat bits 4 and 14 select different paths.dat layouts), so the
+        // reason is reported on each call, not attributed to a late request.
+        if w.line_count_table_enabled() {
+            set_error(&format!(
+                "{name}: this writer called trace_writer_enable_line_count_table, and the two select different \
+                 paths.dat record layouts (meta.dat bits 4 and 14 are mutually exclusive); the trace stays \
+                 line-only and trace_writer_close fails"
+            ));
+        } else if w.dropped_column_awareness() && !dropped {
             set_error(&format!(
                 "{name}: the trace has recorded already, and meta.dat, which declares columns, is written"
             ));
@@ -2721,5 +2730,44 @@ mod tests {
         let h = unsafe { trace_writer_new(program.as_ptr(), FORMAT_BINARY) };
         assert!(!h.is_null());
         unsafe { trace_writer_free(h) };
+    }
+    /// A column opt-in on a writer under the line-count table is refused
+    /// with that reason, on every call and not as a late request, and the
+    /// close fails (`internal-files.md` §"`paths.dat` line-count table":
+    /// bits 4 and 14 are mutually exclusive).
+    #[test]
+    fn a_column_opt_in_under_the_line_count_table_is_refused_naming_the_table() {
+        let program = std::ffi::CString::new("p").unwrap();
+        let path = std::ffi::CString::new("/a.py").unwrap();
+        let last_error = || {
+            unsafe { std::ffi::CStr::from_ptr(crate::trace_writer_last_error()) }
+                .to_string_lossy()
+                .into_owned()
+        };
+        unsafe {
+            let h = trace_writer_new(program.as_ptr(), FORMAT_BINARY);
+            assert!(!h.is_null());
+            assert_eq!(trace_writer_begin_in_memory(h), 0);
+            assert_eq!(trace_writer_enable_line_count_table(h), 0);
+            let opt_ins: [(&str, unsafe extern "C" fn(*mut TraceWriterHandle)); 3] = [
+                ("trace_writer_enable_column_aware_steps", trace_writer_enable_column_aware_steps),
+                (
+                    "trace_writer_enable_column_breakpoints_support",
+                    trace_writer_enable_column_breakpoints_support,
+                ),
+                ("trace_writer_enable_column_motions_support", trace_writer_enable_column_motions_support),
+            ];
+            for (name, opt_in) in opt_ins {
+                crate::trace_writer_clear_last_error();
+                opt_in(h);
+                let err = last_error();
+                assert!(err.starts_with(name) && err.contains("trace_writer_enable_line_count_table"), "{err}");
+                assert!(!err.contains("recorded already"), "{err}");
+            }
+            assert_eq!(trace_writer_register_path_with_line_count(h, path.as_ptr(), 10), 0);
+            trace_writer_register_step(h, path.as_ptr(), 2);
+            assert_ne!(trace_writer_close(h), 0, "a recording that refused an opt-in must not close as a success");
+            trace_writer_free(h);
+        }
     }
 }

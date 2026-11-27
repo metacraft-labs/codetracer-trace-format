@@ -37,7 +37,9 @@ use codetracer_ctfs::{CtfsReader, MemberBytes};
 use codetracer_trace_types::{TypeKind, TypeSpecificInfo};
 use codetracer_trace_writer::column_aware::FileTable;
 use codetracer_trace_writer::line_position::{LinePositionError, LinePositionSpace};
-use codetracer_trace_writer::meta_dat::{meta_dat_has_column_aware_steps, meta_dat_has_interning_tables, meta_dat_has_line_count_table};
+use codetracer_trace_writer::meta_dat::{
+    meta_dat_has_column_aware_steps, meta_dat_has_interning_tables, meta_dat_has_line_count_table, read_meta_dat_flags,
+};
 use num_traits::FromPrimitive;
 
 /// A decoded `funcs.dat` record: the `global_line_index` and the function name.
@@ -359,6 +361,15 @@ impl InterningTablesReader {
         // `meta.dat` is read best-effort: a still-recording trace has none yet,
         // and each flag below then reads as unset.
         let meta = reader.read_file("meta.dat").ok();
+        // A `meta.dat` that is present but refused — a header declaring both
+        // `paths.dat` layouts (bits 4 and 14) among the reasons — fails the
+        // open. The `meta_dat_has_*` helpers below answer `false` for a
+        // refused header, and two of them select the `paths.dat` record
+        // layout, so reading on would decode the records in the bare layout
+        // and hand back path names with their own framing inside them.
+        if let Some(bytes) = meta.as_deref() {
+            read_meta_dat_flags(bytes)?;
+        }
         let interning_tables_declared = meta.as_deref().is_some_and(meta_dat_has_interning_tables);
         // Bit 14 selects the `paths.dat` RECORD layout, independently of bit
         // 12's `funcs.dat`/`types.dat` selector. A still-recording trace with

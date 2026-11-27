@@ -9,7 +9,7 @@
 //! from one the Nim writer would have produced for the same logical input.
 //! Everything in this module is therefore a line-for-line port of a named Nim
 //! procedure, and the differential test
-//! `codetracer_trace_writer_nim/tests/writer_differential.rs` compares the two
+//! codetracer-trace-format-conformance's `tests/writer_differential.rs` compares the two
 //! byte-for-byte on every commit.
 //!
 //! | this module | Nim original |

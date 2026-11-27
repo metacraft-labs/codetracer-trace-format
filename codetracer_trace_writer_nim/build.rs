@@ -212,8 +212,9 @@ fn main() {
     // requirements and then sealed. Nimble rewrites that directory's
     // `nimbledata2.json` even when there is nothing to install, so the next
     // runtime acquisition would refuse the runtime because a sealed member
-    // changed. `tests/c_abi_parity.rs` (in `codetracer_trace_writer_ffi`) and
-    // `tests/run_entry_coupled.py` skip it for the same reason.
+    // changed. The conformance suite (codetracer-trace-format-conformance)
+    // builds this crate inside that runtime, and its C ABI parity check and
+    // entry gate skip the install for the same reason.
     println!("cargo:rerun-if-env-changed=CODETRACER_TRACE_FORMAT_NIM_SKIP_NIMBLE_INSTALL");
     println!("cargo:rerun-if-env-changed=CODETRACER_TRACE_FORMAT_NIM_EXTRA_PATHS");
     println!("cargo:rerun-if-env-changed=ENTRY_NIM_RUNTIME_AUTHORITY");

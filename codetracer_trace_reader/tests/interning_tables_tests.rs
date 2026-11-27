@@ -669,3 +669,34 @@ fn a_layout_a_record_with_trailing_bytes_is_refused() {
     let err = it.path_str(0).expect_err("a surplus byte after line_lengths must be refused");
     assert!(err.contains("trailing"), "the refusal must say what is wrong; got: {err}");
 }
+
+/// A container whose `meta.dat` sets both bit 4 and bit 14 declares two
+/// `paths.dat` record layouts at once, and is refused when the tables are
+/// opened, naming the bits — not opened and later failed on a record, nor
+/// read in the bare layout because the layout helpers answer `false` for a
+/// header they refuse. `internal-files.md` §"`paths.dat` line-count table":
+/// "readers MUST reject a header that does."
+#[test]
+fn a_container_declaring_both_paths_dat_layouts_is_refused_at_open() {
+    use codetracer_trace_reader::interning_tables_reader::InterningTablesReader;
+    use codetracer_trace_writer::meta_dat::{FLAG_HAS_COLUMN_AWARE_STEPS, FLAG_HAS_LINE_COUNT_TABLE};
+
+    let dir = tempfile::tempdir().unwrap();
+    let records = [
+        encode_line_count_record(b"/src/alpha.rb", 50),
+        encode_line_count_record(b"/src/beta.rb", 60),
+    ];
+    let ct = write_paths_container(&dir, "both.ct", &records, FLAG_HAS_COLUMN_AWARE_STEPS | FLAG_HAS_LINE_COUNT_TABLE);
+    let mut reader = codetracer_ctfs::CtfsReader::open(&ct).unwrap();
+    let err = match InterningTablesReader::open(&mut reader) {
+        Ok(_) => panic!("a container declaring both paths.dat layouts must not open"),
+        Err(e) => e,
+    };
+    assert!(err.contains("bit 4") && err.contains("bit 14"), "the refusal names the bits: {err}");
+
+    // Control: the same records under bit 14 alone open and resolve.
+    let ct = write_paths_container(&dir, "counted.ct", &records, FLAG_HAS_LINE_COUNT_TABLE);
+    let mut reader = codetracer_ctfs::CtfsReader::open(&ct).unwrap();
+    let it = InterningTablesReader::open(&mut reader).expect("open ok").expect("paths.dat present");
+    assert_eq!(it.line_counts(), &[50, 60]);
+}

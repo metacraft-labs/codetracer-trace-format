@@ -46,11 +46,11 @@
 //! them.**  `assign`'s entry point (`trace_writer_register_assignment`)
 //! landed on 2026-09-11 and assignments now reach the container as tag-9
 //! value-stream events, asserted end to end by
-//! `tests/assignments_reach_the_trace.rs`.  The two drop forms followed via
+//! codetracer-trace-format-conformance's `tests/assignments_reach_the_trace.rs`.  The two drop forms followed via
 //! `trace_writer_register_drop_variables` and
 //! `trace_writer_register_drop_variable`, reaching the container as tag-3 and
 //! tag-2 value-stream events respectively, both asserted by
-//! `tests/drop_variables_reach_the_trace.rs`.
+//! codetracer-trace-format-conformance's `tests/drop_variables_reach_the_trace.rs`.
 //!
 //! Nor are the place-model operations (`bind_variable`,
 //! `register_variable`, `register_cell_value`, `register_compound_value`,

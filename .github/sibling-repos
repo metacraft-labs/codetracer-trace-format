@@ -1,8 +1,14 @@
 # Cross-repo siblings cloned by setup-dev-env at workspace-lock-pinned
 # revisions (see codetracer-specs/Testing/Cross-Repo-CI-Integration.md).
+#
+# Only what repro.nim declares, and so what repro.lock pins: the Nim
+# implementation of the format, which the codetracer_trace_writer_nim adapter
+# crate, the cross-language fixture producer and the cross-implementation
+# tests compile.
+#
+# Nothing here reads a recorder checkout (each recorder checks its own sources
+# against the shared trace-storage contract, codetracer_ctfs::recorder_conformance),
+# and codetracer and codetracer-native-recorder are dependents, not
+# dependencies: the workflows that run their gates (recorder-conformance,
+# codetracer-integration) clone them for themselves.
 codetracer-trace-format-nim
-codetracer
-codetracer-native-recorder
-codetracer-python-recorder
-codetracer-ruby-recorder
-codetracer-js-recorder

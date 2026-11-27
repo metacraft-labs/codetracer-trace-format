@@ -5,6 +5,7 @@ test:
   cargo test --verbose
   bash codetracer_trace_writer_nim/tests/nimcache_environment.sh
   python3 -B tests/test_override_plugin_pin.py
+  python3 -B tests/test_per_crate_recipes_declared.py
 
 # Run the formatting and clippy lint checks.
 #
@@ -46,14 +47,17 @@ build:
 # Run all checks (lint + test)
 check: lint test
 
+# ci-test-audit: covered-by test
 # Run FFI crate tests only
 test-ffi:
   cargo test -p codetracer_trace_writer_ffi --verbose
 
+# ci-test-audit: covered-by test
 # Run trace writer tests only
 test-writer:
   cargo test -p codetracer_trace_writer --verbose
 
+# ci-test-audit: covered-by test
 # Run binary format roundtrip tests
 test-roundtrip:
   cargo test -p codetracer_trace_util --verbose

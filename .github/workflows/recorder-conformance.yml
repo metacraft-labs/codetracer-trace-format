@@ -59,12 +59,12 @@ jobs:
           private-key: ${{ secrets.CI_TOKEN_PROVIDER_PRIVATE_KEY }}
           owner: metacraft-labs
 
-      # Checked out in a subdirectory so the copy placed beside the
-      # recorders below is the only `codetracer-trace-format` they can reach.
+      # Checked out at the workspace root. The runner's layout is
+      # `.../_work/<repo>/<repo>`, so this checkout already sits where every
+      # recorder looks for it: `${GITHUB_WORKSPACE}/../codetracer-trace-format`
+      # is `${GITHUB_WORKSPACE}` itself.
       - name: Checkout codetracer-trace-format
         uses: actions/checkout@v5
-        with:
-          path: codetracer-trace-format
 
       # The recorders are DEPENDENTS of this repo, not dependencies: a
       # repro.lock holds only what repro.nim derives, so this repo's lock is
@@ -88,13 +88,19 @@ jobs:
             codetracer-trace-format-nim=agents
 
       # The siblings live at ${GITHUB_WORKSPACE}/../<name>, and every
-      # recorder reaches this repo at ../codetracer-trace-format from there.
-      - name: Place this commit beside the recorders
+      # recorder reaches this repo at ../codetracer-trace-format from there,
+      # which is this checkout (see "Checkout codetracer-trace-format").
+      # Nothing is copied: copying into ${SIBLINGS}/codetracer-trace-format
+      # would first delete ${GITHUB_WORKSPACE}. Refuse a runner whose layout
+      # breaks that identity rather than test some other copy.
+      - name: Check this commit sits beside the recorders
         run: |
           SIBLINGS="$(cd "${GITHUB_WORKSPACE}/.." && pwd)"
           echo "SIBLINGS=${SIBLINGS}" >> "$GITHUB_ENV"
-          rm -rf "${SIBLINGS}/codetracer-trace-format"
-          cp -r "${GITHUB_WORKSPACE}/codetracer-trace-format" "${SIBLINGS}/codetracer-trace-format"
+          if [[ "$(cd "${SIBLINGS}/codetracer-trace-format" 2>/dev/null && pwd -P)" != "$(cd "${GITHUB_WORKSPACE}" && pwd -P)" ]]; then
+            echo "::error::${SIBLINGS}/codetracer-trace-format is not this checkout (${GITHUB_WORKSPACE}); the recorders would not test this commit"
+            exit 1
+          fi
 
       # Each step runs whatever happened to the previous one, so one red
       # recorder does not hide the others.

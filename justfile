@@ -49,15 +49,18 @@ check: lint test
 
 # ci-test-audit: covered-by test
 # Run FFI crate tests only
+# ci-test-audit: covered-by test
 test-ffi:
   cargo test -p codetracer_trace_writer_ffi --verbose
 
 # ci-test-audit: covered-by test
 # Run trace writer tests only
+# ci-test-audit: covered-by test
 test-writer:
   cargo test -p codetracer_trace_writer --verbose
 
 # ci-test-audit: covered-by test
 # Run binary format roundtrip tests
+# ci-test-audit: covered-by test
 test-roundtrip:
   cargo test -p codetracer_trace_util --verbose

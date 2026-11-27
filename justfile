@@ -47,13 +47,16 @@ build:
 check: lint test
 
 # Run FFI crate tests only
+# ci-test-audit: covered-by test
 test-ffi:
   cargo test -p codetracer_trace_writer_ffi --verbose
 
 # Run trace writer tests only
+# ci-test-audit: covered-by test
 test-writer:
   cargo test -p codetracer_trace_writer --verbose
 
 # Run binary format roundtrip tests
+# ci-test-audit: covered-by test
 test-roundtrip:
   cargo test -p codetracer_trace_util --verbose
